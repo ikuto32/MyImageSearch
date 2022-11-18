@@ -54,15 +54,6 @@ body{
 	border-bottom: lightgray solid 1px;
 }
 
-#controlArea button, .rangeSpan, .checkboxBlock, .selectCountBlock {
-	margin: 1px 10px;
-	padding: 1px 5px;
-	font: 1em;
-	background-color: #dddddd;
-	cursor: pointer;
-	border: 0;
-	border-radius: 3px;
-}
 
 #itemArea {
 
