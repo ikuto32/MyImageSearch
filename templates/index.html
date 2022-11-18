@@ -11,9 +11,26 @@
         <div id="app">
             {{ message }}
         </div>
-        <div id="img">
-            <img>
+        
+        <div id="itemArea" >
+            <span v-bind:title="message">
+            Hover your mouse over me for a few seconds
+            to see my dynamically bound title!
+            </span>
+            <br>
+            <div v-for="item in items">
+                <figure>
+                    <img v-bind:src="item.img" title="item.img">
+                    <figcaption>
+                        <span class="meta">{{ item.img }}</span><br>
+                        <span class="score">{{ item.score }}</span>
+                    </figcaption>
+                </figure>
+            </div>
+            
+            <button @click="getimgs">get img</button>
         </div>
+        
     </main>
     <script src="./templates/js/common.js"></script>
 	<script src="./templates/js/main.js"></script>
