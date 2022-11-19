@@ -21,7 +21,7 @@ body{
 	outline: skyblue solid 2px;
 }
 
-.itemBlock[data-select="1"] {
+.selectedItem{
 
 	background-color: lightcyan;
 
@@ -35,7 +35,7 @@ body{
 	text-overflow:ellipsis;
 }
 
-#controlArea {
+#settingArea {
 
 	display: flex;
 
