@@ -11,16 +11,17 @@ from PIL import Image
 from script import util
 
 
-def metaCreate(setting, args):
+def metaCreate(itemlist, args):
 
     print("metaCreate")
-    model_dir_name = F'{setting["model"][0]}-{setting["model"][1]}'
-    meta_dir = F'{setting["meta_dir"]}/{model_dir_name}'
-    image_dir = setting["image_dir"]
+    model_dir_name = F'{itemlist.model[0]}-{itemlist.model["model"][1]}'
+    meta_dir = F'{itemlist.metadataDir}/{model_dir_name}'
+    image_dir = itemlist.metadataDir
+    meta_files = itemlist.metadataFiles
 
     # モデルの読み込み
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, _, preprocess = util.loadModel(setting["model"], device=device)
+    model, _, preprocess = util.loadModel(itemlist.model, device=device)
 
     #　画像のパスを取得
     files = util.getImageFiles(image_dir)
