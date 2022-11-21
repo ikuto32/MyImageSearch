@@ -1,8 +1,9 @@
+from app import ItemList
 from script import CopyImages, ImageSearch, MetaCreate, TextAndImageSearch, TextSearch, NameSearch
 
 
 #コールバック関数　引数は、発生したイベントの情報
-def onInputEnd(setting, args, metas):
+def onInputEnd(itemlist:ItemList, args):
 
     print("event: " + str(args))
     print("params" + str(args.get("trigger")))
@@ -11,35 +12,35 @@ def onInputEnd(setting, args, metas):
     if args.get("trigger") == "TextSearch" :
 
         #文字列に対する関連度で検索をする
-        return TextSearch.textSearch(setting, args, metas)
+        return TextSearch.textSearch(itemlist, args)
 
 
     elif args.get("trigger") == "ImageSearch" :
         
         #画像に対する関連度で検索をする
-        return ImageSearch.imageSearch(setting, args, metas)
+        return ImageSearch.imageSearch(itemlist, args)
 
 
     elif args.get("trigger") == "NameSearch" :
         
         #文字列一致検索をする
-        return NameSearch.nameSearch(setting, args)
+        return NameSearch.nameSearch(itemlist, args)
         
 
     elif args.get("trigger") == "MetaCreate" :
 
         #metaを作る
-        return MetaCreate.metaCreate(setting, args)
+        return MetaCreate.metaCreate(itemlist, args)
 
     elif args.get("trigger") == "TextAndImageSearch":
 
         #文字列と画像で検索をする
-        return TextAndImageSearch.textAndImageSearch(setting, args, metas)
+        return TextAndImageSearch.textAndImageSearch(itemlist, args)
 
     elif args.get("trigger") == "copyImages":
 
         #画像をコピーする
-        return CopyImages.copyImages(setting, args) 
+        return CopyImages.copyImages(itemlist, args) 
 
     elif args.get("trigger") == "":  
         pass

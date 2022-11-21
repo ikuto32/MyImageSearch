@@ -17,7 +17,7 @@ def cosine_similarity(v1, v2):
     return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
 
 # faissでmetaのindexファイルを作成する
-def createIndexFile(metas, metadir):
+def createIndexFile(metas, meta_dir):
     print("createIndexFile")
     metalist = list(metas.values())
     a = np.squeeze(np.asarray(metalist)).astype(np.float32)
@@ -33,11 +33,11 @@ def createIndexFile(metas, metadir):
     print("add")
     index.add(a)
     print("write")
-    faiss.write_index(index, f'{metadir}/{metasFaissIndexFile}')
+    faiss.write_index(index, f'{meta_dir}/{metasFaissIndexFile}')
 
 # faissでmetaのindexファイルを読み込む
-def loadIndexFile(metadir):
-    return faiss.read_index(f'{metadir}/{metasFaissIndexFile}')
+def loadIndexFile(meta_dir):
+    return faiss.read_index(f'{meta_dir}/{metasFaissIndexFile}')
 
 # コサイン類似度を計算する
 def eval(files, index, features, k=2048):
@@ -61,22 +61,21 @@ def eval(files, index, features, k=2048):
     return scores
 
 #　metaのpickleファイルを作成する
-def createPickleFile(files, metadir):
+def createPickleFile(image_filse, meta_dir):
     print("Create pickle file")
-    pbar = tqdm.tqdm(files)
+    pbar = tqdm.tqdm(image_filse)
     metas = {}
-    for file in pbar:
-        filename = f'{file}'
+    for image_name in pbar:
         try:
-            metas[filename] = loadMeta(metadir, filename)
+            metas[image_name] = loadMeta(meta_dir, image_name)
         except Exception:
-            print(f"このmetaファイルは読み込めません:{filename}")
-    with open(f'{metadir}/{metasPickleFile}', 'wb') as f:
+            print(f"このmetaファイルは読み込めません:{image_name}")
+    with open(f'{meta_dir}/{metasPickleFile}', 'wb') as f:
         pickle.dump(metas, f)
 
 #　metaのpickleファイルを読み込みする
-def loadPickleFile(metadir):
-    with open(f'{metadir}/{metasPickleFile}', 'rb') as f:
+def loadPickleFile(meta_dir):
+    with open(f'{meta_dir}/{metasPickleFile}', 'rb') as f:
         return pickle.load(f)
 
 # metaのpickleファイルが存在するか？
@@ -84,8 +83,8 @@ def PickleFileExists(meta_dir):
     return os.path.exists(f'{meta_dir}/{metasPickleFile}')
 
 # metaを読み込む
-def loadMeta(meta_dir, image_path):
-    return np.load(f'{meta_dir}/{image_path}.npy')
+def loadMeta(meta_dir, image_name):
+    return np.load(f'{meta_dir}/{image_name}.npy')
 
 #　画像のパスを取得
 def getImageFiles(image_dir):

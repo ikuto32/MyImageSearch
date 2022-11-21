@@ -8,7 +8,6 @@ body{
 }
 
 .itemBlock {
-
 	/* 最も高い高さに揃える */
 	align-self: stretch;
 
@@ -17,14 +16,11 @@ body{
 }
 
 .itemBlock:hover {
-
 	outline: skyblue solid 2px;
 }
 
 .selectedItem{
-
 	background-color: lightcyan;
-
 }
 
 .meta,.score{
@@ -36,19 +32,14 @@ body{
 }
 
 #settingArea {
-
 	display: flex;
-
 	/* 上部に固定 */
 	position: sticky;
 	top: 0;
-
 	/* 下に折り返す */
 	flex-wrap: wrap;
-
 	width: 100%;
 	box-sizing: border-box;
-
 	background-color: #f5f5f5;
 	padding: 5px 10px 5px 10px;	
 	border-bottom: lightgray solid 1px;
@@ -56,7 +47,6 @@ body{
 
 
 #itemArea {
-
 	/* FlexBoxを使用 */
 	display: flex;
 

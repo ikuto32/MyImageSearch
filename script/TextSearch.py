@@ -7,15 +7,16 @@ import numpy as np
 from script import util
 
 
-def textSearch(setting, args, metas):
+def textSearch(itemlist, args):
 
     print("textSearch")
-    model_dir_name = F'{setting["model"][0]}-{setting["model"][1]}'
-    meta_dir = F'{setting["meta_dir"]}/{model_dir_name}'
-    image_dir = setting["image_dir"]
+    model_dir_name = F'{itemlist.model[0]}-{itemlist.model[1]}'
+    meta_dir = F'{itemlist.metadataDir}/{model_dir_name}'
+    image_dir = itemlist.metadataDir
+    meta_files = itemlist.metadataFiles
     
     # モデルの読み込み
-    model, _, _ = util.loadModel(setting["model"], device="cpu")
+    model, _, _ = util.loadModel(itemlist.model, device="cpu")
 
     # テキストの埋め込みを計算
     features = util.encode_text(model, args.get("text"))
@@ -24,5 +25,9 @@ def textSearch(setting, args, metas):
     index = util.loadIndexFile(meta_dir)
 
     # 類似度を計算する
-    scores = util.eval(metas, index, features)
-    return sorted(scores, reverse=True, key=lambda x: x[1])
+    scores = util.eval(meta_files, index, features)
+    for name, score in scores:
+        itemlist.setScore(name, score)
+    itemlist.sortScore()
+
+    return scores
