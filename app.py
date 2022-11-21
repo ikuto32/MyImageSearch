@@ -78,6 +78,7 @@ def getItems():
 
 @app.route("/search", methods=["POST"])
 def search():
+    print(request.data.decode('utf-8'))
     args = ast.literal_eval(request.data.decode('utf-8'))
     print(args)
     out = script.onInputEnd(itemlist, args)
