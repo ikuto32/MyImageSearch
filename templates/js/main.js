@@ -15,6 +15,7 @@ new Vue({
 	},
 	mounted() {
 		window.addEventListener("scroll", this.getScroll)
+		window.addEventListener("load", this.getimgs)
     },
 	methods:{
 		getScroll() {
@@ -31,7 +32,7 @@ new Vue({
 			// 現在のスクロール値
 			let scrollY = window.pageYOffset;
 
-			//console.log("スクロール: " + scrollY + " / " + scrollMaxY);
+			console.log("スクロール: " + scrollY + " / " + scrollMaxY);
 
 			//最後に近づいたら、更新
 			if(scrollMaxY - scrollY < 20)
@@ -62,6 +63,7 @@ new Vue({
 		textSearchButton: function () {
 			param = {"trigger" : "TextSearch", "text" : this.text}
 			axios.post("/search", param)
+			this.initImages()
 		},
 		imagesSearchButton: function () {
 			let selected_images = []
@@ -75,10 +77,12 @@ new Vue({
 			param = {"trigger" : "ImageSearch", "meta_names" : selected_images.join(',')}
 			console.log(param)
 			axios.post("/search", param)
+			this.initImages()
 		},
 		nameSearchButton: function () {
 			param = {"trigger" : "NameSearch", "text" : this.text, "trueRegexp" : this.isRegexp.toString()}
 			axios.post("/search", param)
+			this.initImages()
 		},
 		copyImagesButton: function () {
 			let selected_images = []
@@ -92,6 +96,12 @@ new Vue({
 			param = {"trigger" : "copyImages", "meta_names" : selected_images.join(',')}
 			console.log(param)
 			axios.post("/search", param)
+			this.initImages()
+		},
+		initImages: function () {
+			this.items = []
+			this.count = 0
+			this.getimgs()
 		},
 	}
 })

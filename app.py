@@ -9,11 +9,12 @@ from script import util, script
 app = Flask(__name__, static_folder='')
 
 class ItemList:
-    def __init__(self, image_dir:str, metadata_dir:str, model) -> None:
+    def __init__(self, image_dir:str, metadata_dir:str, out_dir:str, model) -> None:
         self.state = ""
         self.model = model
         self.imagesDir = image_dir
         self.metadataDir = metadata_dir
+        self.outDir = out_dir
         self.imagesFiles = util.getImageFiles(image_dir=image_dir)
         model_dir_name = F'{self.model[0]}-{self.model[1]}'
         util.createPickleFile(image_filse=self.imagesFiles, meta_dir=F'{self.metadataDir}/{model_dir_name}')
@@ -48,7 +49,7 @@ class ItemList:
         return util.loadMeta(item_name, self.imagesDir)
 
 
-itemlist = ItemList(image_dir="./images", metadata_dir="./meta", model=('ViT-B-32', 'laion2b_s34b_b79k'))
+itemlist = ItemList(image_dir="./images", metadata_dir="./meta", out_dir="./out", model=('ViT-B-32', 'laion2b_s34b_b79k'))
 
 @app.route('/')
 def index():

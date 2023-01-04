@@ -30,4 +30,4 @@ def textSearch(itemlist, args):
         itemlist.setScore(name, score)
     itemlist.sortScore()
 
-    return scores
+    return ""
