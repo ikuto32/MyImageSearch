@@ -34,5 +34,5 @@ def textAndImageSearch(setting, args, metas):
 
     # 類似度を計算する
     scores = util.eval(metas, index, features)
-    return sorted(scores, reverse=True, key=lambda x: x[1])
+    return ""
 

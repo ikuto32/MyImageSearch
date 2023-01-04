@@ -16,7 +16,7 @@ def imageSearch(itemlist, args):
     select_image_paths = args.get("meta_names").split(",")
 
     if not select_image_paths:
-        return
+        return "no select"
 
     #　選択した画像のmetaを結合する
     temp = []
@@ -30,7 +30,7 @@ def imageSearch(itemlist, args):
     try:
         features = np.vstack(temp)
     except:
-        return
+        return "error"
 
 
     # indexを読み込み
@@ -41,5 +41,5 @@ def imageSearch(itemlist, args):
     for name, score in scores:
         itemlist.setScore(name, score)
     itemlist.sortScore()
-    return scores
+    return ""
 

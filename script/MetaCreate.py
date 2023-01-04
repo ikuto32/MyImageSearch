@@ -54,5 +54,5 @@ def metaCreate(itemlist, args):
     util.createPickleFile(files, meta_dir)
     metas = util.loadPickleFile(meta_dir)
     util.createIndexFile(metas, meta_dir)
-    return ((file, 0) for file in files)
+    return ""
 

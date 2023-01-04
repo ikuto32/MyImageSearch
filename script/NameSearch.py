@@ -22,4 +22,4 @@ def nameSearch(itemlist, args):
         else:
             itemlist.setScore(file, 0.0)
     itemlist.sortScore()
-    return 
+    return ""

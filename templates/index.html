@@ -8,12 +8,13 @@
 </head>
 <body>
     <main>
-        <div id="app">
+        <div id="app" ref="hogehoge">
             <div id="controlArea" >
                 <input type="search" id="textSearchBox" placeholder="文字列" v-model:text="text">
                 <input type="button" value="テキスト検索" @click="textSearchButton">
                 <input type="button" value="画像検索" @click="imagesSearchButton">
                 <input type="button" value="名前検索" @click="nameSearchButton">
+                <input type="button" value="画像をコピー" @click="copyImagesButton">
 
                 <div v-if="isShowSetting">
                     <span class="checkboxBlock">
