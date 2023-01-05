@@ -47,8 +47,8 @@
                         <figure>
                             <img :src="item.img" :title="item.img_name" :style="{width: image_size + 'px'}">
                             <figcaption>
-                                <span class="meta">{{ item.img_name }}</span><br>
-                                <span class="score">{{ item.score }}</span>
+                                <span class="meta" :style="{width: image_size + 'px'}">{{ item.img_name }}</span><br>
+                                <span class="score" :style="{width: image_size + 'px'}">{{ item.score }}</span>
                             </figcaption>
                         </figure>
                     </div>

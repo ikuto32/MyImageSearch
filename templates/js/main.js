@@ -14,11 +14,13 @@ new Vue({
 		]
 	},
 	mounted() {
-		window.addEventListener("scroll", this.getScroll)
+		window.addEventListener("scroll", this.updateImageFromScroll)
 		window.addEventListener("load", this.getimgs)
     },
 	methods:{
-		getScroll() {
+
+		//下までスクロールすると、次の画像を読み込む。
+		updateImageFromScroll() {
 
 			// ページ全体の高さ
 			let pageHeight = document.body.clientHeight;
@@ -41,11 +43,17 @@ new Vue({
 			}
 
         },
-		getimgs: function (){
+
+		//サーバから画像を取得する
+		getimgs(){
 			console.log(this.count+" to "+(this.count+this.load_size))
+
+			//問い合わせ
 			axios.get("/images?min="+this.count+"&max="+(this.count+this.load_size))
 			.then(response => {
 				console.log(response.data)
+
+
 				for (var metaName in response.data){
 					score = response.data[metaName]["score"]
 					img = response.data[metaName]["base64_img"]
@@ -57,15 +65,21 @@ new Vue({
 						selected: false
 					})
 				}
+
+
 			});
 			this.count += this.load_size
 		},
-		textSearchButton: function () {
+
+		//テキストから検査するボタンの動作
+		textSearchButton() {
 			param = {"trigger" : "TextSearch", "text" : this.text}
 			axios.post("/search", param)
 			this.initImages()
 		},
-		imagesSearchButton: function () {
+
+		//画像から検索するボタンの動作
+		imagesSearchButton() {
 			let selected_images = []
 			for (var i in this.items){
 				item = this.items[i]
@@ -79,12 +93,16 @@ new Vue({
 			axios.post("/search", param)
 			this.initImages()
 		},
-		nameSearchButton: function () {
+
+		//画像名前から検索するボタンの動作
+		nameSearchButton() {
 			param = {"trigger" : "NameSearch", "text" : this.text, "trueRegexp" : this.isRegexp.toString()}
 			axios.post("/search", param)
 			this.initImages()
 		},
-		copyImagesButton: function () {
+
+		//画像をコピーするボタンの動作
+		copyImagesButton() {
 			let selected_images = []
 			for (var i in this.items){
 				item = this.items[i]
@@ -98,7 +116,9 @@ new Vue({
 			axios.post("/search", param)
 			this.initImages()
 		},
-		initImages: function () {
+
+		//画像の表示を初期化する
+		initImages() {
 			this.items = []
 			this.count = 0
 			this.getimgs()
