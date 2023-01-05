@@ -23,8 +23,7 @@ body{
 	background-color: lightcyan;
 }
 
-.meta .score{
-	width:250px;
+.meta, .score{
 	display:inline-block;
 	white-space:nowrap;
 	overflow:hidden;
