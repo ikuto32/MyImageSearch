@@ -1,10 +1,8 @@
-import os
-from flask import Flask, request, jsonify
-import base64
+import io
+from flask import Flask, request, make_response
+import json
 
-import ast
-
-from script import util, script
+from script import util, TextSearch
 
 app = Flask(__name__, static_folder='')
 
@@ -20,6 +18,7 @@ class ItemList:
         util.createPickleFile(image_filse=self.imagesFiles, meta_dir=F'{self.metadataDir}/{model_dir_name}')
         self.metadataFiles = util.getMetafilse(meta_dir=F'{self.metadataDir}/{model_dir_name}')
         self.items = {file : 0.0 for file in self.imagesFiles}
+        self.itemIDs = {str(id) : file for id, file in enumerate(self.imagesFiles)}
     
     def setScore(self, item_name:str, score:float):
         self.items[item_name] = score
@@ -51,6 +50,7 @@ class ItemList:
 
 itemlist = ItemList(image_dir="./images", metadata_dir="./meta", out_dir="./out", model=('ViT-B-32', 'laion2b_s34b_b79k'))
 
+# メインページを返す
 @app.route('/')
 def index():
     with open('templates/index.html', encoding="UTF-8") as f:
@@ -58,32 +58,52 @@ def index():
 
     return text
 
-@app.route("/score")
-def getScore():
-    args = request.args
-    return itemlist.getScore(item_name=args.get("metaName"))
+# 画像IDから画像を返す
+@app.route("/image/<id>")
+def loadImage(id):
+    path = f'{itemlist.imagesDir}/{itemlist.itemIDs.get(id)}'
+    img_bin = open(path, 'rb').read()
+    response = make_response(img_bin)
+    response.headers.set('Content-Type', request.content_type)
+    return response
 
-@app.route("/images")
-def getItems():
-    args = request.args
-    img_dict = {}
-    items = itemlist.getItemsFromOrder(int(args.get("min")), int(args.get("max")))
-    images_dir = itemlist.imagesDir
-    for name, score in items:
-        with open(F"{images_dir}/{name}", "rb") as image_file:
-            img = image_file.read()
-        file_type = os.path.splitext(name)[1][1:]
-        base64_img = base64.b64encode(img).decode('utf-8')
-        img_dict[name] = {"base64_img": base64_img, "score": score, "file_type": file_type}
-    return jsonify(img_dict)
+#画像IDから画像パスを返す
+@app.route("/image/<id>/path")
+def getPath(id):
+    path = f'{itemlist.imagesDir}/{itemlist.itemIDs.get(id)}'
+    response = json.dumps({"path":path})
+    return response
 
-@app.route("/search", methods=["POST"])
-def search():
-    print(request.data.decode('utf-8'))
-    args = ast.literal_eval(request.data.decode('utf-8'))
-    print(args)
-    out = script.onInputEnd(itemlist, args)
-    return out
+#画像IDをすべて返す
+@app.route("/image/all")
+def getAllImageId():
+    dict = {"image":[{"id": id} for id, in itemlist.itemIDs.keys()]}
+    response = json.dumps(dict)
+    return response
+
+#文字列から検索して、画像IDを返す
+@app.route("/search/text")
+def searchText():
+    
+    text = request.args.get("text")
+    print(text)
+    scores = TextSearch.textSearch(itemlist, text)
+    dict = {"image":[{"id": itemlist.itemIDs.get(name), "score": score} for name, score in scores]}
+    response = json.dumps(dict)
+    return response
+
+#画像から検索して、画像IDを返す
+@app.route("/search/image?payload=<json>")
+def searchImage():
+    # TODO
+    return
+
+#アップロードされた画像から検索して、画像IDを返す。                                                                                     
+@app.route("/search/uploadimage?payload=<json>")
+def uploadImage():
+    # TODO
+    return
+
 
 if __name__ == "__main__":
     app.run(debug=True)

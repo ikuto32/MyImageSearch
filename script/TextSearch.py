@@ -1,13 +1,9 @@
 # coding: utf-8
 
-import os
-
-import numpy as np
-
 from script import util
 
 
-def textSearch(itemlist, args):
+def textSearch(itemlist, text:str):
 
     print("textSearch")
     model_dir_name = F'{itemlist.model[0]}-{itemlist.model[1]}'
@@ -19,15 +15,11 @@ def textSearch(itemlist, args):
     model, _, _ = util.loadModel(itemlist.model, device="cpu")
 
     # テキストの埋め込みを計算
-    features = util.encode_text(model, args.get("text"))
+    features = util.encode_text(model, text)
 
     # indexを読み込み
     index = util.loadIndexFile(meta_dir)
 
     # 類似度を計算する
     scores = util.eval(meta_files, index, features)
-    for name, score in scores:
-        itemlist.setScore(name, score)
-    itemlist.sortScore()
-
-    return ""
+    return scores

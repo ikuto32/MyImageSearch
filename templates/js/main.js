@@ -71,7 +71,7 @@ new Vue({
 			this.count += this.load_size
 		},
 
-		//テキストから検査するボタンの動作
+		//テキストから検索するボタンの動作
 		textSearchButton() {
 			param = {"trigger" : "TextSearch", "text" : this.text}
 			axios.post("/search", param)
