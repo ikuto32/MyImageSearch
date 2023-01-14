@@ -1,9 +1,8 @@
 
 from script.domain.domain_object import Config
+from script.domain.id_converter import IdConverter
 
-_id_to_item = {}
-_path_to_item = {}
-
+_registory = IdConverter()
 
 def load(config : Config):
     
