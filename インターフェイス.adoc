@@ -35,11 +35,11 @@ id::
 
 
 //===============================================================
-=== /image/<id>/path - 画像のパスを取得
+=== /image/<id>/name - 画像の名前を取得
 
 ----
 
-/image/<id>/path
+/image/<id>/name
 
 ----
 
@@ -50,7 +50,7 @@ id::
 [source, ts]
 ----
 {
-    "path": string,
+    "name": string,
 }
 ----
 
@@ -71,7 +71,7 @@ id::
 {
     image: {
         "id": int, //画像ID 
-        "score":int //画像のスコア
+        "score":float //画像のスコア
     }[]
 }
 ----
@@ -95,7 +95,7 @@ text::
 {
     image: {
         "id": int, //画像ID 
-        "score":int //画像のスコア
+        "score":float //画像のスコア
     }[]
 }
 ----
@@ -124,7 +124,7 @@ payload::
 {
     image: {
         "id": int, //画像ID 
-        "score":int //画像のスコア
+        "score":float //画像のスコア
     }[]
 }
 ----
@@ -154,7 +154,7 @@ payload::
 {
     image: {
         "id": int, //画像ID 
-        "score":int //画像のスコア
+        "score":float //画像のスコア
     }[]
 }
 ----

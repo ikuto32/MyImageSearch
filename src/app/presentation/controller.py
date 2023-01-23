@@ -2,20 +2,23 @@ import io
 from flask import Flask, request, make_response
 import json
 
-import script.application.item_service as item_service
-from script.domain.domain_object import Config, Item
+from app.application.usecase import Usecase
+from app.domain.domain_object import Config, Item
 
 
 
 
 app = Flask(__name__, static_folder='')
 
-
 #エントリーポイント
-def startApp(config : Config):
+def startApp(in_usecase : Usecase):
 
-    #項目の用意
-    item_service.load(config)
+    #ユースケースのDI
+    global usecase
+    usecase : Usecase = in_usecase
+
+    #画像の読み込み
+    usecase.load_items()
     
     #Flask実行
     app.run(debug=True)
@@ -26,30 +29,31 @@ def startApp(config : Config):
 # メインページを返す
 @app.route('/')
 def index():
+
+    #ビューの指定をしている。
     with open('templates/index.html', encoding="UTF-8") as f:
         text = f.read()
-
+    
     return text
 
-# 画像IDから画像を返す
+#画像IDから画像を返す
 @app.route("/image/<id>")
 def loadImage(id):
 
-    
-    item : Item = item_service.get_item_from_id(id)
-
-    path = f'{itemlist.imagesDir}/{itemlist.itemIDs.get(id)}'
-    img_bin = open(path, 'rb').read()
-    response = make_response(img_bin)
-    response.headers.set('Content-Type', request.content_type)
+    #画像を取得して、レスポンスに詰め替えて返す。
+    img = usecase.get_image(id)
+    response = make_response(img.get_binary())
+    response.headers.set('Content-Type', img.get_mime_type())
     return response
 
-#画像IDから画像パスを返す
-@app.route("/image/<id>/path")
+#画像IDから画像名を返す
+@app.route("/image/<id>/name")
 def getPath(id):
-    path = f'{itemlist.imagesDir}/{itemlist.itemIDs.get(id)}'
-    response = json.dumps({"path":path})
-    return response
+    
+    #TODO 警告 例外処理が不足
+    return usecase.get_image_name(id)
+
+
 
 #画像IDをすべて返す
 @app.route("/image/all")
