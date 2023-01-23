@@ -3,20 +3,26 @@ import json
 
 
 class ItemId:
-    "項目を一意に識別する値クラス"
+    """項目を一意に識別する値クラス"""
 
     def __init__(self, id: str):
         
         self._id = id
 
-    def get_id(self) -> str:
-        return self._id
+    def __hash__(self):
+        return hash(self._id)
+
+    def __eq__(self, other):
+        return self._id == other._id
     
     def __str__(self) -> str:
         return self._id
     
+    def get_id(self) -> str:
+        return self._id
+    
 class ItemName:
-    "項目の名前を示す値クラス"
+    """項目の名前を示す値クラス"""
 
     def __init__(self, name: str):
 
@@ -28,7 +34,7 @@ class ItemName:
 
 
 class Item:
-    "各項目を表すエンティティクラス"
+    """各項目を表すエンティティクラス"""
 
 
 
@@ -46,7 +52,7 @@ class Item:
 
 
 class Image:
-    "画像を表すエンティティクラス"
+    """画像を表すエンティティクラス"""
 
     def __init__(self, binary : bytes, mime_type : str):
         
@@ -72,7 +78,7 @@ class Image:
 
 
 class Score:
-    "スコアを示す値クラス"
+    """スコアを示す値クラス"""
 
     def __init__(self, score: float):
         
@@ -83,7 +89,7 @@ class Score:
     
 
 class SearchResultItem:
-    "検索結果の一つの項目を示すエンティティクラス"
+    """検索結果の一つの項目を示すエンティティクラス"""
 
     def __init__(self, id : ItemId, score : Score):
 
@@ -92,21 +98,22 @@ class SearchResultItem:
 
     def to_json(self) -> str:
 
-        return json.dumps({
-            
+        return json.dumps(self.to_dict())
+    
+    def to_dict(self) -> dict:
+        dict = {
             "id": self._id.getId(),
             "score": self._score.getScore()
-        })
+        }
+        return dict
 
 
 class SearchResult:
-    "検索結果を示すエンティティクラス"
+    """検索結果を示すエンティティクラス"""
 
     def __init__(self, items : list[SearchResultItem]):
 
         self._items = items
 
     def to_json(self) -> str:
-
-        #TODO 未実装 JSON
-        return 
+        return json.dumps(map(lambda i: i.to_dict(),self._items))
