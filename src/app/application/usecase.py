@@ -17,8 +17,11 @@ class Usecase:
     def load_items(self) -> None:
         """画像の読み込み"""
 
+        #Itemの読み込み
         items = self._repository.load_items()
-        self._id_to_items : dict[str, Item] = dict(map(lambda i : (str(i.get_id()), i), items))
+
+        #IDとItemの対応を作成
+        self._id_to_items : dict[ItemId, Item] = dict(map(lambda i : (i.get_id(), i), items))
         pass
 
     def get_image(self, id : str) -> Image:
@@ -30,8 +33,8 @@ class Usecase:
     def get_item_name(self, id : str) -> ItemName:
         """項目の名前を取得する"""
 
-        #TODO 警告 ぬるぽ
-        return self._id_to_items[id].get_name()
+        id : ItemId = ItemId(id)
+        return self._id_to_items.get(id).get_name()
     
 
     def searchFromText(self, text : str) -> SearchResult:
