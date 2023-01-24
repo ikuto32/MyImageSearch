@@ -8,10 +8,12 @@ from app.domain.repository import Repository
 
 
 class Usecase:
+    """このアプリケーションの動作を実装するクラス"""
 
     def __init__(self, repository : Repository):
 
         self._repository = repository
+        self._id_to_items: dict[ItemId, Item] = {}
 
 
     def load_items(self) -> None:
@@ -21,8 +23,13 @@ class Usecase:
         items = self._repository.load_items()
 
         #IDとItemの対応を作成
-        self._id_to_items : dict[ItemId, Item] = dict(map(lambda i : (i.get_id(), i), items))
-        pass
+        self._id_to_items = dict(map(lambda i : (i.get_id(), i), items))
+
+ 
+    def get_items(self) -> list[Item]:
+        """すべてのItemを取得する"""
+
+        return self._id_to_items.values()
 
     def get_image(self, id : str) -> Image:
         """IDから画像を取得する"""
