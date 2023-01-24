@@ -9,7 +9,7 @@ from app.domain.repository import Repository
 
 
 class LocalRepository(Repository):
-    "ローカル上のファイルを対象としたRepository"
+    """ローカル上のファイルを対象としたRepository"""
 
 
     def __init__(
