@@ -3,7 +3,7 @@ from flask import Flask, request, make_response
 import json
 
 from app.application.usecase import Usecase
-from app.domain.domain_object import Config, Item
+from app.domain.domain_object import Item
 
 
 
