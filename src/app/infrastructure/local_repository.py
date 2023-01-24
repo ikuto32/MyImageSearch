@@ -1,7 +1,11 @@
 
 import pathlib
+from typing import Any
 
 import numpy as np
+import torch
+import faiss
+import open_clip
 
 from app.domain.domain_object import Item, ItemId
 from app.domain.repository import Repository
@@ -58,4 +62,10 @@ class LocalRepository(Repository):
         
         return np.load(f'{self._meta_dir_path}/{path}.npy')
 
+    def load_model(self, model_name: tuple[str, str], device: str) -> Any:
+        if device == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        return open_clip.create_model_and_transforms(model_name[0], pretrained=model_name[1])
 
+    def load_Index_file(self) -> Any:
+        return super().loadIndexFile()

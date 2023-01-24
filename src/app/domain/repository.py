@@ -2,6 +2,7 @@
 
 from abc import abstractmethod
 from abc import ABCMeta
+from typing import Any
 import numpy as np
 
 from app.domain.domain_object import Image, ItemId, Item
@@ -29,6 +30,17 @@ class Repository(metaclass=ABCMeta):
 
         pass
 
-    
+    @abstractmethod
+    def load_model(self, model_name : tuple[str, str], device : str) -> Any:
+        """外部からmodel_nameに対応したモデルを読み込む"""
+
+        pass
+
+    abstractmethod
+    def load_Index_file(self) -> Any :
+        """外部からmodel_nameに対応したインデックスを読み込む"""
+
+        pass
+
 
     

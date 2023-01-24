@@ -47,6 +47,17 @@ class Usecase:
     def searchFromText(self, text : str) -> SearchResult:
         """文字列から検索する"""
 
+        # モデルの読み込み
+        model, _, _ = util.loadModel(itemlist.model, device="cpu")
+
+        # テキストの埋め込みを計算
+        features = util.encode_text(model, text)
+
+        # indexを読み込み
+        index = util.loadIndexFile(meta_dir)
+
+        # 類似度を計算する
+        scores = util.eval(meta_files, index, features)
         return 
     
 

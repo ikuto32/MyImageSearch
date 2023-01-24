@@ -50,8 +50,9 @@ def loadImage(id):
 @app.route("/image/<id>/name")
 def getPath(id):
     
-    #TODO 警告 例外処理が不足
-    return usecase.get_image_name(id)
+    if usecase.get_item_name(id):
+        raise 
+    return usecase.get_item_name(id)
 
 
 
