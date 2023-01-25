@@ -43,7 +43,7 @@ class LocalRepository(Repository):
         files = sorted(files)
 
         #Itemに変換
-        items = map(lambda f: Item(ItemId(str(f))), files)
+        items = map(lambda f: Item(ItemId(id=str(f)), str(f)), files)
 
         return items
 
