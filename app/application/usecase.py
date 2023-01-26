@@ -1,7 +1,7 @@
 
 
 
-
+from app.application.accessor import Accessor
 from app.domain.domain_object import Item, ItemId, Image, ItemName, SearchResult, SearchResultItem, SearchText
 from app.domain.repository import Repository
 
@@ -9,9 +9,14 @@ from app.domain.repository import Repository
 class Usecase:
     """このアプリケーションの動作を実装するクラス"""
 
-    def __init__(self, repository : Repository):
+    def __init__(
+        self, 
+        repository : Repository,
+        accessor : Accessor
+    ):
 
         self._repository = repository
+        self._accessor = accessor
         self._id_to_items: dict[ItemId, Item] = {}
 
 
@@ -22,7 +27,7 @@ class Usecase:
         items = self._repository.load_items()
 
         #IDとItemの対応を作成
-        self._id_to_items = dict(map(lambda i : (i.get_id(), i), items))
+        self._id_to_items = dict(map(lambda i : (i.id, i), items))
 
 
     def get_image(self, id : ItemId) -> Image:
@@ -33,7 +38,7 @@ class Usecase:
     def get_item_name(self, id : ItemId) -> ItemName:
         """項目の名前を取得する"""
 
-        return self._id_to_items.get(id).get_name()
+        return self._id_to_items.get(id).name
 
     def search_all(self) -> SearchResult:
         """すべてのItemを取得する"""

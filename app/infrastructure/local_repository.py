@@ -1,13 +1,6 @@
 
-from typing import Any
-
 import pathlib
 import uuid
-
-import numpy as np
-import torch
-import faiss
-import open_clip
 
 from app.domain.domain_object import Item, ItemId, ItemName
 from app.domain.repository import Repository
@@ -20,13 +13,10 @@ class LocalRepository(Repository):
 
     def __init__(
             self, 
-            image_dir_path : pathlib,
-            meta_dir_path : pathlib
+            image_dir_path : pathlib
             ):
         
         self._image_dir_path = image_dir_path
-        self._meta_dir_path = meta_dir_path
-        
         self._id_to_path : dict[ItemId, pathlib.Path] = {}
 
 
@@ -65,16 +55,6 @@ class LocalRepository(Repository):
 
         path = self._id_to_path.get(id)
         return path.read_bytes()
+
+
         
-
-    def load_meta(self, id: ItemId) -> np.ndarray:
-        
-        return np.load(f'{self._meta_dir_path}/{id}.npy')
-
-    def load_model(self, model_name: tuple[str, str], device: str) -> Any:
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        return open_clip.create_model_and_transforms(model_name[0], pretrained=model_name[1])
-
-    def load_Index_file(self) -> Any:
-        return super().loadIndexFile()
