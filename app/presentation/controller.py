@@ -3,12 +3,14 @@ from flask import Flask, request, make_response
 import json
 
 from app.application.usecase import Usecase
-from app.domain.domain_object import Item
+from app.domain.domain_object import Item, ItemId, SearchResult
 
 
+#============================================================
 
 
 app = Flask(__name__, static_folder='')
+usecase : Usecase = None
 
 #エントリーポイント
 def startApp(in_usecase : Usecase):
@@ -25,6 +27,8 @@ def startApp(in_usecase : Usecase):
 
 
 
+#============================================================
+
 
 # メインページを返す
 @app.route('/')
@@ -38,30 +42,30 @@ def index():
 
 #画像IDから画像を返す
 @app.route("/image/<id>")
-def loadImage(id):
+def loadImage(id : str):
 
     #画像を取得して、レスポンスに詰め替えて返す。
-    img = usecase.get_image(id)
+    img = usecase.get_image(ItemId(id))
     response = make_response(img.get_binary())
     response.headers.set('Content-Type', img.get_mime_type())
     return response
 
 #画像IDから画像名を返す
 @app.route("/image/<id>/name")
-def getPath(id):
+def getPath(id : str):
     
-    if usecase.get_item_name(id):
+    if usecase.get_item_name(ItemId(id)):
         raise 
     return usecase.get_item_name(id)
 
 
 
 #画像IDをすべて返す
-@app.route("/image/all")
+@app.route("/search/all")
 def getAllImageId():
-    dict = {"image":[{"id": id} for id, in itemlist.itemIDs.keys()]}
-    response = json.dumps(dict)
-    return response
+
+    text = to_json(usecase.search_all())
+    return text
 
 #文字列から検索して、画像IDを返す
 @app.route("/search/text")
@@ -85,4 +89,19 @@ def searchImage():
 def uploadImage():
     # TODO
     return
+
+
+
+#============================================================
+
+
+
+def to_json(result : SearchResult):
+
+    objs = map(lambda i: {"id": i.id.id, "score": i.score.score}, result)
+    return json.dumps(objs)
+
+
+
+#============================================================
 

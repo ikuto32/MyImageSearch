@@ -1,5 +1,5 @@
 
-import json
+from typing import Iterator
 
 
 class ItemId:
@@ -18,7 +18,8 @@ class ItemId:
     def __str__(self) -> str:
         return self._id
     
-    def get_id(self) -> str:
+    @property
+    def id(self) -> str:
         return self._id
     
 class ItemName:
@@ -28,7 +29,12 @@ class ItemName:
 
         self._name = name
 
-    def get_name(self) -> str:
+    
+    def __str__(self) -> str:
+        return self._name
+
+    @property
+    def name(self) -> str:
         return self._name
     
 
@@ -36,17 +42,17 @@ class ItemName:
 class Item:
     """各項目を表すエンティティクラス"""
 
-
-
     def __init__(self, id : ItemId, name : ItemName):
 
         self._id : ItemId = id 
         self._name : ItemName = name
 
-    def get_id(self) -> ItemId:
+    @property
+    def id(self) -> ItemId:
         return self._id
     
-    def get_name(self) -> ItemName:
+    @property
+    def name(self) -> ItemName:
         return self._name
 
 
@@ -59,20 +65,14 @@ class Image:
         self._binary = binary
         self._mime_type = mime_type
 
-    def get_binary(self) -> bytes:
-
+    @property
+    def binary(self) -> bytes:
         return self._binary
     
-    def get_mime_type(self) -> str:
-
+    @property
+    def mime_type(self) -> str:
         return self._mime_type
     
-
-
-
-
-
-
 
 
 
@@ -80,32 +80,41 @@ class Image:
 class Score:
     """スコアを示す値クラス"""
 
-    def __init__(self, score: float):
+    def __init__(self, score: float = 0.0):
         
         self._score = score
 
-    def getScore(self) -> float:
+    def __str__(self) -> str:
+        return self._score
+
+    @property
+    def score(self) -> float:
         return self._score
     
 
 class SearchResultItem:
     """検索結果の一つの項目を示すエンティティクラス"""
 
+    @staticmethod
+    def create_from_item(item : Item) -> 'SearchResultItem':
+        "Itemから検索結果のItemを作成する"
+
+        return SearchResultItem(item.get_id(), Score())
+
+
     def __init__(self, id : ItemId, score : Score):
 
         self._id = id
         self._score = score
 
-    def to_json(self) -> str:
+    @property
+    def id(self) -> ItemId:
+        return self._id
 
-        return json.dumps(self.to_dict())
-    
-    def to_dict(self) -> dict:
-        dict = {
-            "id": self._id.getId(),
-            "score": self._score.getScore()
-        }
-        return dict
+    @property
+    def score(self) -> Score:
+        return self._score
+
 
 
 class SearchResult:
@@ -115,5 +124,17 @@ class SearchResult:
 
         self._items = items
 
-    def to_json(self) -> str:
-        return json.dumps(map(lambda i: i.to_dict(),self._items))
+    def __iter__(self) -> Iterator[SearchResultItem]:
+        return self._items.__iter__()
+
+
+class SearchText:
+    "検索対象の(入力された)文字列"
+
+    def __init__(self, text : str):
+
+        self._text = text
+    
+    @property
+    def text(self):
+        return self._text
