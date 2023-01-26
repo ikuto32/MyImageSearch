@@ -42,7 +42,7 @@ class Usecase:
         result_items : list[SearchResultItem] = map(SearchResultItem.create_from_item, items)
         return SearchResult(result_items)
 
-    def searchFromText(self, text : SearchText) -> SearchResult:
+    def search_from_text(self, text : SearchText) -> SearchResult:
         """文字列から検索する"""
 
         # # モデルの読み込み
@@ -59,13 +59,13 @@ class Usecase:
         return 
     
 
-    def searchFromImage(self, id : list[str]) -> SearchResult:
+    def search_from_image(self, id : list[ItemId]) -> SearchResult:
         """画像から検索する"""
 
         return
     
 
-    def searchFromUploadImage(self, base64 : str) -> SearchResult:
+    def search_from_upload_image(self, image : Image) -> SearchResult:
         """アップロードされた画像から検索する"""
 
         return
