@@ -1,9 +1,11 @@
 import io
 from flask import Flask, request, make_response
+
 import json
+import base64
 
 from app.application.usecase import Usecase
-from app.domain.domain_object import Item, ItemId, SearchResult
+from app.domain.domain_object import Image, Item, ItemId, SearchResult, SearchText
 
 
 #============================================================
@@ -12,8 +14,8 @@ from app.domain.domain_object import Item, ItemId, SearchResult
 app = Flask(__name__, static_folder='')
 usecase : Usecase = None
 
-#エントリーポイント
 def startApp(in_usecase : Usecase):
+    """エントリーポイント"""
 
     #ユースケースのDI
     global usecase
@@ -30,9 +32,9 @@ def startApp(in_usecase : Usecase):
 #============================================================
 
 
-# メインページを返す
 @app.route('/')
 def index():
+    """メインページを返す"""
 
     #ビューの指定をしている。
     with open('templates/index.html', encoding="UTF-8") as f:
@@ -40,9 +42,9 @@ def index():
     
     return text
 
-#画像IDから画像を返す
 @app.route("/image/<id>")
-def loadImage(id : str):
+def load_image(id : str):
+    """画像IDから画像を返す"""
 
     #画像を取得して、レスポンスに詰め替えて返す。
     img = usecase.get_image(ItemId(id))
@@ -50,45 +52,59 @@ def loadImage(id : str):
     response.headers.set('Content-Type', img.get_mime_type())
     return response
 
-#画像IDから画像名を返す
+
 @app.route("/image/<id>/name")
-def getPath(id : str):
-    
+def get_item_name(id : str):
+    """画像IDから画像名を返す"""
+
+    #TODO 例外処理をする
     if usecase.get_item_name(ItemId(id)):
         raise 
     return usecase.get_item_name(id)
 
 
 
-#画像IDをすべて返す
 @app.route("/search/all")
-def getAllImageId():
+def search_all():
+    """画像IDをすべて返す"""
 
     text = to_json(usecase.search_all())
     return text
 
-#文字列から検索して、画像IDを返す
 @app.route("/search/text")
-def searchText():
+def search_text(text : str):
+    """文字列から検索して、画像IDを返す"""
     
-    text = request.args.get("text")
-    print(text)
-    scores = TextSearch.textSearch(itemlist, text)
-    dict = {"image":[{"id": itemlist.itemIDs.get(name), "score": score} for name, score in scores]}
-    response = json.dumps(dict)
-    return response
+    text = to_json(usecase.search_from_text(SearchText(text)))
+    return text
 
-#画像から検索して、画像IDを返す
-@app.route("/search/image?payload=<json>")
-def searchImage():
-    # TODO
-    return
+@app.route("/search/image")
+def search_image(payload : str):
+    """画像から検索して、画像IDを返す"""
 
-#アップロードされた画像から検索して、画像IDを返す。                                                                                     
-@app.route("/search/uploadimage?payload=<json>")
-def uploadImage():
-    # TODO
-    return
+    #jsonを解釈し、IDのリストを取得する。
+    json_obj = json.loads(payload)
+    id_text_list : list[str] = json_obj["id"]
+    id_list : list[ItemId] = map(ItemId, id_text_list)
+    
+    text = to_json(usecase.search_from_image(id_list))
+    return text
+                                       
+@app.route("/search/uploadimage")
+def search_upload_image(payload : str):
+    """アップロードされた画像から検索して、画像IDを返す。"""
+
+    #jsonを解釈し、値を取り出す。
+    json_obj = json.loads(payload)
+    base64_text : str = json_obj["base64"]
+    mime_type : str = json_obj(["mime_type"])
+
+    #base64を画像に変換
+    binary = base64.b64decode(base64_text)
+    image : Image = Image(binary, mime_type)
+
+    text = to_json(usecase.search_from_upload_image(image))
+    return text
 
 
 

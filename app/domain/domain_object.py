@@ -2,6 +2,8 @@
 from typing import Iterator
 
 
+#=====================================================
+
 class ItemId:
     """項目を一意に識別する値クラス"""
 
@@ -38,7 +40,6 @@ class ItemName:
         return self._name
     
 
-
 class Item:
     """各項目を表すエンティティクラス"""
 
@@ -54,6 +55,11 @@ class Item:
     @property
     def name(self) -> ItemName:
         return self._name
+
+
+#=====================================================
+
+
 
 
 
@@ -74,7 +80,7 @@ class Image:
         return self._mime_type
     
 
-
+#=====================================================
 
 
 class Score:
@@ -128,6 +134,9 @@ class SearchResult:
         return self._items.__iter__()
 
 
+#=====================================================
+
+
 class SearchText:
     "検索対象の(入力された)文字列"
 
@@ -138,3 +147,10 @@ class SearchText:
     @property
     def text(self):
         return self._text
+
+
+
+
+
+
+#=====================================================
