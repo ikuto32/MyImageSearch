@@ -51,7 +51,7 @@ def resource(dir_name: str, file_name: str):
 
     #ビューの指定をしている。
     pwd = pathlib.Path(__file__).parent
-    with open(f'{pwd}/{dir_name}/{file_name}', encoding="UTF-8") as f:
+    with open(f'{pwd}/view/{dir_name}/{file_name}', encoding="UTF-8") as f:
         text = f.read()
 
     return text
