@@ -1,6 +1,7 @@
 import io
 from flask import Flask, request, make_response
 
+import pathlib
 import json
 import base64
 
@@ -11,7 +12,7 @@ from app.domain.domain_object import Image, Item, ItemId, SearchResult, SearchTe
 #============================================================
 
 
-app = Flask(__name__, static_folder='')
+app = Flask(__name__, static_folder=None)
 usecase : Usecase = None
 
 def startApp(in_usecase : Usecase):
@@ -25,6 +26,7 @@ def startApp(in_usecase : Usecase):
     usecase.load_items()
     
     #Flask実行
+    print(app.url_map)
     app.run(debug=True)
 
 
@@ -37,10 +39,26 @@ def index():
     """メインページを返す"""
 
     #ビューの指定をしている。
-    with open('templates/index.html', encoding="UTF-8") as f:
+    pwd = pathlib.Path(__file__).parent
+    with open(f'{pwd}/view/index.html', encoding="UTF-8") as f:
         text = f.read()
     
     return text
+
+@app.route("/<dir_name>/<file_name>")
+def resource(dir_name: str, file_name: str):
+    """ファイルを返す"""
+
+    #ビューの指定をしている。
+    pwd = pathlib.Path(__file__).parent
+    with open(f'{pwd}/{dir_name}/{file_name}', encoding="UTF-8") as f:
+        text = f.read()
+
+    return text
+
+
+#------------------------------------------------------------
+
 
 @app.route("/image/<id>")
 def load_image(id : str):
@@ -48,8 +66,8 @@ def load_image(id : str):
 
     #画像を取得して、レスポンスに詰め替えて返す。
     img = usecase.get_image(ItemId(id))
-    response = make_response(img.get_binary())
-    response.headers.set('Content-Type', img.get_mime_type())
+    response = make_response(img.binary)
+    response.headers.set('Content-Type', img.mime_type)
     return response
 
 
@@ -62,6 +80,8 @@ def get_item_name(id : str):
         raise 
     return usecase.get_item_name(id)
 
+
+#------------------------------------------------------------
 
 
 @app.route("/search/all")

@@ -105,7 +105,7 @@ class SearchResultItem:
     def create_from_item(item : Item) -> 'SearchResultItem':
         "Itemから検索結果のItemを作成する"
 
-        return SearchResultItem(item.get_id(), Score())
+        return SearchResultItem(item.id, Score())
 
 
     def __init__(self, id : ItemId, score : Score):
