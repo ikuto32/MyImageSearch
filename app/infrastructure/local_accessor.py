@@ -35,5 +35,7 @@ class LocalAccessor(Accessor):
             device = "cuda" if torch.cuda.is_available() else "cpu"
         return open_clip.create_model_and_transforms(model_name[0], pretrained=model_name[1])
 
-    def load_Index_file(self) -> Any:
-        return super().loadIndexFile()
+    def load_index_file(self) -> Any:
+
+        # TODO 未実装
+        pass
