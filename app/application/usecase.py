@@ -30,6 +30,11 @@ class Usecase:
         """すべてのItemを取得する"""
 
         return self._id_to_items.values()
+    
+    def get_ids(self) -> list[ItemId]:
+        """すべてのIDを取得する"""
+
+        return self._id_to_items.keys()
 
     def get_image(self, id : str) -> Image:
         """IDから画像を取得する"""
@@ -44,7 +49,7 @@ class Usecase:
         return self._id_to_items.get(id).get_name()
     
 
-    def searchFromText(self, text : str) -> SearchResult:
+    def search_from_text(self, text : str) -> SearchResult:
         """文字列から検索する"""
 
         # モデルの読み込み
@@ -61,13 +66,13 @@ class Usecase:
         return 
     
 
-    def searchFromImage(self, id : list[str]) -> SearchResult:
+    def search_from_image(self, id : list[str]) -> SearchResult:
         """画像から検索する"""
 
         return
     
 
-    def searchFromUploadImage(self, base64 : str) -> SearchResult:
+    def search_from_upload_image(self, base64 : str) -> SearchResult:
         """アップロードされた画像から検索する"""
 
         return
