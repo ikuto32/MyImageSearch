@@ -59,7 +59,7 @@ class Usecase:
         """文字列から検索する"""
 
         # # モデルの読み込み
-        # model, _, _ = self._repository.load_model(self._repository.model_name, device="cpu")
+        # model, _, _ = self._accessor.load_model(None, device="cpu")
 
         # # テキストの埋め込みを計算
         # features = util.encode_text(model, text)

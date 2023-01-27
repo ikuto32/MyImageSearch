@@ -149,6 +149,9 @@ class SearchText:
         return self._text
 
 
+#=====================================================
+
+
 class SearchModelName:
     """使用するclipモデルを示すエンティティクラス"""
     def __init__(self, model_name : tuple[str, str]):
