@@ -66,13 +66,6 @@ class Image:
     def get_mime_type(self) -> str:
 
         return self._mime_type
-    
-
-
-
-
-
-
 
 
 
@@ -117,3 +110,8 @@ class SearchResult:
 
     def to_json(self) -> str:
         return json.dumps(map(lambda i: i.to_dict(),self._items))
+    
+class SearchModelName:
+    """使用するclipモデルを示すエンティティクラス"""
+    def __init__(self, model_name : tuple[str, str]):
+        self._model_name = model_name

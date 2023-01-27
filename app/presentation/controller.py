@@ -11,7 +11,7 @@ from app.domain.domain_object import Item
 app = Flask(__name__, static_folder='')
 
 #エントリーポイント
-def startApp(in_usecase : Usecase):
+def start_app(in_usecase : Usecase) -> Flask:
 
     #ユースケースのDI
     global usecase
@@ -21,7 +21,8 @@ def startApp(in_usecase : Usecase):
     usecase.load_items()
     
     #Flask実行
-    app.run(debug=True)
+    print("Flask実行")
+    app.run(debug=False)
 
 
 
@@ -38,7 +39,7 @@ def index():
 
 #画像IDから画像を返す
 @app.route("/image/<id>")
-def loadImage(id):
+def load_image(id):
 
     #画像を取得して、レスポンスに詰め替えて返す。
     img = usecase.get_image(id)
@@ -48,7 +49,7 @@ def loadImage(id):
 
 #画像IDから画像名を返す
 @app.route("/image/<id>/name")
-def getPath(id):
+def get_path(id):
     
     if usecase.get_item_name(id):
         raise 
@@ -58,31 +59,31 @@ def getPath(id):
 
 #画像IDをすべて返す
 @app.route("/image/all")
-def getAllImageId():
-    dict = {"image":[{"id": id} for id, in itemlist.itemIDs.keys()]}
+def get_all_image_id():
+    dict = {"image":[{"id": id} for id, in usecase.get_ids()]}
     response = json.dumps(dict)
     return response
 
-#文字列から検索して、画像IDを返す
+#文字列から検索して、画像IDとスコアを返す
 @app.route("/search/text")
-def searchText():
+def search_text():
     
     text = request.args.get("text")
     print(text)
-    scores = TextSearch.textSearch(itemlist, text)
-    dict = {"image":[{"id": itemlist.itemIDs.get(name), "score": score} for name, score in scores]}
+    result = usecase.search_from_text(text)
+    dict = {"image":[{"id": id, "score": score} for id, score in result]}
     response = json.dumps(dict)
     return response
 
-#画像から検索して、画像IDを返す
+#画像から検索して、画像IDとスコアを返す
 @app.route("/search/image?payload=<json>")
-def searchImage():
+def search_image():
     # TODO
     return
 
-#アップロードされた画像から検索して、画像IDを返す。                                                                                     
+#アップロードされた画像から検索して、画像IDとスコアを返す                                                                                     
 @app.route("/search/uploadimage?payload=<json>")
-def uploadImage():
+def upload_image():
     # TODO
     return
 
