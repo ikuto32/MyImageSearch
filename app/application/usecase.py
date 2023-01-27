@@ -3,7 +3,7 @@
 
 
 
-from app.domain.domain_object import Item, ItemId, Image, ItemName, SearchResult
+from app.domain.domain_object import Item, ItemId, Image, ItemName, SearchResult, SearchModelName
 from app.domain.repository import Repository
 
 
@@ -53,7 +53,7 @@ class Usecase:
         """文字列から検索する"""
 
         # モデルの読み込み
-        model, _, _ = util.loadModel(itemlist.model, device="cpu")
+        model, _, _ = self._repository.load_model(self._repository.model_name, device="cpu")
 
         # テキストの埋め込みを計算
         features = util.encode_text(model, text)
