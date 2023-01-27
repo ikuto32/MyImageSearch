@@ -70,7 +70,7 @@ id::
 ----
 {
     image: {
-        "id": int, //画像ID 
+        "id": string, //画像ID 
         "score":float //画像のスコア
     }[]
 }
@@ -94,7 +94,7 @@ text::
 ----
 {
     image: {
-        "id": int, //画像ID 
+        "id": string, //画像ID 
         "score":float //画像のスコア
     }[]
 }
@@ -114,7 +114,7 @@ payload::
 [source, ts]
 ----
 {
-    "id": int[], //選択された画像ID
+    "id": string[], //選択された画像ID
 }
 ----
 
@@ -123,7 +123,7 @@ payload::
 ----
 {
     image: {
-        "id": int, //画像ID 
+        "id": string, //画像ID 
         "score":float //画像のスコア
     }[]
 }
@@ -145,6 +145,7 @@ payload::
 ----
 {
     "base64": string, //アップロードされた画像のbase64
+    "mime_type": string, //アップロードされた画像のContent-Type
 }
 ----
 
@@ -153,7 +154,7 @@ payload::
 ----
 {
     image: {
-        "id": int, //画像ID 
+        "id": string, //画像ID 
         "score":float //画像のスコア
     }[]
 }
