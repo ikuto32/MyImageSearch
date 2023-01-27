@@ -11,7 +11,7 @@ from app.domain.domain_object import Item
 app = Flask(__name__, static_folder='')
 
 #エントリーポイント
-def start_app(in_usecase : Usecase) -> Flask:
+def start_app(in_usecase : Usecase):
 
     #ユースケースのDI
     global usecase
@@ -71,8 +71,7 @@ def search_text():
     text = request.args.get("text")
     print(text)
     result = usecase.search_from_text(text)
-    dict = {"image":[{"id": id, "score": score} for id, score in result]}
-    response = json.dumps(dict)
+    response = result.to_json()
     return response
 
 #画像から検索して、画像IDとスコアを返す
