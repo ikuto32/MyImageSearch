@@ -1,162 +1,104 @@
 
-from typing import Iterator
+from dataclasses import dataclass
+from typing import Any
+
 
 
 #=====================================================
+# 画像 関連
 
-class ItemId:
-    """項目を一意に識別する値クラス"""
+@dataclass(frozen=True)
+class ImageId:
 
-    def __init__(self, id: str):
-        
-        self._id = id
+    id : str
 
     def __hash__(self):
-        return hash(self._id)
+        return hash(self.id)
 
-    def __eq__(self, other):
-        return self._id == other._id
-    
-    def __str__(self) -> str:
-        return self._id
-    
-    @property
-    def id(self) -> str:
-        return self._id
-    
-class ItemName:
-    """項目の名前を示す値クラス"""
+  
+@dataclass(frozen=True)
+class ImageName:
 
-    def __init__(self, name: str):
-
-        self._name = name
-
-    
-    def __str__(self) -> str:
-        return self._name
-
-    @property
-    def name(self) -> str:
-        return self._name
-    
-
-class Item:
-    """各項目を表すエンティティクラス"""
-
-    def __init__(self, id : ItemId, name : ItemName):
-
-        self._id : ItemId = id 
-        self._name : ItemName = name
-
-    @property
-    def id(self) -> ItemId:
-        return self._id
-    
-    @property
-    def name(self) -> ItemName:
-        return self._name
+    name : str
 
 
-#=====================================================
-
-
-
-
-
+@dataclass(frozen=True)
 class Image:
-    """画像を表すエンティティクラス"""
 
-    def __init__(self, binary : bytes, mime_type : str):
-        
-        self._binary = binary
-        self._mime_type = mime_type
+    binary : bytes
+    content_type : str
 
-    @property
-    def binary(self) -> bytes:
-        return self._binary
-    
-    @property
-    def mime_type(self) -> str:
-        return self._mime_type
-    
+
+@dataclass(frozen=True)
+class ImageItem:
+
+    id : ImageId
+    display_name : ImageName
+
 
 #=====================================================
+# 検索モデル 関連
+
+@dataclass(frozen=True)
+class ModelId:
+
+    id : str
 
 
+@dataclass(frozen=True)
+class ModelName:
+
+    name : str
+
+
+@dataclass(frozen=True)
+class ModelItem:
+
+    id : ModelId
+    display_name : ModelName
+
+
+@dataclass(frozen=True)
+class Model:
+
+    model_obj: Any
+
+
+#=====================================================
+# 検索結果 関連
+
+
+@dataclass(frozen=True)
 class Score:
     """スコアを示す値クラス"""
 
-    def __init__(self, score: float = 0.0):
-        
-        self._score = score
-
-    def __str__(self) -> str:
-        return self._score
-
-    @property
-    def score(self) -> float:
-        return self._score
+    score : float
     
 
-class SearchResultItem:
-    """検索結果の一つの項目を示すエンティティクラス"""
+@dataclass(frozen=True)
+class ResultImageItem:
+    """検索結果の画像項目を表すエンティティクラス"""
 
-    @staticmethod
-    def create_from_item(item : Item) -> 'SearchResultItem':
-        "Itemから検索結果のItemを作成する"
-
-        return SearchResultItem(item.id, Score())
-
-
-    def __init__(self, id : ItemId, score : Score):
-
-        self._id = id
-        self._score = score
-
-    @property
-    def id(self) -> ItemId:
-        return self._id
-
-    @property
-    def score(self) -> Score:
-        return self._score
-
-
-
-class SearchResult:
-    """検索結果を示すエンティティクラス"""
-
-    def __init__(self, items : list[SearchResultItem]):
-
-        self._items = items
-
-    def __iter__(self) -> Iterator[SearchResultItem]:
-        return self._items.__iter__()
+    item : ImageItem
+    score : Score
 
 
 #=====================================================
-
-
-class SearchText:
-    "検索対象の(入力された)文字列"
-
-    def __init__(self, text : str):
-
-        self._text = text
-    
-    @property
-    def text(self):
-        return self._text
-
-
-#=====================================================
-
-
-class SearchModelName:
-    """使用するclipモデルを示すエンティティクラス"""
-    def __init__(self, model_name : tuple[str, str]):
-        self._model_name = model_name
+# 検索パラメータ 関連
 
 
 
-#=====================================================
+@dataclass(frozen=True)
+class UploadText:
+    "(入力された)検索文字列を示す値クラス"
+
+    text : str
+
+
+@dataclass(frozen=True)
+class UploadImage:
+    """(入力された)検索画像を示す値クラス"""
+
+    binary : bytes
+    content_type : str
+

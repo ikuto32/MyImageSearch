@@ -23,8 +23,8 @@ def eval(files, index, features, k=2048):
     
     temp = [0 for i in files]
     for i, d in zip(I, D):
-        for item_id, distance in zip(i, d):
-            temp[item_id] += distance
+        for id, distance in zip(i, d):
+            temp[id] += distance
     scores = []
     for i, score in enumerate(temp):
         scores.append([files[i], score])
