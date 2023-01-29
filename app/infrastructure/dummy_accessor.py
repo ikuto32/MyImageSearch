@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 
-from app.domain.domain_object import ItemId
+from app.domain.domain_object import ImageId, ModelId
 from app.application.accessor import Accessor
 
 
@@ -12,12 +12,9 @@ class DummyAccessor(Accessor):
     """ダミーのAccessor"""
 
 
-    def load_meta(self, id: ItemId) -> np.ndarray:
+    def load_meta(self, id: ImageId) -> np.ndarray:
         return None
 
-    def load_model(self, model_name: tuple[str, str], device: str) -> Any:
-        return None
-
-    def load_Index_file(self) -> Any:
+    def load_index_file(self, id : ModelId) -> Any:
         return None
 
