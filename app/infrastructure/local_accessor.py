@@ -8,7 +8,7 @@ import torch
 import faiss
 import open_clip
 
-from app.domain.domain_object import ItemId, SearchModelName
+from app.domain.domain_object import ImageId, ModelId
 from app.application.accessor import Accessor
 
 
@@ -22,20 +22,15 @@ class LocalAccessor(Accessor):
             ):
         
         self._meta_dir_path = meta_dir_path
-        self._id_to_path : dict[ItemId, pathlib.Path] = {}
+        self._id_to_path : dict[ImageId, pathlib.Path] = {}
 
 
-    def load_meta(self, id: ItemId) -> np.ndarray:
+    def load_meta(self, id: ImageId) -> np.ndarray:
         
         return np.load(f'{self._meta_dir_path}/{id}.npy')
 
 
-    def load_model(self, model_name: SearchModelName, device: str) -> Any:
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        return open_clip.create_model_and_transforms(model_name[0], pretrained=model_name[1])
-
-    def load_index_file(self) -> Any:
+    def load_index_file(self, id: ModelId) -> Any:
 
         # TODO 未実装
         pass
