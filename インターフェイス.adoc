@@ -16,13 +16,55 @@ index.htmlの文章
 //######################################################################
 == エンドポイント
 
-
 //===============================================================
-=== /image/<id> - 画像読み込み
+=== /image_item - すべての画像項目を取得
 
 ----
 
-/image/<id>
+/image_item
+
+----
+
+
+戻り値::
+[source, ts]
+----
+{
+    "image_item":{
+
+        "id": string, //画像ID
+        "name": string, //画像の名前
+    }[]
+}
+----
+
+
+//===============================================================
+=== /image_item/<id>/ - 画像項目を取得
+
+----
+
+/image_item/<id>
+
+----
+
+
+戻り値::
+[source, ts]
+----
+{
+    "id": string, //画像ID
+    "name": string, //画像の名前
+}
+----
+
+
+//===============================================================
+=== /image_item/<id>/image - 画像読み込み
+
+----
+
+/image_item/<id>/image
 
 ----
 
@@ -33,48 +75,28 @@ id::
 画像(image/png or image/jpeg)
 
 
-
 //===============================================================
-=== /image/<id>/name - 画像の名前を取得
+=== /model_item/ - すべての検索モデル項目を取得
 
 ----
 
-/image/<id>/name
+/model_item
 
 ----
-
-id::
-対象の画像ID
 
 戻り値::
 [source, ts]
 ----
 {
-    "name": string,
-}
-----
+    "model_item":{
 
-
-//===============================================================
-=== /search/all - すべての画像を取得
-
-----
-
-/search/all
-
-----
-
-
-戻り値::
-[source, ts]
-----
-{
-    image: {
-        "id": string, //画像ID 
-        "score":float //画像のスコア
+        "id": string, //検索モデルのID
+        "name": string, //検索モデルの名前
     }[]
 }
 ----
+
+
 
 
 //===============================================================
@@ -82,9 +104,12 @@ id::
 
 ----
 
-/search/text?text=<string>
+/search/text?model=<string>&text=<string>
 
 ----
+
+model::
+検索モデルID
 
 text::
 検索文字列
@@ -93,7 +118,7 @@ text::
 [source, ts]
 ----
 {
-    image: {
+    item: {
         "id": string, //画像ID 
         "score":float //画像のスコア
     }[]
@@ -114,6 +139,7 @@ payload::
 [source, ts]
 ----
 {
+    "model": string, //画像モデルのID
     "id": string[], //選択された画像ID
 }
 ----
@@ -122,9 +148,9 @@ payload::
 [source, ts]
 ----
 {
-    image: {
+    item: {
         "id": string, //画像ID 
-        "score":float //画像のスコア
+        "score":float //スコア
     }[]
 }
 ----
@@ -144,8 +170,9 @@ payload::
 [source, ts]
 ----
 {
+    "model": string, //画像モデルのID
     "base64": string, //アップロードされた画像のbase64
-    "mime_type": string, //アップロードされた画像のContent-Type
+    "content_type": string, //アップロードされた画像のContent-Type
 }
 ----
 
@@ -153,7 +180,7 @@ payload::
 [source, ts]
 ----
 {
-    image: {
+    item: {
         "id": string, //画像ID 
         "score":float //画像のスコア
     }[]
