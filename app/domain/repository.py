@@ -24,10 +24,6 @@ class Repository(metaclass=ABCMeta):
 
         pass
 
-    @abstractmethod
-    def load_model(self, id : ModelId) -> Model:
-
-        pass
 
 
 

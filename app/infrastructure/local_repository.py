@@ -3,9 +3,12 @@ import pathlib
 import uuid
 import mimetypes
 
+import torch
+
 from app.domain.domain_object import ImageItem, ImageId, Image, ImageName, Model, ModelId, ModelItem
 from app.domain.repository import Repository
 
+import open_clip
 
 
 class LocalRepository(Repository):
@@ -54,8 +57,8 @@ class LocalRepository(Repository):
 
     def load_all_model_item(self) -> list[ModelItem]:
 
-        #TODO 未実装
-        pass
+        items = [ModelItem(f"{model_name}_{dataset}", {model_name}+{dataset}) for (model_name, dataset) in open_clip.list_pretrained()]
+        return items
     
     def load_image(self, id: ImageId) -> Image:
 
@@ -67,12 +70,3 @@ class LocalRepository(Repository):
 
         return Image(binary, content_type)
 
-    def load_model(self, id: ModelId) -> list[Model]:
-
-        #TODO 未実装
-
-        # if device == "auto":
-        #     device = "cuda" if torch.cuda.is_available() else "cpu"
-        # return open_clip.create_model_and_transforms(model_name[0], pretrained=model_name[1])
-        
-        pass

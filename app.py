@@ -1,9 +1,9 @@
 import pathlib
-from app.infrastructure.dummy_repository import DummyRepository
-from app.infrastructure.dummy_accessor import DummyAccessor
+# from app.infrastructure.dummy_repository import DummyRepository
+# from app.infrastructure.dummy_accessor import DummyAccessor
 
-# from app.infrastructure.local_accessor import LocalAccessor
-# from app.infrastructure.local_repository import LocalRepository
+from app.infrastructure.local_accessor import LocalAccessor
+from app.infrastructure.local_repository import LocalRepository
 
 from app.presentation.controller import start_app
 from app.application import usecase
@@ -15,11 +15,11 @@ def main():
     meta_dir_path=pathlib.Path('./meta')
 
     #TODO 使用するパッケージをインストールすることが手間であるため、ダミーを使用している。
-    #accessor = LocalAccessor(meta_dir_path)
-    accessor = DummyAccessor()
+    accessor = LocalAccessor(meta_dir_path)
+    # accessor = DummyAccessor()
 
-    #repository = LocalRepository(image_dir_path)
-    repository = DummyRepository()
+    repository = LocalRepository(image_dir_path)
+    # repository = DummyRepository()
 
     in_usecase = usecase.Usecase(repository, accessor)
     start_app(in_usecase)
