@@ -1,6 +1,6 @@
 
-
-
+import numpy as np
+import faiss
 
 from app.application.accessor import Accessor
 from app.domain.domain_object import ImageItem, ImageId, Image, UploadImage, ModelItem, ModelId, ResultImageItem, UploadText
@@ -51,27 +51,46 @@ class Usecase:
 
     def get_all_model(self) -> list[ModelItem]:
         """すべての検索モデルを取得する"""
-
-        return None
+        
+        return self._repository.load_all_model_item()
 
     
 #===================================================================
 
+    def eval(id_list, index, features, k=2048):
+        features = features.astype(np.float32)
+        faiss.normalize_L2(features)
+        if k > len(id_list):
+            k = len(id_list)
+        
+        index.nprobe = 64
 
-    def search_text( self, model_id : ModelId, text : UploadText) -> list[ResultImageItem]:
+        print(index.ntotal)
+        D, I = index.search(features, k=k)
+        
+        temp = [0 for i in id_list]
+        for i, d in zip(I, D):
+            for id, distance in zip(i, d):
+                temp[id] += distance
+        scores = []
+        for i, score in enumerate(temp):
+            scores.append([id_list[i], score])
+        return scores
+
+    def search_text(self, model_id : ModelId, text : UploadText) -> list[ResultImageItem]:
         """文字列から検索する"""
 
-        # # モデルの読み込み
-        # model, _, _ = self._accessor.load_model(None, device="cpu")
+        # モデルの読み込み
+        model, _, _ = self._accessor.load_model(model_id)
 
-        # # テキストの埋め込みを計算
-        # features = util.encode_text(model, text)
+        # テキストの埋め込みを計算
+        features = model.encode_text(text)
 
-        # # indexを読み込み
-        # index = util.loadIndexFile(meta_dir)
+        # indexを読み込み
+        index = self._accessor.load_Index_file(model_id)
 
-        # # 類似度を計算する
-        # scores = util.eval(meta_files, index, features)
+        # 類似度を計算する
+        scores = self.eval(index, features)
         return
     
 

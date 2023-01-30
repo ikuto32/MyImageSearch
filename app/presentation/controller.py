@@ -25,7 +25,7 @@ def start_app(in_usecase : Usecase):
     
     #Flask実行
     print(app.url_map)
-    app.run(debug=True)
+    app.run(debug=False)
 
 
 

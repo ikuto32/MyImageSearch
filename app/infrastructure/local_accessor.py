@@ -8,7 +8,7 @@ import torch
 import faiss
 import open_clip
 
-from app.domain.domain_object import ImageId, ModelId
+from app.domain.domain_object import ImageId, ModelId, Model
 from app.application.accessor import Accessor
 
 
@@ -32,5 +32,13 @@ class LocalAccessor(Accessor):
 
     def load_index_file(self, id: ModelId) -> Any:
 
-        # TODO 未実装
-        pass
+        index = faiss.read_index(f'{self._meta_dir_path}/{"metafiles.index"}')
+        return index
+    
+    
+    def load_model(self, id: ModelId) -> list[Model]:
+        
+        text = id.id
+        a = text.find("_")
+        model_name, dataset = text[:a], text[a+1:]
+        return Model(open_clip.create_model_and_transforms(model_name, pretrained=dataset))
