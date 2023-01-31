@@ -14,7 +14,7 @@ def main():
                     local_file.write(data)
         except urllib.error.URLError as e:
             print(e)
-        time.sleep(0.5)
+        time.sleep(2.0)
 
 if __name__ == "__main__":
     main()
