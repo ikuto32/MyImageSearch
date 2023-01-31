@@ -57,41 +57,45 @@ class Usecase:
     
 #===================================================================
 
-    def eval(id_list, index, features, k=2048):
-        features = features.astype(np.float32)
+    def eval(self, item_list : list[ImageItem], index, features, k=2048):
+        
+        
+        
         faiss.normalize_L2(features)
-        if k > len(id_list):
-            k = len(id_list)
+        if k > len(item_list):
+            k = len(item_list)
         
         index.nprobe = 64
 
         print(index.ntotal)
         D, I = index.search(features, k=k)
         
-        temp = [0 for i in id_list]
+        temp = [0 for _ in item_list]
+        id_list = sorted(item_list, key=lambda x:x.display_name.name)
         for i, d in zip(I, D):
             for id, distance in zip(i, d):
                 temp[id] += distance
         scores = []
         for i, score in enumerate(temp):
-            scores.append([id_list[i], score])
+            scores.append([id_list[i].id.id, score])
         return scores
 
     def search_text(self, model_id : ModelId, text : UploadText) -> list[ResultImageItem]:
         """文字列から検索する"""
 
         # モデルの読み込み
-        model, _, _ = self._accessor.load_model(model_id)
+        model = self._accessor.load_model(model_id)
 
         # テキストの埋め込みを計算
-        features = model.encode_text(text)
+        tokenizer = self._accessor.load_tokenizer(model_id)
+        features = model.model_obj[0].encode_text(tokenizer([text.text])).to("cpu").detach().numpy().copy()
 
         # indexを読み込み
-        index = self._accessor.load_Index_file(model_id)
+        index = self._accessor.load_index_file(model_id)
 
         # 類似度を計算する
-        scores = self.eval(index, features)
-        return
+        scores = self.eval(item_list=self.get_all_image_item(), index=index, features=features)
+        return scores
     
 
     def search_image(self, model_id : ModelId, id : list[ImageId]) -> list[ResultImageItem]:

@@ -57,7 +57,7 @@ class LocalRepository(Repository):
 
     def load_all_model_item(self) -> list[ModelItem]:
 
-        items = [ModelItem(f"{model_name}_{dataset}", {model_name}+{dataset}) for (model_name, dataset) in open_clip.list_pretrained()]
+        items = [ModelItem(ModelId(model_name, dataset), f"{model_name}-{dataset}") for (model_name, dataset) in open_clip.list_pretrained()]
         return items
     
     def load_image(self, id: ImageId) -> Image:

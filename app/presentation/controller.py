@@ -7,7 +7,7 @@ import json
 import base64
 
 from app.application.usecase import Usecase
-from app.domain.domain_object import ImageItem, ImageId, ModelId, UploadImage, ResultImageItem, UploadText
+from app.domain.domain_object import ImageItem, ImageId, ModelId, ModelItem, UploadImage, ResultImageItem, UploadText
 
 
 #============================================================
@@ -89,9 +89,10 @@ def get_image(id : str):
 def search_text():
     """文字列から検索して、結果を返す"""
     
-    model: str = request.args.get("model")
+    model_name: str = request.args.get("model_name")
+    pretrained: str = request.args.get("pretrained")
     text: str = request.args.get("text")
-    return from_result_to_json(usecase.search_text(ModelId(model), UploadText(text)))
+    return from_result_to_json(usecase.search_text(ModelId(model_name, pretrained), UploadText(text)))
 
 @app.route("/search/image")
 def search_image():
@@ -147,12 +148,19 @@ def from_image_item_list_to_json(value : list[ImageItem]) -> str:
 
 def from_result_to_json(value : list[ResultImageItem]) -> str:
 
-    objs = map(lambda r: {"id": r.item.id.id, "score": r.score.score}, value)
+    objs = map(lambda r: {"id": r[0], "score": r[1]}, value)
+    objs = list(objs)
+    return json.dumps(objs)
+
+def from_model_id_to_json(value : list[ModelItem]) -> str:
+
+    objs = map(lambda r: {"model_name" : r.id.model_name, "pretrained" : r.id.pretrained}, value)
     objs = list(objs)
     return json.dumps(objs)
 
 
-
-
 #============================================================
 
+@app.route("/model_item")
+def get_all_model_item():
+    return from_model_id_to_json(usecase.get_all_model())

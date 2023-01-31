@@ -42,7 +42,9 @@ class ImageItem:
 @dataclass(frozen=True)
 class ModelId:
 
-    id : str
+    model_name : str
+    pretrained : str
+
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,12 @@ class ModelItem:
 class Model:
 
     model_obj: Any
+
+
+@dataclass(frozen=True)
+class Tokenizer:
+
+    tokenizer_obj: Any
 
 
 #=====================================================
