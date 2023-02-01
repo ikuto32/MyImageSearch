@@ -62,7 +62,7 @@ class LocalRepository(Repository):
     
     def load_image(self, id: ImageId) -> Image:
 
-        path = self._id_to_path.get(id)
+        path = pathlib.Path(f"{self._image_dir_path}/{self._id_to_path.get(id)}")
         binary = path.read_bytes()
 
         # tuple[<Content-Type>, <Encoding>]
