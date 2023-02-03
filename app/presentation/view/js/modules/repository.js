@@ -12,25 +12,40 @@ import axios from "https://cdn.jsdelivr.net/npm/axios@1.3.1/+esm"
 
 
 /**
- * 画像項目の一覧を取得する
+ * 画像項目のIDから画像のURLを取得する
  * 
- * @return {Promise<ImageItem[]>}
+ * @param {string} itemId
+ * 
+ * @return {string}
  */
-export function getImageItems() {
+export function getImageUrl(itemId) {
 
-    return axios.get(`/image_item/`).then(res => res.json())
+    return `/image_item/${itemId}/image`
 }
 
 
 /**
- * 指定されたimgタグに画像を適用する
- * @param {HTMLImageElement} imgElement
- * @param {string} itemId
+ * 画像項目の一覧を取得する
+ * 
+ * @return {Promise<ImageItem[]>}
  */
-export function applyImage(imgElement, itemId) {
+export async function getImageItems() {
 
-    imgElement.src = `/image_item/${itemId}/image`
+    return axios.get(`/image_item/`).then(res => res.data)
 }
+
+/**
+ * 画像項目を取得する
+ * 
+ * @param {string} itemId
+ * 
+ * @return {Promise<ImageItem>}
+ */
+export async function getItem(itemId) {
+
+    return axios.get(`/image_item/${itemId}`).then(res => res.data)
+}
+
 
 
 /**
@@ -42,7 +57,7 @@ export function applyImage(imgElement, itemId) {
  * 
  * @return {Promise<ResultPair[]>}
  */
-export function searchText(modelName, pretrained, text) {
+export async function searchText(modelName, pretrained, text) {
 
     let payload = {
 
@@ -53,5 +68,5 @@ export function searchText(modelName, pretrained, text) {
         }
     }
 
-    return axios.get("/search/text", payload).then(res => res.json()) 
+    return axios.get("/search/text", payload).then(res => res.data) 
 }

@@ -3,6 +3,7 @@ import Vue from "https://cdn.jsdelivr.net/npm/vue@2/dist/vue.esm.browser.js"
 import axios from "https://cdn.jsdelivr.net/npm/axios@1.3.1/+esm"
 
 import * as repo from "./modules/repository.js"
+import * as util from "./modules/util.js"
 
 
 
@@ -80,16 +81,36 @@ new Vue({
 						})
 					})
 				})
+
 			}
+
 		},
 
 		//テキストから検索するボタンの動作
 		textSearchButton() {
-			let params = {params:{model_name : this.model_name, pretrained: this.pretrained, text : this.text}}
-			axios.get("/search/text", params).then(response => {
-				this.getJsonToImgs(response.data)
-			});
+
+			//既存のもの
+			// let params = {params:{model_name : this.model_name, pretrained: this.pretrained, text : this.text}}
+			// axios.get("/search/text", params).then(response => {
+			// 	this.getJsonToImgs(response.data)
+			// });
+
 			
+			repo.searchText(this.model_name, this.pretrained, this.text)
+			.then(objs => Promise.all(objs.map(async obj => {
+
+				let item = await repo.getItem(obj.id)
+
+				let displayItem = {
+					id: obj.id,
+					img_name: item.name,
+					img: repo.getImageUrl(obj.id),
+					selected: false
+				}
+
+				console.log(`検索 => 調整 ${JSON.stringify(displayItem)}`)
+			})))
+
 		},
 
 		//画像から検索するボタンの動作
