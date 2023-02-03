@@ -39,7 +39,7 @@ class LocalAccessor(Accessor):
     
     def load_model(self, id: ModelId) -> list[Model]:
         
-        model_name, pretrained = id.model_name, id.pretrained
+        model_name, pretrained = str(id.model_name), str(id.pretrained)
         return Model(open_clip.create_model_and_transforms(model_name, pretrained=pretrained))
     
     def load_tokenizer(self, id : ModelId) -> Tokenizer:
