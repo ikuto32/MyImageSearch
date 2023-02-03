@@ -5,6 +5,7 @@ from flask import Flask, request, make_response
 import pathlib
 import json
 import base64
+import mimetypes
 
 from app.application.usecase import Usecase
 from app.domain.domain_object import ImageItem, ImageId, ModelId, ModelItem, UploadImage, ResultImageItem, UploadText
@@ -22,6 +23,10 @@ def start_app(in_usecase : Usecase):
     #ユースケースのDI
     global usecase
     usecase = in_usecase
+
+    # text/javascript が text/plain になる問題の対策
+    # https://bugs.python.org/issue43975
+    mimetypes.add_type("text/javascript", ".js", True)
     
     #Flask実行
     print(app.url_map)
@@ -43,16 +48,21 @@ def index():
     
     return text
 
-@app.route("/<dir_name>/<file_name>")
-def resource(dir_name: str, file_name: str):
+@app.route("/<path:terget>")
+def resource(terget: str):
     """ファイルを返す"""
 
     #ビューの指定をしている。
     pwd = pathlib.Path(__file__).parent
-    with open(f'{pwd}/view/{dir_name}/{file_name}', encoding="UTF-8") as f:
+    with open(f'{pwd}/view/{terget}', encoding="UTF-8") as f:
         text = f.read()
 
-    return text
+    response = make_response(text)
+    response.headers.set('Content-Type', mimetypes.guess_type(terget)[0])
+    return response
+
+
+    
 
 
 #------------------------------------------------------------
@@ -92,6 +102,7 @@ def search_text():
     model_name: str = request.args.get("model_name")
     pretrained: str = request.args.get("pretrained")
     text: str = request.args.get("text")
+    print({"parameter":{"model_name":model_name, "pretrained":pretrained, "text":text}})
     return from_result_to_json(usecase.search_text(ModelId(model_name, pretrained), UploadText(text)))
 
 @app.route("/search/image")
