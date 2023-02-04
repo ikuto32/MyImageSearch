@@ -31,7 +31,7 @@ export function getImageUrl(itemId) {
  */
 export async function getImageItems() {
 
-    return axios.get(`/image_item/`).then(res => res.data)
+    return axios.get(`/image_item`).then(res => res.data)
 }
 
 /**
@@ -49,7 +49,7 @@ export async function getItem(itemId) {
 
 
 /**
- * 画像項目の一覧を取得する
+ * 画像項目を文字列で検索する
  * 
  * @param {string} modelName
  * @param {string} pretrained
@@ -69,4 +69,28 @@ export async function searchText(modelName, pretrained, text) {
     }
 
     return axios.get("/search/text", payload).then(res => res.data) 
+}
+
+
+/**
+ * 画像項目を画像で検索する
+ * 
+ * @param {string} modelName
+ * @param {string} pretrained
+ * @param {string[]} itemId
+ * 
+ * @return {Promise<ResultPair[]>}
+ */
+export async function searchImage(modelName, pretrained, itemId) {
+
+    let payload = {
+
+        params:{
+            model_name: modelName, 
+            pretrained: pretrained, 
+            id : itemId
+        }
+    }
+
+    return axios.get("/search/image", payload).then(res => res.data) 
 }

@@ -2,7 +2,7 @@
 import Vue from "https://cdn.jsdelivr.net/npm/vue@2/dist/vue.esm.browser.js"
 import axios from "https://cdn.jsdelivr.net/npm/axios@1.3.1/+esm"
 
-import * as repo from "./modules/repository.js"
+import * as repository from "./modules/repository.js"
 import * as util from "./modules/util.js"
 
 
@@ -16,18 +16,66 @@ new Vue({
 		isShowSetting: false,
 		isRegexp: false,
 		image_size: 250,
-		scrollY: 0,
 		model_name: "ViT-B-32",
 		pretrained: "laion2b_s34b_b79k",
-		items:[
-
-		]
+		showedItemIndex: 0,
+		itemsBuffer:[],
+		displayItems:[]
 	},
 	mounted() {
 		window.addEventListener("scroll", this.updateImageFromScroll)
-		//window.addEventListener("load", this.getimgs)
+		window.addEventListener("load", this.init)
     },
 	methods:{
+
+		/**
+		 * 初期化する
+		 */
+		init() {
+
+			this.initBuffer()
+			.then(this.initImage)
+		},
+
+		/**
+		 * 表示画像をリセットして、一部を表示する
+		 */
+		initImage() {
+
+			//現在表示されているものを削除
+			this.displayItems = []
+			this.showedItemIndex = 0;
+			
+			//一部表示
+			this.showNextImg()
+		},
+
+		/**
+		 * バッファを初期化する
+		 * 
+		 * @return {Promise<void>}
+		 */
+		initBuffer() {
+
+			return repository.getImageItems()
+			.then(objs => Promise.all(objs.map(obj => {
+
+				//表示情報
+				return {
+					id: obj.id,
+					score: 0,
+					img_name: obj.name,
+					img: repository.getImageUrl(obj.id),
+					selected: false
+				}
+
+			}))).then(array => {
+
+				//バッファに登録
+				this.itemsBuffer = array
+			})
+		},
+
 
 		//下までスクロールすると、次の画像を読み込む。
 		updateImageFromScroll() {
@@ -49,114 +97,107 @@ new Vue({
 			//最後に近づいたら、更新
 			if(scrollMaxY - scrollY < 20)
 			{
-				//this.getimgs();
+				this.showNextImg();
 			}
 
         },
 
-		//サーバから画像を取得する
-		getJsonToImgs(json){
-			console.log(json)
+		
 
-			for (let i in json){
 
-				//idの画像を問い合わせ
-				axios.get("/image_item/"+json[i]["id"]+"/image")
-				.then(imgRes => {
-					let img = imgRes.data
-					let score = json[i]["score"]
+		/**
+		 * バッファ上の画像項目を逐次、描画する
+		 */
+		showNextImg(){
+			
+			if(this.itemsBuffer.length <= this.showedItemIndex)
+			{
+				console.log("これ以上描画できません。")
+				return
+			}
 
-					console.log("image call: " + json[i]["id"])
-					
-					axios.get("/image_item/"+json[i]["id"])
-					.then(response => {
-						let display_name = response.data["name"]
-						console.log("item call: " + response.data["id"] + " = " + json[i]["id"])
 
-						this.items.push({
-							img: img,
-							img_name: display_name,
-							score: score,
-							selected: false
-						})
-					})
-				})
+			let temp = this.showedItemIndex
 
+			for(let i = 0; i < this.load_size; i++) {
+
+				let displayItem = this.itemsBuffer[temp + i]
+				if(displayItem == null) {
+					break;
+				}
+				
+				this.displayItems.push(displayItem)
+				this.showedItemIndex++
 			}
 
 		},
+
+		/**
+		 * 検索結果をバッファに登録する
+		 * @param {Promise<repository.ResultPair[]>} promise
+		 * @return {Promise<void>}
+		 */
+		setBuffer(promise) {
+
+			return promise.then(objs => Promise.all(objs.map(async obj => {
+
+				//画像項目の情報を取得
+				let item = await repository.getItem(obj.id)
+
+				//表示する情報
+				let displayItem = {
+					id: obj.id,
+					score: obj.score,
+					img_name: item.name,
+					img: repository.getImageUrl(obj.id),
+					selected: false
+				}
+
+				console.log(`結果 ${JSON.stringify(displayItem)}`)
+
+				return displayItem
+
+			}))).then(array => {
+
+				//並び替え
+				array = array.sort((a, b) => b.score - a.score)
+				console.log(`ソート後 ${JSON.stringify(array)}`)
+
+				//バッファに登録
+				this.itemsBuffer = array
+			})
+		},
+
+
 
 		//テキストから検索するボタンの動作
 		textSearchButton() {
 
-			//既存のもの
-			// let params = {params:{model_name : this.model_name, pretrained: this.pretrained, text : this.text}}
-			// axios.get("/search/text", params).then(response => {
-			// 	this.getJsonToImgs(response.data)
-			// });
-
+			this.setBuffer(repository.searchText(this.model_name, this.pretrained, this.text))
+			.then(this.initImage);
 			
-			repo.searchText(this.model_name, this.pretrained, this.text)
-			.then(objs => Promise.all(objs.map(async obj => {
-
-				let item = await repo.getItem(obj.id)
-
-				let displayItem = {
-					id: obj.id,
-					img_name: item.name,
-					img: repo.getImageUrl(obj.id),
-					selected: false
-				}
-
-				console.log(`検索 => 調整 ${JSON.stringify(displayItem)}`)
-			})))
-
 		},
 
 		//画像から検索するボタンの動作
 		imagesSearchButton() {
-			let selected_images = []
-			for (let i in this.items){
-				let item = this.items[i]
-				console.log(item.selected)
-				if (item.selected){
-					selected_images.push(item.img_name)
-				}
-			}
-			let param = {"trigger" : "ImageSearch", "meta_names" : selected_images.join(',')}
-			console.log(param)
-			axios.post("/search", param)
-			this.initImages()
+
+			let selectedItems = [...this.displayItems].filter(item => item.selected)
+
+			this.setBuffer(repository.searchImage(this.model_name, this.pretrained, selectedItems))
+			.then(this.initImage);
 		},
 
 		//画像名前から検索するボタンの動作
 		nameSearchButton() {
-			let param = {"trigger" : "NameSearch", "text" : this.text, "trueRegexp" : this.isRegexp.toString()}
-			axios.post("/search", param)
-			this.initImages()
+
+			console.log("未実装")
 		},
 
 		//画像をコピーするボタンの動作
 		copyImagesButton() {
-			let selected_images = []
-			for (let i in this.items){
-				let item = this.items[i]
-				console.log(item.selected)
-				if (item.selected){
-					selected_images.push(item.img_name)
-				}
-			}
-			let param = {"trigger" : "copyImages", "meta_names" : selected_images.join(',')}
-			console.log(param)
-			axios.post("/search", param)
-			this.initImages()
+
+			console.log("未実装")
 		},
 
-		//画像の表示を初期化する
-		initImages() {
-			this.items = []
-			this.count = 0
-			//this.getimgs()
-		},
 	}
 })
