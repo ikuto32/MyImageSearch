@@ -1,5 +1,5 @@
 
-import io
+import ast
 from flask import Flask, request, make_response
 
 import pathlib
@@ -95,35 +95,33 @@ def get_image(id : str):
 #------------------------------------------------------------
 
 
-@app.route("/search/text")
+@app.route("/search/text", methods=["POST"])
 def search_text():
     """文字列から検索して、結果を返す"""
-    
-    model_name: str = request.args.get("model_name")
-    pretrained: str = request.args.get("pretrained")
-    text: str = request.args.get("text")
+    args = ast.literal_eval(request.data.decode('utf-8')).get("params")
+    model_name: str = args.get("model_name")
+    pretrained: str = args.get("pretrained")
+    text: str = args.get("text")
     print({"parameter":{"model_name":model_name, "pretrained":pretrained, "text":text}})
     return from_result_to_json(usecase.search_text(ModelId(model_name, pretrained), UploadText(text)))
 
-@app.route("/search/image")
+@app.route("/search/image", methods=["POST"])
 def search_image():
     """画像から検索して、結果を返す"""
 
-    payload: str = request.args.get("payload")
-
     #jsonを解釈
-    json_obj = json.loads(payload)
+    json_obj = json.loads(request.data).get("params")
 
     #検索モデルのIDを取得する。
-    model_id = ModelId(json_obj["model"])
+    model_id = ModelId(json_obj["model_name"], json_obj["pretrained"])
 
     #IDのリストを取得する。
     id_text_list : list[str] = json_obj["id"]
-    id_list : list[ImageId] = map(ImageId, id_text_list)
+    id_list : list[ImageId] = list(map(ImageId, id_text_list))
     
     return from_result_to_json(usecase.search_image(model_id, id_list))
                                        
-@app.route("/search/uploadimage")
+@app.route("/search/uploadimage", methods=["POST"])
 def search_upload_image():
     """アップロードされた画像から検索して、結果を返す。"""
 

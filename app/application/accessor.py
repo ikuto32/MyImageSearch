@@ -9,7 +9,7 @@ class Accessor():
     """キャッシュなどドメイン(アプリケーションの役割)と直接関係ない外部接続を行うインターフェイス"""
 
     @abstractmethod
-    def load_meta(self, id : ImageId) -> np.ndarray:
+    def load_meta(self, model_id: ModelId, image_id: ImageId) -> np.ndarray:
         """外部から対応したメタ情報を取得する"""
 
         pass
