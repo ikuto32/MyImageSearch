@@ -59,8 +59,6 @@ class Usecase:
 
     def eval(self, item_list : list[ImageItem], index, features, k=2048):
         
-        
-        
         faiss.normalize_L2(features)
         if k > len(item_list):
             k = len(item_list)
@@ -98,10 +96,31 @@ class Usecase:
         return scores
     
 
-    def search_image(self, model_id : ModelId, id : list[ImageId]) -> list[ResultImageItem]:
+    def search_image(self, model_id : ModelId, id_list : list[ImageId]) -> list[ResultImageItem]:
         """画像から検索する"""
 
-        return
+        if not id_list:
+            return
+        # モデルの読み込み
+        model_obj = self._accessor.load_model(model_id)
+        model, _, preprocess = model_obj.model_obj[0], model_obj.model_obj[1], model_obj.model_obj[2]
+        #　選択した画像のmetaを結合する
+        temp = []
+        for select_image_id in id_list:
+            # テキストの埋め込みを計算
+            load_image = self._repository.load_image(select_image_id).PTL_image_to()
+            image = preprocess(load_image).unsqueeze(0).to("cpu")
+            meta = model.encode_image(image).to("cpu").detach().numpy().copy()
+            temp.append(meta)
+
+        features = np.vstack(temp)
+
+        # indexを読み込み
+        index = self._accessor.load_index_file(model_id)
+
+        # 類似度を計算する
+        scores = self.eval(item_list=self.get_all_image_item(), index=index, features=features)
+        return scores
     
 
     def search_upload_image(self, model_id : ModelId, image : UploadImage) -> list[ResultImageItem]:

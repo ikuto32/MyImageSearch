@@ -1,6 +1,6 @@
 
+import hashlib
 import pathlib
-import uuid
 import mimetypes
 
 import torch
@@ -44,7 +44,7 @@ class LocalRepository(Repository):
         for f in files:
 
             #ID生成
-            id : ImageId = ImageId(str(uuid.uuid4()))
+            id : ImageId = ImageId(hashlib.sha256(str(f).encode()).hexdigest())
             
             #IDとPathの対応を記録
             self._id_to_path[id] = f

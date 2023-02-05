@@ -68,7 +68,7 @@ export async function searchText(modelName, pretrained, text) {
         }
     }
 
-    return axios.get("/search/text", payload).then(res => res.data) 
+    return axios.post("/search/text", payload).then(res => res.data) 
 }
 
 
@@ -77,20 +77,20 @@ export async function searchText(modelName, pretrained, text) {
  * 
  * @param {string} modelName
  * @param {string} pretrained
- * @param {string[]} itemId
+ * @param {string[]} itemId_list
  * 
  * @return {Promise<ResultPair[]>}
  */
-export async function searchImage(modelName, pretrained, itemId) {
+export async function searchImage(modelName, pretrained, itemId_list) {
 
     let payload = {
 
         params:{
             model_name: modelName, 
             pretrained: pretrained, 
-            id : itemId
+            id : itemId_list
         }
     }
 
-    return axios.get("/search/image", payload).then(res => res.data) 
+    return axios.post("/search/image", payload).then(res => res.data) 
 }

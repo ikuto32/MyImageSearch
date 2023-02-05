@@ -1,7 +1,8 @@
 
 from dataclasses import dataclass
 from typing import Any
-
+from PIL import Image as PILImage
+from io import BytesIO
 
 
 #=====================================================
@@ -27,6 +28,9 @@ class Image:
 
     binary : bytes
     content_type : str
+
+    def PTL_image_to(self):
+        return PILImage.open(BytesIO(self.binary))
 
 
 @dataclass(frozen=True)

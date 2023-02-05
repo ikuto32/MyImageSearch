@@ -1,10 +1,7 @@
 
 import Vue from "https://cdn.jsdelivr.net/npm/vue@2/dist/vue.esm.browser.js"
-import axios from "https://cdn.jsdelivr.net/npm/axios@1.3.1/+esm"
 
 import * as repository from "./modules/repository.js"
-import * as util from "./modules/util.js"
-
 
 
 new Vue({
@@ -181,9 +178,9 @@ new Vue({
 		//画像から検索するボタンの動作
 		imagesSearchButton() {
 
-			let selectedItems = [...this.displayItems].filter(item => item.selected)
+			let selectedId = [...this.displayItems].filter(item => item.selected).map(item => item.id)
 
-			this.setBuffer(repository.searchImage(this.model_name, this.pretrained, selectedItems))
+			this.setBuffer(repository.searchImage(this.model_name, this.pretrained, selectedId))
 			.then(this.initImage);
 		},
 

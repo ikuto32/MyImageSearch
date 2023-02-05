@@ -25,13 +25,11 @@ class LocalAccessor(Accessor):
         self._id_to_path : dict[ImageId, pathlib.Path] = {}
 
 
-    def load_meta(self, id: ImageId) -> np.ndarray:
-        
-        return np.load(f'{self._meta_dir_path}/{id}.npy')
+    def load_meta(self, model_id: ModelId, image_id: ImageId) -> np.ndarray:
+        return np.load(f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/{image_id}.npy')
 
 
     def load_index_file(self, id: ModelId) -> Any:
-        # TODO
         
         index = faiss.read_index(f'{self._meta_dir_path}/{id.model_name}-{id.pretrained}/{"metafiles.index"}')
         return index
