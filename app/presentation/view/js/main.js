@@ -16,7 +16,15 @@ new Vue({
 		model_name: "ViT-B-32",
 		pretrained: "laion2b_s34b_b79k",
 		showedItemIndex: 0,
-		itemsBuffer:[],
+
+		/**
+		 * @type {{id: string, score: number}[]}
+		 */
+		resultBuffer:[],
+
+		/**
+		 * @type {{id: string, score: number, img_name: string, img: string, selected: boolean}[]}
+		 */
 		displayItems:[]
 	},
 	mounted() {
@@ -54,22 +62,16 @@ new Vue({
 		 */
 		initBuffer() {
 
+			//画像項目をすべて取得する
 			return repository.getImageItems()
-			.then(objs => Promise.all(objs.map(obj => {
-
-				//表示情報
-				return {
-					id: obj.id,
-					score: 0,
-					img_name: obj.name,
-					img: repository.getImageUrl(obj.id),
-					selected: false
-				}
-
-			}))).then(array => {
+			.then(objs => {
 
 				//バッファに登録
-				this.itemsBuffer = array
+				this.resultBuffer = objs.map(obj => ({
+
+					id: obj.id,
+					score: 0
+				}))
 			})
 		},
 
@@ -107,25 +109,41 @@ new Vue({
 		 */
 		showNextImg(){
 			
-			if(this.itemsBuffer.length <= this.showedItemIndex)
+			
+			if(this.resultBuffer.length < this.showedItemIndex)
 			{
 				console.log("これ以上描画できません。")
 				return
 			}
 
+			//今回、追加表示する範囲
+			let start = this.showedItemIndex
+			let end = Math.min(start + this.load_size - 1, this.resultBuffer.length)
 
-			let temp = this.showedItemIndex
 
-			for(let i = 0; i < this.load_size; i++) {
+			//不足した情報を追加して、表示
+			this.resultBuffer.slice(start, end).forEach(obj => {
 
-				let displayItem = this.itemsBuffer[temp + i]
-				if(displayItem == null) {
-					break;
-				}
+				repository.getItem(obj.id)
+				.then(item => {
+
+					this.displayItems.push({
+
+						id: obj.id,
+						score: obj.score,
+						img: repository.getImageUrl(obj.id),
+						img_name: item.name,
+						selected: false
+					}); 
+				})
 				
-				this.displayItems.push(displayItem)
-				this.showedItemIndex++
-			}
+			});
+
+
+			
+			//最後のインデックス
+			this.showedItemIndex = end + 1;
+			
 
 		},
 
@@ -138,21 +156,11 @@ new Vue({
 
 			return promise.then(objs => Promise.all(objs.map(async obj => {
 
-				//画像項目の情報を取得
-				let item = await repository.getItem(obj.id)
-
-				//表示する情報
-				let displayItem = {
+				return {
+					
 					id: obj.id,
-					score: obj.score,
-					img_name: item.name,
-					img: repository.getImageUrl(obj.id),
-					selected: false
+					score: obj.score
 				}
-
-				console.log(`結果 ${JSON.stringify(displayItem)}`)
-
-				return displayItem
 
 			}))).then(array => {
 
@@ -161,7 +169,7 @@ new Vue({
 				console.log(`ソート後 ${JSON.stringify(array)}`)
 
 				//バッファに登録
-				this.itemsBuffer = array
+				this.resultBuffer = array
 			})
 		},
 
