@@ -195,7 +195,8 @@ new Vue({
 		//画像名前から検索するボタンの動作
 		nameSearchButton() {
 
-			console.log("未実装")
+			this.setBuffer(repository.searchName(this.text, this.isRegexp))
+			.then(this.initImage);
 		},
 
 		//画像をコピーするボタンの動作
