@@ -101,14 +101,16 @@ class Usecase:
 
         if not id_list:
             return
+        
         # モデルの読み込み
         model_obj = self._accessor.load_model(model_id)
         model, _, preprocess = model_obj.model_obj[0], model_obj.model_obj[1], model_obj.model_obj[2]
-        #　選択した画像のmetaを結合する
+        
+        # 選択した画像のmetaを結合する
         temp = []
         for select_image_id in id_list:
             # テキストの埋め込みを計算
-            load_image = self._repository.load_image(select_image_id).PTL_image_to()
+            load_image = self._repository.load_image(select_image_id).to_ptl_image()
             image = preprocess(load_image).unsqueeze(0).to("cpu")
             meta = model.encode_image(image).to("cpu").detach().numpy().copy()
             temp.append(meta)

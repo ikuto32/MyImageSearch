@@ -29,7 +29,7 @@ class Image:
     binary : bytes
     content_type : str
 
-    def PTL_image_to(self):
+    def to_ptl_image(self):
         return PILImage.open(BytesIO(self.binary))
 
 
