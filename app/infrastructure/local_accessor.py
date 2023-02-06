@@ -1,4 +1,5 @@
 
+from functools import cache
 from typing import Any
 
 import pathlib
@@ -29,17 +30,20 @@ class LocalAccessor(Accessor):
         return np.load(f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/{image_id}.npy')
 
 
+    @cache
     def load_index_file(self, id: ModelId) -> Any:
         
         index = faiss.read_index(f'{self._meta_dir_path}/{id.model_name}-{id.pretrained}/{"metafiles.index"}')
         return index
     
-    
+
+    @cache
     def load_model(self, id: ModelId) -> list[Model]:
         
         model_name, pretrained = str(id.model_name), str(id.pretrained)
         return Model(open_clip.create_model_and_transforms(model_name, pretrained=pretrained))
     
+    @cache
     def load_tokenizer(self, id : ModelId) -> Tokenizer:
         return open_clip.get_tokenizer(id.model_name)
 
