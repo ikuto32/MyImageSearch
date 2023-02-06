@@ -121,6 +121,18 @@ def search_image():
     
     return from_result_to_json(usecase.search_image(model_id, id_list))
                                        
+
+@app.route("/search/name", methods=["POST"])
+def search_name():
+    """名前から検索して、結果を返す"""
+    print(request.data.decode('utf-8'))
+    args = ast.literal_eval(request.data.decode('utf-8')).get("params")
+    text: str = args.get("text")
+    is_regexp: bool = (args.get("is_regexp") == "true")
+    print({"parameter":{"text":text}})
+    return from_result_to_json(usecase.search_name(UploadText(text), is_regexp))
+
+
 @app.route("/search/uploadimage", methods=["POST"])
 def search_upload_image():
     """アップロードされた画像から検索して、結果を返す。"""
@@ -138,8 +150,6 @@ def search_upload_image():
     image : UploadImage = UploadImage(binary, content_type)
 
     return from_result_to_json(usecase.search_upload_image(model_id, image))
-
-
 
 #============================================================
 

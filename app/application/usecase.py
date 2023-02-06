@@ -1,9 +1,11 @@
 
+import re
 import numpy as np
 import faiss
+import tqdm
 
 from app.application.accessor import Accessor
-from app.domain.domain_object import ImageItem, ImageId, Image, UploadImage, ModelItem, ModelId, ResultImageItem, UploadText
+from app.domain.domain_object import ImageItem, ImageId, Image, Score, UploadImage, ModelItem, ModelId, ResultImageItem, UploadText
 from app.domain.repository import Repository
 
 
@@ -124,6 +126,26 @@ class Usecase:
         scores = self.eval(item_list=self._accessor.load_index_item_list(model_id), index=index, features=features)
         return scores
     
+
+    def search_name(self, text : UploadText, is_regexp : bool) -> list[ResultImageItem]:
+        """文字列から名前検索する"""
+
+        scores = []
+        # 類似度を計算する
+        for image_item in tqdm.tqdm(self._repository.load_all_image_item()):
+            name = image_item.display_name.name
+            # print(args.get("trueRegexp"))
+            if is_regexp:
+                hasMatch = re.search(text.text, name)
+            else:
+                hasMatch = text.text in name
+
+            if hasMatch:
+                scores.append([image_item.id.id, 1.0])
+            else:
+                scores.append([image_item.id.id, 0.0])
+
+        return scores
 
     def search_upload_image(self, model_id : ModelId, image : UploadImage) -> list[ResultImageItem]:
         """アップロードされた画像から検索する"""

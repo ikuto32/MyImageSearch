@@ -94,3 +94,25 @@ export async function searchImage(modelName, pretrained, itemId_list) {
 
     return axios.post("/search/image", payload).then(res => res.data) 
 }
+
+
+/**
+ * 画像項目を名前で検索する
+ * 
+ * @param {string} isRegexp
+ * @param {string} text
+ * 
+ * @return {Promise<ResultPair[]>}
+ */
+export async function searchName(itemId_list, is_regexp) {
+
+    let payload = {
+
+        params:{
+            text : itemId_list,
+            is_regexp : is_regexp.toString()
+        }
+    }
+
+    return axios.post("/search/name", payload).then(res => res.data) 
+}
