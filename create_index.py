@@ -27,7 +27,7 @@ def main():
     parser.add_argument("--model_name", help="model_name", default="ViT-B-32")
     parser.add_argument("--pretrained", help="pretrained", default="laion2b_s34b_b79k")
     parser.add_argument("--nlist", help="nlist", default=16)
-    parser.add_argument("--M", help="M", default=32)
+    parser.add_argument("--M", help="M", default=256)
     parser.add_argument("--bits_per_code", help="bits_per_code", default=4)
     parser.add_argument("--metas_pickle_file_name", help="metas_pickle_file_name", default="metafiles.pickle")
     parser.add_argument("--metas_faiss_index_file_name", help="metas_faiss_index_file_name", default="metafiles.index")

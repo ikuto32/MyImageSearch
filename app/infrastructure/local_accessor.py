@@ -1,5 +1,6 @@
 
 from functools import cache
+import json
 from typing import Any
 
 import pathlib
@@ -9,7 +10,7 @@ import torch
 import faiss
 import open_clip
 
-from app.domain.domain_object import ImageId, ModelId, Model, Tokenizer
+from app.domain.domain_object import ImageId, ImageItem, ImageName, ModelId, Model, Tokenizer
 from app.application.accessor import Accessor
 
 
@@ -43,7 +44,16 @@ class LocalAccessor(Accessor):
         model_name, pretrained = str(id.model_name), str(id.pretrained)
         return Model(open_clip.create_model_and_transforms(model_name, pretrained=pretrained))
     
+
     @cache
     def load_tokenizer(self, id : ModelId) -> Tokenizer:
         return open_clip.get_tokenizer(id.model_name)
+    
+
+    @cache
+    def load_index_item_list(self, id : ModelId) -> list[ImageItem]:
+        with open(f'{self._meta_dir_path}/{id.model_name}-{id.pretrained}/{"item_json.json"}', 'r') as f:
+            json_dict = json.load(f)
+            image_item = [ImageItem(id=ImageId(id), display_name=ImageName(json_dict[id])) for id in json_dict]
+        return image_item
 
