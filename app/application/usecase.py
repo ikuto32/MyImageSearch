@@ -92,7 +92,7 @@ class Usecase:
         index = self._accessor.load_index_file(model_id)
 
         # 類似度を計算する
-        scores = self.eval(item_list=self.get_all_image_item(), index=index, features=features)
+        scores = self.eval(item_list=self._accessor.load_index_item_list(model_id), index=index, features=features)
         return scores
     
 
@@ -121,7 +121,7 @@ class Usecase:
         index = self._accessor.load_index_file(model_id)
 
         # 類似度を計算する
-        scores = self.eval(item_list=self.get_all_image_item(), index=index, features=features)
+        scores = self.eval(item_list=self._accessor.load_index_item_list(model_id), index=index, features=features)
         return scores
     
 

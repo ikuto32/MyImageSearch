@@ -3,7 +3,7 @@ from abc import abstractmethod
 from typing import Any
 import numpy as np
 
-from app.domain.domain_object import ImageId, Model, ModelId, Tokenizer
+from app.domain.domain_object import ImageId, ImageItem, Model, ModelId, Tokenizer
 
 class Accessor():
     """キャッシュなどドメイン(アプリケーションの役割)と直接関係ない外部接続を行うインターフェイス"""
@@ -21,6 +21,7 @@ class Accessor():
 
         pass
 
+
     @abstractmethod
     def load_model(self, id : ModelId) -> Model:
 
@@ -29,5 +30,11 @@ class Accessor():
 
     @abstractmethod
     def load_tokenizer(self, id : ModelId) -> Tokenizer:
+
+        pass
+
+
+    @abstractmethod
+    def load_index_item_list(self, id : ModelId) -> ImageItem:
 
         pass
