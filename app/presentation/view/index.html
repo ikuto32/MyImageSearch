@@ -1,13 +1,15 @@
 <!doctype html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <link href="./css/common.css" rel="stylesheet">
 </head>
+
 <body>
     <main>
         <div id="app" ref="hogehoge">
-            <div id="controlArea" >
+            <div id="controlArea">
                 <input type="search" id="textSearchBox" placeholder="文字列" v-model:text="text">
                 <input type="button" value="テキスト検索" @click="textSearchButton">
                 <input type="button" value="画像検索" @click="imagesSearchButton">
@@ -38,10 +40,11 @@
                     <li @click="isShowSetting = !isShowSetting" :class="{'selectedItem': isShowSetting}">setting</li>
                 </ul>
             </nav>
-            
+
             <div id="itemArea">
                 <div v-for="item in displayItems">
-                    <div @click="item.selected = !item.selected" :class="[{'selectedItem' : item.selected}, 'itemBlock']">
+                    <div @click="item.selected = !item.selected"
+                        :class="[{'selectedItem' : item.selected}, 'itemBlock']">
                         <figure>
                             <img :src="item.img" :title="item.img_name" :style="{width: image_size + 'px'}">
                             <figcaption>
@@ -51,14 +54,15 @@
                         </figure>
                     </div>
                 </div>
-                
+
                 <button @click="showNextImg">show img</button>
             </div>
-            
-        
+
+
         </div>
     </main>
 
-	<script type="module" src="./js/main.js"></script>
+    <script type="module" src="./js/main.js"></script>
 </body>
+
 </html>

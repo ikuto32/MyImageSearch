@@ -5,7 +5,7 @@ import mimetypes
 
 import torch
 
-from app.domain.domain_object import ImageItem, ImageId, Image, ImageName, Model, ModelId, ModelItem
+from app.domain.domain_object import ImageItem, ImageId, Image, ImageName, Model, ModelId, ModelItem, ModelName
 from app.domain.repository import Repository
 
 import open_clip
@@ -17,10 +17,10 @@ class LocalRepository(Repository):
 
     def __init__(
             self, 
-            image_dir_path : pathlib
-            ):
+            image_dir_path
+        ) -> None:
         
-        self._image_dir_path = image_dir_path
+        self._image_dir_path: pathlib.Path = pathlib.Path(image_dir_path)
         self._id_to_path : dict[ImageId, pathlib.Path] = {}
 
 
@@ -34,7 +34,7 @@ class LocalRepository(Repository):
         files.extend(self._image_dir_path.glob("**/*.webp"))
 
         #相対パスに変換
-        files = map(lambda f: f.relative_to(self._image_dir_path), files)
+        files = list(map(lambda f: f.relative_to(self._image_dir_path), files))
 
         #辞書順に並び替え
         files = sorted(files)
@@ -57,16 +57,15 @@ class LocalRepository(Repository):
 
     def load_all_model_item(self) -> list[ModelItem]:
 
-        items = [ModelItem(ModelId(model_name, dataset), f"{model_name}-{dataset}") for (model_name, dataset) in open_clip.list_pretrained()]
+        items: list[ModelItem] = [ModelItem(ModelId(model_name, dataset), ModelName(f"{model_name}-{dataset}")) for (model_name, dataset) in open_clip.list_pretrained()]
         return items
     
     def load_image(self, id: ImageId) -> Image:
 
-        path = pathlib.Path(f"{self._image_dir_path}/{self._id_to_path.get(id)}")
-        binary = path.read_bytes()
+        path: pathlib.Path = pathlib.Path(f"{self._image_dir_path}/{self._id_to_path.get(id)}")
+        binary: bytes = path.read_bytes()
 
         # tuple[<Content-Type>, <Encoding>]
-        content_type = mimetypes.guess_type(path)[0]
-
+        content_type: str = mimetypes.guess_type(path)[0]# type: ignore
         return Image(binary, content_type)
 
