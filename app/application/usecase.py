@@ -61,7 +61,7 @@ class Usecase:
 
     
 
-    def eval(self, item_list: list[ImageItem], index, features, result_size=2048):
+    def eval(self, item_list: list[ImageItem], index, features, result_size=2048) -> list[ResultImageItem]:
 
         faiss.normalize_L2(features)
         if result_size > len(item_list):
@@ -73,15 +73,16 @@ class Usecase:
         D, I = index.search(features, k=result_size)
 
         temp: list[int] = [0 for _ in item_list]
-        id_list: list[ImageItem] = sorted(
+        sorted_item_list: list[ImageItem] = sorted(
             item_list, key=lambda x: x.display_name.name)
         for i, d in zip(I, D):
             for id, distance in zip(i, d):
                 temp[id] += distance
-        scores = []
+        results: list[ResultImageItem] = []
         for i, score in enumerate(temp):
-            scores.append([id_list[i].id.id, score])
-        return scores
+            results.append(ResultImageItem(sorted_item_list[i], Score(score)))
+
+        return results
 
     def search_text(self, model_id: ModelId, text: UploadText) -> list[ResultImageItem]:
         """文字列から検索する"""
@@ -97,8 +98,10 @@ class Usecase:
         index = self._accessor.load_index_file(model_id)
 
         # 類似度を計算する
-        scores = self.eval(item_list=self._accessor.load_index_item_list(
+        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(
             model_id), index=index, features=features)
+        
+
         return scores
 
     def search_image(self, model_id: ModelId, id_list: list[ImageId]) -> list[ResultImageItem]:
@@ -124,14 +127,14 @@ class Usecase:
         index = self._accessor.load_index_file(model_id)
 
         # 類似度を計算する
-        scores = self.eval(item_list=self._accessor.load_index_item_list(
+        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(
             model_id), index=index, features=features)
         return scores
 
     def search_name(self, text: UploadText, is_regexp: bool) -> list[ResultImageItem]:
         """文字列から名前検索する"""
 
-        scores = []
+        scores: list[ResultImageItem] = []
         # 類似度を計算する
         for image_item in tqdm.tqdm(self._repository.load_all_image_item()):
             name: str = image_item.display_name.name
@@ -142,9 +145,9 @@ class Usecase:
                 hasMatch = text.text in name
 
             if hasMatch:
-                scores.append([image_item.id.id, 1.0])
+                scores.append(ResultImageItem(image_item, Score(1.0)))
             else:
-                scores.append([image_item.id.id, 0.0])
+                scores.append(ResultImageItem(image_item, Score(0.0)))
 
         return scores
 

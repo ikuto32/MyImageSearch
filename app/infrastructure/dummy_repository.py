@@ -1,6 +1,6 @@
 import base64
 
-from app.domain.domain_object import ImageItem, ImageId, Image, ImageName, Model, ModelId, ModelItem
+from app.domain.domain_object import ImageItem, ImageId, Image, ImageName, Model, ModelId, ModelItem, ModelName
 from app.domain.repository import Repository
 
 class DummyRepository(Repository):
@@ -35,8 +35,8 @@ class DummyRepository(Repository):
 
     def load_all_model_item(self) -> list[ModelItem]:
 
-        return [ModelItem(ModelId("dummy_model_id"), "ダミーのモデルID")]
+        return [ModelItem(ModelId("dummy_model_id", "dummy_pretrained"), ModelName("ダミーのモデルID"))]
 
     def load_model(self, id: ModelId) -> Model:
 
-        return None
+        return Model(None)

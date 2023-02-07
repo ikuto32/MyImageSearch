@@ -7,7 +7,7 @@ import axios from "https://cdn.jsdelivr.net/npm/axios@1.3.1/+esm"
  * @typedef {{id:string, name:string}} ImageItem 
  * 
  * 検索結果
- * @typedef {{id:string, score:number}} ResultPair
+ * @typedef {{item:ImageItem, score:number}} ResultItem
  */
 
 
@@ -55,7 +55,7 @@ export async function getItem(itemId) {
  * @param {string} pretrained
  * @param {string} text
  * 
- * @return {Promise<ResultPair[]>}
+ * @return {Promise<ResultItem[]>}
  */
 export async function searchText(modelName, pretrained, text) {
 
@@ -79,7 +79,7 @@ export async function searchText(modelName, pretrained, text) {
  * @param {string} pretrained
  * @param {string[]} itemId_list
  * 
- * @return {Promise<ResultPair[]>}
+ * @return {Promise<ResultItem[]>}
  */
 export async function searchImage(modelName, pretrained, itemId_list) {
 
@@ -102,7 +102,7 @@ export async function searchImage(modelName, pretrained, itemId_list) {
  * @param {string} isRegexp
  * @param {string} text
  * 
- * @return {Promise<ResultPair[]>}
+ * @return {Promise<ResultItem[]>}
  */
 export async function searchName(itemId_list, is_regexp) {
 

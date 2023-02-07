@@ -1,8 +1,17 @@
 
 import Vue from "https://cdn.jsdelivr.net/npm/vue@2/dist/vue.esm.browser.js"
+import natsort from 'https://cdn.jsdelivr.net/npm/natsort@2.0.3/+esm'
+
 
 import * as repository from "./modules/repository.js"
+import * as util from "./util.js"
 
+
+
+
+/**
+ * @typedef {{id: string, score: number, img_name: string, img: string, selected: boolean}} DisplayItem
+ */
 
 new Vue({
 	el:"#app",
@@ -18,12 +27,12 @@ new Vue({
 		showedItemIndex: 0,
 
 		/**
-		 * @type {{id: string, score: number}[]}
+		 * @type {ResultItem[]}
 		 */
 		resultBuffer:[],
 
 		/**
-		 * @type {{id: string, score: number, img_name: string, img: string, selected: boolean}[]}
+		 * @type {DisplayItem[]}
 		 */
 		displayItems:[]
 	},
@@ -67,11 +76,14 @@ new Vue({
 			.then(objs => {
 
 				//バッファに登録
+				/**
+				 * @type {repository.ResultItem[]}
+				 */
 				this.resultBuffer = objs.map(obj => ({
 
-					id: obj.id,
+					item: obj,
 					score: 0
-				}))
+				}));
 			})
 		},
 
@@ -122,20 +134,23 @@ new Vue({
 
 
 			//不足した情報を追加して、表示
-			this.resultBuffer.slice(start, end).forEach(obj => {
+			this.resultBuffer.slice(start, end).forEach(result => {
 
-				repository.getItem(obj.id)
-				.then(item => {
+				
+				console.log("表示: " + JSON.stringify(result))
 
-					this.displayItems.push({
+				/**
+				 * @type {DisplayItem[]}
+				 */
+				this.displayItems.push({
 
-						id: obj.id,
-						score: obj.score,
-						img: repository.getImageUrl(obj.id),
-						img_name: item.name,
-						selected: false
-					}); 
-				})
+					id: result.item.id,
+					score: result.score,
+					img_name: result.item.name,
+					img: repository.getImageUrl(result.item.id),
+					selected: false
+				}); 
+				
 				
 			});
 
@@ -149,23 +164,21 @@ new Vue({
 
 		/**
 		 * 検索結果をバッファに登録する
-		 * @param {Promise<repository.ResultPair[]>} promise
+		 * @param {Promise<repository.ResultItem[]>} promise
 		 * @return {Promise<void>}
 		 */
 		setBuffer(promise) {
 
-			return promise.then(objs => Promise.all(objs.map(async obj => {
+			return promise.then(array => {
 
-				return {
-					
-					id: obj.id,
-					score: obj.score
-				}
 
-			}))).then(array => {
 
 				//並び替え
-				array = array.sort((a, b) => b.score - a.score)
+				array = array.sort(util.cancatComparator(
+					(a, b) => b.score - a.score, 
+					(a, b) => natsort.default()(a.item.name, b.item.name)
+				))
+
 				console.log(`ソート後 ${JSON.stringify(array)}`)
 
 				//バッファに登録
