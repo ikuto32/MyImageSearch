@@ -3,7 +3,7 @@
 from abc import abstractmethod
 from abc import ABCMeta
 
-from app.domain.domain_object import ImageItem, ImageId, Image, Model, ModelItem, ModelId
+from app.domain.domain_object import ImageItem, ImageId, Image, ModelItem
 
 class Repository(metaclass=ABCMeta):
     """ドメイン(アプリケーションの役割)として必要な外部接続を行うインターフェイス"""
@@ -17,7 +17,6 @@ class Repository(metaclass=ABCMeta):
     def load_image(self, id : ImageId) -> Image:
         
         pass
-
 
     @abstractmethod
     def load_all_model_item(self) -> list[ModelItem]:

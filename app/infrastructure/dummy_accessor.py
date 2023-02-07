@@ -13,8 +13,8 @@ class DummyAccessor(Accessor):
 
 
     def load_meta(self, id: ImageId) -> np.ndarray:
-        return None
-
+        return None # type: ignore
+    
     def load_index_file(self, id : ModelId) -> Any:
         return None
 
