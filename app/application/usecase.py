@@ -107,6 +107,7 @@ class Usecase:
     def search_image(self, model_id: ModelId, id_list: list[ImageId]) -> list[ResultImageItem]:
         """画像から検索する"""
 
+        
         # モデルの読み込み
         model_obj: Model = self._accessor.load_model(model_id)
         model, _, preprocess = model_obj.model_obj[0], model_obj.model_obj[1], model_obj.model_obj[2]

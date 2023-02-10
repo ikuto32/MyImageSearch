@@ -8,11 +8,14 @@ import shutil
 import numpy as np
 import torch
 from PIL import Image
-import tqdm
+from tqdm import tqdm
 import argparse
 import pickle
 import open_clip
 import faiss
+import torch.nn as nn
+from os.path import expanduser  # pylint: disable=import-outside-toplevel
+from urllib.request import urlretrieve  # pylint: disable=import-outside-toplevel
 
 metasPickleFile = "metafiles.pickle"
 metasFaissIndexFile = "metafiles.index"
@@ -20,41 +23,75 @@ metasFaissIndexFile = "metafiles.index"
 def loadMeta(meta_dir, image_path):
     return np.load(f'{meta_dir}/{image_path}.npy')
 
+def get_aesthetic_model(clip_model="vit_l_14"):
+    """load the aethetic model"""
+    home = expanduser("~")
+    cache_folder = home + "/.cache/emb_reader"
+    path_to_model = cache_folder + "/sa_0_4_"+clip_model+"_linear.pth"
+    if not os.path.exists(path_to_model):
+        os.makedirs(cache_folder, exist_ok=True)
+        url_model = (
+            "https://github.com/LAION-AI/aesthetic-predictor/blob/main/sa_0_4_"+clip_model+"_linear.pth?raw=true"
+        )
+        urlretrieve(url_model, path_to_model)
+    if clip_model == "vit_l_14":
+        m = nn.Linear(768, 1)
+    elif clip_model == "vit_b_32":
+        m = nn.Linear(512, 1)
+    else:
+        raise ValueError()
+    s = torch.load(path_to_model)
+    m.load_state_dict(s)
+    m.eval()
+    return m
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="./meta/ViT-B-32-laion2b_s34b_b79k/")
-    parser.add_argument("--model_name", help="model_name", default="ViT-B-32")
-    parser.add_argument("--pretrained", help="pretrained", default="laion2b_s34b_b79k")
+    parser.add_argument("--meta_dir", help="dir", default="./meta")
+    parser.add_argument("--search_model_name", help="model_name", default="ViT-B-32")
+    parser.add_argument("--search_model_pretrained", help="pretrained", default="laion2b_s34b_b79k")
+    parser.add_argument("--caption_model_name", help="model_name", default="coca_ViT-L-14")
+    parser.add_argument("--caption_model_pretrained", help="pretrained", default="laion2B-s13B-b90k")
     parser.add_argument("--nlist", help="nlist", default=16)
     parser.add_argument("--M", help="M", default=256)
     parser.add_argument("--bits_per_code", help="bits_per_code", default=4)
     parser.add_argument("--metas_pickle_file_name", help="metas_pickle_file_name", default="metafiles.pickle")
     parser.add_argument("--metas_faiss_index_file_name", help="metas_faiss_index_file_name", default="metafiles.index")
     args = parser.parse_args()
+    search_model_meta_dir: str = f"{args.meta_dir}/{args.search_model_name}-{args.search_model_pretrained}"
     print("load")
     
     metasPickleFile = args.metas_pickle_file_name
     metasFaissIndexFile = args.metas_faiss_index_file_name
     
     print("files")
-    dirPath = pathlib.Path(args.image_dir)
+    dirPath: pathlib.Path = pathlib.Path(args.image_dir)
     print(dirPath)
 
     #画像ファイルの一覧を作成
-    extensions = ["png", "jpg", "gif", "webp"]
+    extensions: list[str] = ["png", "jpg", "gif", "webp"]
   
     files = itertools.chain.from_iterable(dirPath.glob(f'**/*.{e}') for e in extensions)
 
-    files = map(lambda f: str(f.relative_to(dirPath)), files)
-    files = sorted(files)
+    files_list: list[str]= sorted(map(lambda f: str(f.relative_to(dirPath)), files))
 
 
     # GPUが使用可能か
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device= "cuda" if torch.cuda.is_available() else "cpu"
     # モデルの読み込み
-    model, _, preprocess = open_clip.create_model_and_transforms(args.model_name, device=device, pretrained=args.pretrained)
+    search_model, _, preprocess = open_clip.create_model_and_transforms(
+        args.search_model_name, 
+        pretrained=args.search_model_pretrained,
+        device=device
+    )
     
+    caption_model, _, transform = open_clip.create_model_and_transforms(
+        model_name=args.caption_model_name,
+        pretrained=args.caption_model_pretrained,
+        device=device
+    )
+
     print("mkdir")
 
     #ディレクトリを初期化
@@ -63,30 +100,64 @@ def main():
     # os.mkdir(args.meta_dir)
     
     with torch.no_grad():
-        pbar = tqdm.tqdm(files)
+        pbar: tqdm[str] = tqdm(files_list)
         metas = {}
+        index_item_list = {}
         for _, file in enumerate(pbar):
             filename = f'{file}'
-            data = Image.open(f'{args.image_dir}/{file}')
-            image_input = preprocess(data).unsqueeze(0).to(device)
-            image_features = model.encode_image(image_input)
             try:
-                os.makedirs(f'{args.meta_dir}/{os.path.split(file)[0]}')
+                metas[filename] = loadMeta(search_model_meta_dir, filename)
             except:
-                pass
-            np.save(f'{args.meta_dir}/{file}.npy', image_features.to("cpu").detach().numpy().copy())
-            metas[filename] = loadMeta(args.meta_dir, filename)
+                data = Image.open(f'{args.image_dir}/{file}')
+                image_input = preprocess(data).unsqueeze(0).to(device)
+                image_features = search_model.encode_image(image_input)
+                try:
+                    os.makedirs(f'{search_model_meta_dir}/{os.path.split(file)[0]}')
+                except:
+                    pass
+                np.save(f'{search_model_meta_dir}/{file}.npy', image_features.to("cpu").detach().numpy().copy())
+                metas[filename] = loadMeta(search_model_meta_dir, filename)
+            
+            imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
+            index_item_list[imege_id] = {"path":file}
+            
 
-        with open(f'{args.meta_dir}/{metasPickleFile}', 'wb') as f:
+        with open(f'{search_model_meta_dir}/{metasPickleFile}', 'wb') as f:
             pickle.dump(metas, f)
 
-        json_dict = {}
-        for file in metas.keys():
-            imege_id = hashlib.sha256(str(file).encode()).hexdigest()
-            json_dict[imege_id] = file
+        with open(f'{args.meta_dir}/index_item_list.json', 'w') as f:
+            json.dump(index_item_list, f)
+        
+        # display_name_json_dict = {}
+        # for file in tqdm(metas.keys()):
+        #     data = Image.open(f'{args.image_dir}/{file}')
+        #     data = transform(data).unsqueeze(0).to(device)
+        #     generated = caption_model.generate(data)
+        #     display_name = open_clip.decode(generated[0]).split("<end_of_text>")[0].replace("<start_of_text>", "")
+        #     print(display_name)
+        #     imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
+        #     display_name_json_dict[imege_id] = {"path":file,"display_name": display_name}
 
-        with open(f'{args.meta_dir}/item_json.json', 'w') as f:
-            json.dump(json_dict, f)
+        # with open(f'{args.meta_dir}/display_name.json', 'w') as f:
+        #     json.dump(display_name_json_dict, f)
+
+
+
+        aesthetic_quality_json_dict = {}
+
+        amodel= get_aesthetic_model(clip_model="vit_l_14")
+        amodel.eval()
+
+        for file in tqdm(metas.keys()):
+            image_features = torch.from_numpy(loadMeta(f"{args.meta_dir}/ViT-L-14-336-openai", file))
+            image_features /= image_features.norm(dim=-1, keepdim=True)
+            aesthetic_quality = amodel(image_features).item()
+            print(aesthetic_quality)
+            imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
+            aesthetic_quality_json_dict[imege_id] = {"path":file,"aesthetic_quality": aesthetic_quality}
+
+        with open(f'{args.meta_dir}/aesthetic_quality.json', 'w') as f:
+            json.dump(aesthetic_quality_json_dict, f)
         
         print("createIndexFile")
         metalist = list(metas.values())
