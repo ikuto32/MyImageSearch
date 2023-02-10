@@ -47,7 +47,7 @@ class LocalAccessor(Accessor):
 
     @cache
     def load_index_item_list(self, id: ModelId) -> list[ImageItem]:
-        with open(f'{self._meta_dir_path}/{id.model_name}-{id.pretrained}/{"item_json.json"}', 'r') as f:
+        with open(f'{self._meta_dir_path}/{"index_item_list.json"}', 'r') as f:
             json_dict = json.load(f)
             image_item: list[ImageItem] = [ImageItem(id=ImageId(id), display_name=ImageName(json_dict[id]["path"])) for id in json_dict]
         return image_item

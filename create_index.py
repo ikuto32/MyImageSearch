@@ -163,7 +163,7 @@ def main():
         metalist = list(metas.values())
         a = np.squeeze(np.asarray(metalist)).astype(np.float32)
         faiss.normalize_L2(a)
-        dim = a.shape[1]
+        dim: int = a.shape[1]
         q = faiss.IndexFlatIP(dim)
         nlist = args.nlist
         M = args.M
@@ -174,7 +174,7 @@ def main():
         print("add")
         index.add(a)
         print("write")
-        faiss.write_index(index, f'{args.meta_dir}/{metasFaissIndexFile}')
+        faiss.write_index(index, f'{search_model_meta_dir}/{metasFaissIndexFile}')
                 
 
 if __name__ == '__main__':

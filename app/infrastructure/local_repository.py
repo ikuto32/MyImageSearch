@@ -18,17 +18,10 @@ class LocalRepository(Repository):
 
     def __init__(
             self, 
-<<<<<<< Updated upstream
-            image_dir_path
-        ) -> None:
-        
-        self._image_dir_path: pathlib.Path = pathlib.Path(image_dir_path)
-=======
             image_dir_path: pathlib.Path
             ) -> None:
         
         self._image_dir_path: pathlib.Path  = image_dir_path
->>>>>>> Stashed changes
         self._id_to_path : dict[ImageId, pathlib.Path] = {}
 
 
@@ -63,11 +56,7 @@ class LocalRepository(Repository):
 
     def load_all_model_item(self) -> list[ModelItem]:
 
-<<<<<<< Updated upstream
         items: list[ModelItem] = [ModelItem(ModelId(model_name, dataset), ModelName(f"{model_name}-{dataset}")) for (model_name, dataset) in open_clip.list_pretrained()]
-=======
-        items: list[ModelItem] = [ModelItem(ModelId(model_name, dataset), ModelName( f"{model_name}-{dataset}")) for (model_name, dataset) in open_clip.list_pretrained()]
->>>>>>> Stashed changes
         return items
     
     def load_image(self, id: ImageId) -> Image:
@@ -76,12 +65,6 @@ class LocalRepository(Repository):
         binary: bytes = path.read_bytes()
 
         # tuple[<Content-Type>, <Encoding>]
-<<<<<<< Updated upstream
-        content_type: str = mimetypes.guess_type(path)[0]# type: ignore
-        return Image(binary, content_type)
-
-=======
         content_type = mimetypes.guess_type(path)[0]
 
         return Image(binary, content_type)# type: ignore
->>>>>>> Stashed changes
