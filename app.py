@@ -12,16 +12,16 @@ def main():
 
     #コンフィグ
     image_dir_path: pathlib.Path =pathlib.Path('./images')
-    meta_dir_path=pathlib.Path('./meta')
+    meta_dir_path: pathlib.Path=pathlib.Path('./meta')
 
     #TODO 使用するパッケージをインストールすることが手間であるため、ダミーを使用している。
-    accessor = LocalAccessor(meta_dir_path)
+    accessor: LocalAccessor = LocalAccessor(meta_dir_path)
     # accessor = DummyAccessor()
 
-    repository = LocalRepository(image_dir_path)
+    repository: LocalRepository = LocalRepository(image_dir_path)
     # repository = DummyRepository()
 
-    in_usecase = usecase.Usecase(repository, accessor)
+    in_usecase: usecase.Usecase = usecase.Usecase(repository, accessor)
     start_app(in_usecase)
 
 if __name__ == "__main__":
