@@ -98,9 +98,11 @@ class Usecase:
         index = self._accessor.load_index_file(model_id)
 
         # 類似度を計算する
-        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(
-            model_id), index=index, features=features)
+        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(),
+                                                   index=index, features=features)
         
+        aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list()
+        scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score * aesthetic_quality_item[i.item.id])), scores))
 
         return scores
 
@@ -128,8 +130,11 @@ class Usecase:
         index = self._accessor.load_index_file(model_id)
 
         # 類似度を計算する
-        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(
-            model_id), index=index, features=features)
+        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(),
+                                                   index=index, features=features)
+        
+        aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list()
+        scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score * aesthetic_quality_item[i.item.id])), scores))
         return scores
 
     def search_name(self, text: UploadText, is_regexp: bool) -> list[ResultImageItem]:
@@ -149,7 +154,8 @@ class Usecase:
                 scores.append(ResultImageItem(image_item, Score(1.0)))
             else:
                 scores.append(ResultImageItem(image_item, Score(0.0)))
-
+        aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list()
+        scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score * aesthetic_quality_item[i.item.id])), scores))
         return scores
 
     def search_upload_image(self, model_id: ModelId, image: UploadImage) -> list[ResultImageItem]:
