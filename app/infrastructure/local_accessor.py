@@ -46,8 +46,15 @@ class LocalAccessor(Accessor):
         return Tokenizer(open_clip.get_tokenizer(id.model_name))
 
     @cache
-    def load_index_item_list(self, id: ModelId) -> list[ImageItem]:
+    def load_index_item_list(self) -> list[ImageItem]:
         with open(f'{self._meta_dir_path}/{"index_item_list.json"}', 'r') as f:
             json_dict = json.load(f)
             image_item: list[ImageItem] = [ImageItem(id=ImageId(id), display_name=ImageName(json_dict[id]["path"])) for id in json_dict]
         return image_item
+
+    @cache
+    def load_aesthetic_quality_list(self) -> dict[ImageId, float]:
+        with open(f'{self._meta_dir_path}/{"aesthetic_quality.json"}', 'r') as f:
+            json_dict = json.load(f)
+            aesthetic_quality_item: dict[ImageId, float] = {ImageId(id=str(id)):float(json_dict[id]["aesthetic_quality"]) for id in json_dict}
+        return aesthetic_quality_item

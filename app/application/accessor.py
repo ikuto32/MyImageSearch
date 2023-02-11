@@ -32,6 +32,11 @@ class Accessor():
         pass
 
     @abstractmethod
-    def load_index_item_list(self, id: ModelId) -> list[ImageItem]:
+    def load_index_item_list(self) -> list[ImageItem]:
+
+        pass
+
+    @abstractmethod
+    def load_aesthetic_quality_list(self) -> dict[ImageId, float]:
 
         pass
