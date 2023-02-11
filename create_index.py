@@ -2,6 +2,7 @@ import csv
 import hashlib
 import itertools
 import json
+from multiprocessing import Pool
 import os
 import pathlib
 import shutil
@@ -45,6 +46,21 @@ def get_aesthetic_model(clip_model="vit_l_14"):
     m.eval()
     return m
 
+def index_run(args, device, search_model, preprocess, search_model_meta_dir, file):
+    try:
+        image_features = loadMeta(search_model_meta_dir, file)
+    except:
+        data = Image.open(f'{args.image_dir}/{file}')
+        image_input = preprocess(data).unsqueeze(0).to(device)
+        image_features = search_model.encode_image(image_input).to("cpu").detach().numpy().copy()
+
+        os.makedirs(f'{search_model_meta_dir}/{os.path.split(file)[0]}', exist_ok=True)
+        np.save(f'{search_model_meta_dir}/{file}.npy', image_features)
+
+def wrap_index_run(args):
+    return index_run(*args)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image_dir", help="dir", default="./images")
@@ -80,10 +96,12 @@ def main():
     # GPUが使用可能か
     device= "cuda" if torch.cuda.is_available() else "cpu"
     # モデルの読み込み
+
     search_model, _, preprocess = open_clip.create_model_and_transforms(
         args.search_model_name, 
         pretrained=args.search_model_pretrained,
-        device=device
+        device=device,
+        jit=True
     )
     
     caption_model, _, transform = open_clip.create_model_and_transforms(
@@ -101,25 +119,35 @@ def main():
     
     with torch.no_grad():
         pbar: tqdm[str] = tqdm(files_list)
-        metas = {}
         index_item_list = {}
-        for _, file in enumerate(pbar):
-            filename = f'{file}'
+        metas = {}
+
+        for file in pbar:
             try:
-                metas[filename] = loadMeta(search_model_meta_dir, filename)
+                metas[file] = loadMeta(search_model_meta_dir, file)
             except:
                 data = Image.open(f'{args.image_dir}/{file}')
                 image_input = preprocess(data).unsqueeze(0).to(device)
-                image_features = search_model.encode_image(image_input)
+                image_features = search_model.encode_image(image_input).to("cpu").detach().numpy().copy()
                 try:
                     os.makedirs(f'{search_model_meta_dir}/{os.path.split(file)[0]}')
                 except:
                     pass
-                np.save(f'{search_model_meta_dir}/{file}.npy', image_features.to("cpu").detach().numpy().copy())
-                metas[filename] = loadMeta(search_model_meta_dir, filename)
+                np.save(f'{search_model_meta_dir}/{file}.npy', image_features)
+                metas[file] = image_features
             
             imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
             index_item_list[imege_id] = {"path":file}
+            
+        # a = [(args, device, search_model, preprocess, search_model_meta_dir, f) for f in pbar]
+        # with Pool(processes=4) as p:
+        #     imap = p.imap(func=wrap_index_run, iterable=a)
+        #     list(tqdm(imap, total=len(a)))
+        
+        # for _, file in enumerate(pbar):
+        #     metas[file] = loadMeta(search_model_meta_dir, file)
+        #     imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
+        #     index_item_list[imege_id] = {"path":file}
             
 
         with open(f'{search_model_meta_dir}/{metasPickleFile}', 'wb') as f:
@@ -152,7 +180,6 @@ def main():
             image_features = torch.from_numpy(loadMeta(f"{args.meta_dir}/ViT-L-14-336-openai", file))
             image_features /= image_features.norm(dim=-1, keepdim=True)
             aesthetic_quality = amodel(image_features).item()
-            print(aesthetic_quality)
             imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
             aesthetic_quality_json_dict[imege_id] = {"path":file,"aesthetic_quality": aesthetic_quality}
 
