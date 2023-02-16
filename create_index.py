@@ -21,8 +21,6 @@ from urllib.request import urlretrieve  # pylint: disable=import-outside-topleve
 metasPickleFile = "metafiles.pickle"
 metasFaissIndexFile = "metafiles.index"
 
-def loadMeta(meta_dir, image_path):
-    return np.load(f'{meta_dir}/{image_path}.npy')
 
 def get_aesthetic_model(clip_model="vit_l_14"):
     """load the aethetic model"""
@@ -46,30 +44,16 @@ def get_aesthetic_model(clip_model="vit_l_14"):
     m.eval()
     return m
 
-def index_run(args, device, search_model, preprocess, search_model_meta_dir, file):
-    try:
-        image_features = loadMeta(search_model_meta_dir, file)
-    except:
-        data = Image.open(f'{args.image_dir}/{file}')
-        image_input = preprocess(data).unsqueeze(0).to(device)
-        image_features = search_model.encode_image(image_input).to("cpu").detach().numpy().copy()
-
-        os.makedirs(f'{search_model_meta_dir}/{os.path.split(file)[0]}', exist_ok=True)
-        np.save(f'{search_model_meta_dir}/{file}.npy', image_features)
-
-def wrap_index_run(args):
-    return index_run(*args)
-
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image_dir", help="dir", default="./images")
     parser.add_argument("--meta_dir", help="dir", default="./meta")
-    parser.add_argument("--search_model_name", help="model_name", default="ViT-B-32")
-    parser.add_argument("--search_model_pretrained", help="pretrained", default="laion2b_s34b_b79k")
+    parser.add_argument("--search_model_name", help="model_name", default="ViT-L-14-336")
+    parser.add_argument("--search_model_pretrained", help="pretrained", default="openai")
     parser.add_argument("--caption_model_name", help="model_name", default="coca_ViT-L-14")
     parser.add_argument("--caption_model_pretrained", help="pretrained", default="laion2B-s13B-b90k")
-    parser.add_argument("--nlist", help="nlist", default=16)
+    parser.add_argument("--nlist", help="nlist", default=64)
     parser.add_argument("--M", help="M", default=256)
     parser.add_argument("--bits_per_code", help="bits_per_code", default=4)
     parser.add_argument("--metas_pickle_file_name", help="metas_pickle_file_name", default="metafiles.pickle")
@@ -123,33 +107,29 @@ def main():
         metas = {}
 
         for file in pbar:
+            meta_path = f'{search_model_meta_dir}/{file}.npy'
+            
+            if os.path.isfile(meta_path):
+                try:
+                    metas[file] = np.load(meta_path)
+                    continue
+                except:
+                    pass
             try:
-                metas[file] = loadMeta(search_model_meta_dir, file)
-            except:
                 data = Image.open(f'{args.image_dir}/{file}')
                 image_input = preprocess(data).unsqueeze(0).to(device)
                 image_features = search_model.encode_image(image_input).to("cpu").detach().numpy().copy()
-                try:
-                    os.makedirs(f'{search_model_meta_dir}/{os.path.split(file)[0]}')
-                except:
-                    pass
+                os.makedirs(f'{search_model_meta_dir}/{os.path.split(file)[0]}', exist_ok=True)
                 np.save(f'{search_model_meta_dir}/{file}.npy', image_features)
                 metas[file] = image_features
-            
+            except:
+                print(file)
+                continue
+        
+        for file in tqdm(metas.keys()):
             imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
             index_item_list[imege_id] = {"path":file}
-            
-        # a = [(args, device, search_model, preprocess, search_model_meta_dir, f) for f in pbar]
-        # with Pool(processes=4) as p:
-        #     imap = p.imap(func=wrap_index_run, iterable=a)
-        #     list(tqdm(imap, total=len(a)))
         
-        # for _, file in enumerate(pbar):
-        #     metas[file] = loadMeta(search_model_meta_dir, file)
-        #     imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
-        #     index_item_list[imege_id] = {"path":file}
-            
-
         with open(f'{search_model_meta_dir}/{metasPickleFile}', 'wb') as f:
             pickle.dump(metas, f)
 
@@ -177,9 +157,14 @@ def main():
         amodel.eval()
 
         for file in tqdm(metas.keys()):
-            image_features = torch.from_numpy(loadMeta(f"{args.meta_dir}/ViT-L-14-336-openai", file))
-            image_features /= image_features.norm(dim=-1, keepdim=True)
-            aesthetic_quality = amodel(image_features).item()
+            try:
+                meta_path = f"{args.meta_dir}/ViT-L-14-336-openai/{file}.npy"
+
+                image_features = torch.from_numpy(np.load(meta_path))
+                image_features /= image_features.norm(dim=-1, keepdim=True)
+                aesthetic_quality = amodel(image_features).item()
+            except:
+                aesthetic_quality: float = 0.0
             imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
             aesthetic_quality_json_dict[imege_id] = {"path":file,"aesthetic_quality": aesthetic_quality}
 

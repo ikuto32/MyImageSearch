@@ -22,8 +22,8 @@ new Vue({
 		isShowSetting: false,
 		isRegexp: false,
 		image_size: 250,
-		model_name: "ViT-B-32",
-		pretrained: "laion2b_s34b_b79k",
+		model_name: "ViT-L-14-336",
+		pretrained: "openai",
 		showedItemIndex: 0,
 
 		/**
