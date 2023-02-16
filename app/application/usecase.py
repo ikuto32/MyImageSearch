@@ -61,7 +61,7 @@ class Usecase:
 
     
 
-    def eval(self, item_list: list[ImageItem], index, features, result_size=2048) -> list[ResultImageItem]:
+    def eval(self, item_list: list[ImageItem], index, features, result_size=1000) -> list[ResultImageItem]:
 
         faiss.normalize_L2(features)
         if result_size > len(item_list):
@@ -102,7 +102,9 @@ class Usecase:
                                                    index=index, features=features)
         
         aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list()
-        scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score * aesthetic_quality_item[i.item.id])), scores))
+
+        beta: float = 0.05
+        scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score + aesthetic_quality_item[i.item.id]*beta)), scores))
 
         return scores
 
@@ -118,7 +120,7 @@ class Usecase:
         temp = []
         for select_image_id in id_list:
             # テキストの埋め込みを計算
-            load_image = self._repository.load_image(
+            load_image: Image = self._repository.load_image(
                 select_image_id).to_ptl_image()
             image = preprocess(load_image).unsqueeze(0).to("cpu")
             meta = model.encode_image(image).to("cpu").detach().numpy().copy()
@@ -134,7 +136,8 @@ class Usecase:
                                                    index=index, features=features)
         
         aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list()
-        scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score * aesthetic_quality_item[i.item.id])), scores))
+        beta: float = 0.05
+        scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score + aesthetic_quality_item[i.item.id]*beta)), scores))
         return scores
 
     def search_name(self, text: UploadText, is_regexp: bool) -> list[ResultImageItem]:
@@ -154,8 +157,6 @@ class Usecase:
                 scores.append(ResultImageItem(image_item, Score(1.0)))
             else:
                 scores.append(ResultImageItem(image_item, Score(0.0)))
-        aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list()
-        scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score * aesthetic_quality_item[i.item.id])), scores))
         return scores
 
     def search_upload_image(self, model_id: ModelId, image: UploadImage) -> list[ResultImageItem]:

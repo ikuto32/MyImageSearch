@@ -4,7 +4,7 @@ import urllib.request
 import tqdm
 
 def main():
-    for i in tqdm.tqdm(range(1000)):
+    for i in tqdm.tqdm(range(30000)):
         try:
             with urllib.request.urlopen('https://source.unsplash.com/random') as web_file:
                 data = web_file.read()

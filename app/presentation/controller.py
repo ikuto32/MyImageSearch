@@ -31,7 +31,7 @@ def start_app(in_usecase: Usecase):
 
     # Flask実行
     print(app.url_map)
-    app.run(debug=False)
+    app.run(debug=False, port=80, host="0.0.0.0")
 
 
 # ============================================================
@@ -70,7 +70,7 @@ def resource(terget: str):
 def get_all_image_item():
     """画像項目をすべて返す"""
 
-    return from_image_item_list_to_json(usecase.get_all_image_item())
+    return from_image_item_list_to_json(usecase.get_all_image_item()[0:10000])
 
 
 @app.route("/image_item/<id>")
