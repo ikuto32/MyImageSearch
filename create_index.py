@@ -5,7 +5,6 @@ import json
 from multiprocessing import Pool
 import os
 import pathlib
-import shutil
 import numpy as np
 import torch
 from PIL import Image
@@ -17,6 +16,8 @@ import faiss
 import torch.nn as nn
 from os.path import expanduser  # pylint: disable=import-outside-toplevel
 from urllib.request import urlretrieve  # pylint: disable=import-outside-toplevel
+import asyncio
+
 
 metasPickleFile = "metafiles.pickle"
 metasFaissIndexFile = "metafiles.index"
@@ -45,14 +46,30 @@ def get_aesthetic_model(clip_model="vit_l_14"):
     return m
 
 
-def main():
+async def create_meta_file(args, search_model_meta_dir, file, search_model, preprocess, device):
+    meta_path = f'{search_model_meta_dir}/{file}.npy'
+    if os.path.isfile(meta_path):
+        try:
+            return file, np.load(meta_path)
+        except:
+            pass
+    try:
+        data = Image.open(f'{args.image_dir}/{file}')
+        image_input = preprocess(data).unsqueeze(0).to(device)
+        image_features = search_model.encode_image(image_input).to("cpu").detach().numpy().copy()
+        os.makedirs(f'{search_model_meta_dir}/{os.path.split(file)[0]}', exist_ok=True)
+        np.save(f'{search_model_meta_dir}/{file}.npy', image_features)
+        return file, image_features
+    except:
+        print(file)
+        return None, None
+
+async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image_dir", help="dir", default="./images")
     parser.add_argument("--meta_dir", help="dir", default="./meta")
     parser.add_argument("--search_model_name", help="model_name", default="ViT-L-14-336")
     parser.add_argument("--search_model_pretrained", help="pretrained", default="openai")
-    parser.add_argument("--caption_model_name", help="model_name", default="coca_ViT-L-14")
-    parser.add_argument("--caption_model_pretrained", help="pretrained", default="laion2B-s13B-b90k")
     parser.add_argument("--nlist", help="nlist", default=16)
     parser.add_argument("--M", help="M", default=256)
     parser.add_argument("--bits_per_code", help="bits_per_code", default=4)
@@ -87,12 +104,6 @@ def main():
         device=device,
         jit=True
     )
-    
-    caption_model, _, transform = open_clip.create_model_and_transforms(
-        model_name=args.caption_model_name,
-        pretrained=args.caption_model_pretrained,
-        device=device
-    )
 
     print("mkdir")
 
@@ -106,26 +117,18 @@ def main():
         index_item_list = {}
         metas = {}
 
+        tasks = []
+        metas = {}
         for file in pbar:
-            meta_path = f'{search_model_meta_dir}/{file}.npy'
-            
-            if os.path.isfile(meta_path):
-                try:
-                    metas[file] = np.load(meta_path)
-                    continue
-                except:
-                    pass
-            try:
-                data = Image.open(f'{args.image_dir}/{file}')
-                image_input = preprocess(data).unsqueeze(0).to(device)
-                image_features = search_model.encode_image(image_input).to("cpu").detach().numpy().copy()
-                os.makedirs(f'{search_model_meta_dir}/{os.path.split(file)[0]}', exist_ok=True)
-                np.save(f'{search_model_meta_dir}/{file}.npy', image_features)
-                metas[file] = image_features
-            except:
-                print(file)
-                continue
+            tasks.append(asyncio.create_task(create_meta_file(args, search_model_meta_dir, file, search_model, preprocess, device)))
+            await asyncio.sleep(0.0001)
         
+        for i, _ in enumerate(pbar):
+            file, meta = await tasks[i]
+            if file:
+                metas[file] = meta
+
+
         for file in tqdm(metas.keys()):
             imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
             index_item_list[imege_id] = {"path":file}
@@ -136,20 +139,6 @@ def main():
         with open(f'{args.meta_dir}/index_item_list.json', 'w') as f:
             json.dump(index_item_list, f)
         
-        # display_name_json_dict = {}
-        # for file in tqdm(metas.keys()):
-        #     data = Image.open(f'{args.image_dir}/{file}')
-        #     data = transform(data).unsqueeze(0).to(device)
-        #     generated = caption_model.generate(data)
-        #     display_name = open_clip.decode(generated[0]).split("<end_of_text>")[0].replace("<start_of_text>", "")
-        #     print(display_name)
-        #     imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
-        #     display_name_json_dict[imege_id] = {"path":file,"display_name": display_name}
-
-        # with open(f'{args.meta_dir}/display_name.json', 'w') as f:
-        #     json.dump(display_name_json_dict, f)
-
-
 
         aesthetic_quality_json_dict = {}
 
@@ -190,4 +179,4 @@ def main():
                 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
