@@ -64,15 +64,16 @@ class Usecase:
     def eval(self, item_list: list[ImageItem], index, features, result_size=1000) -> list[ResultImageItem]:
 
         faiss.normalize_L2(features)
-        if result_size > len(item_list):
-            result_size = len(item_list)
+        item_list_len: int = len(item_list)
+        if result_size > item_list_len:
+            result_size = item_list_len
 
         index.nprobe = 64
 
         print(index.ntotal)
         D, I = index.search(features, k=result_size)
 
-        temp: list[int] = [0 for _ in item_list]
+        temp: list[int] = [0 for _ in range(item_list_len)]
         sorted_item_list: list[ImageItem] = sorted(
             item_list, key=lambda x: x.display_name.name)
         for i, d in zip(I, D):

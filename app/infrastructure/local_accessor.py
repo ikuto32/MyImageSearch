@@ -47,14 +47,18 @@ class LocalAccessor(Accessor):
 
     @cache
     def load_index_item_list(self) -> list[ImageItem]:
+        print("start:load_index_item_list")
         with open(f'{self._meta_dir_path}/{"index_item_list.json"}', 'r') as f:
             json_dict = json.load(f)
             image_item: list[ImageItem] = [ImageItem(id=ImageId(id), display_name=ImageName(json_dict[id]["path"])) for id in json_dict]
+        print("end:load_index_item_list")
         return image_item
 
     @cache
     def load_aesthetic_quality_list(self) -> dict[ImageId, float]:
+        print("start:load_aesthetic_quality_list")
         with open(f'{self._meta_dir_path}/{"aesthetic_quality.json"}', 'r') as f:
             json_dict = json.load(f)
             aesthetic_quality_item: dict[ImageId, float] = {ImageId(id=str(id)):float(json_dict[id]["aesthetic_quality"]) for id in json_dict}
+        print("end:load_aesthetic_quality_list")
         return aesthetic_quality_item
