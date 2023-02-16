@@ -11,8 +11,8 @@ from app.application import usecase
 def main():
 
     #コンフィグ
-    image_dir_path: pathlib.Path =pathlib.Path('C:/Users/ikuto/projects/test_dataset/pokemon2')
-    meta_dir_path: pathlib.Path=pathlib.Path('C:/Users/ikuto/projects/test_dataset/meta')
+    image_dir_path: pathlib.Path =pathlib.Path('./images')
+    meta_dir_path: pathlib.Path=pathlib.Path('./meta')
 
     #TODO 使用するパッケージをインストールすることが手間であるため、ダミーを使用している。
     accessor: LocalAccessor = LocalAccessor(meta_dir_path)

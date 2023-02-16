@@ -53,7 +53,7 @@ def main():
     parser.add_argument("--search_model_pretrained", help="pretrained", default="openai")
     parser.add_argument("--caption_model_name", help="model_name", default="coca_ViT-L-14")
     parser.add_argument("--caption_model_pretrained", help="pretrained", default="laion2B-s13B-b90k")
-    parser.add_argument("--nlist", help="nlist", default=64)
+    parser.add_argument("--nlist", help="nlist", default=16)
     parser.add_argument("--M", help="M", default=256)
     parser.add_argument("--bits_per_code", help="bits_per_code", default=4)
     parser.add_argument("--metas_pickle_file_name", help="metas_pickle_file_name", default="metafiles.pickle")
