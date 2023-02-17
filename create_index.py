@@ -2,13 +2,13 @@ import csv
 import hashlib
 import itertools
 import json
-from multiprocessing import Pool
 import os
 import pathlib
+import sqlite3
 import numpy as np
 import torch
 from PIL import Image
-from tqdm import tqdm
+import tqdm
 import argparse
 import pickle
 import open_clip
@@ -17,6 +17,7 @@ import torch.nn as nn
 from os.path import expanduser  # pylint: disable=import-outside-toplevel
 from urllib.request import urlretrieve  # pylint: disable=import-outside-toplevel
 import asyncio
+import pandas as pd
 
 
 metasPickleFile = "metafiles.pickle"
@@ -46,23 +47,25 @@ def get_aesthetic_model(clip_model="vit_l_14"):
     return m
 
 
-async def create_meta_file(args, search_model_meta_dir, file, search_model, preprocess, device):
-    meta_path = f'{search_model_meta_dir}/{file}.npy'
+def create_meta_file(args, search_model_meta_dir, file, search_model, preprocess, device):
+    
+    meta_path: str = f'{search_model_meta_dir}/{file}.npy'
+
     if os.path.isfile(meta_path):
         try:
-            return file, np.load(meta_path)
+            return np.load(meta_path)
         except:
             pass
     try:
         data = Image.open(f'{args.image_dir}/{file}')
         image_input = preprocess(data).unsqueeze(0).to(device)
         image_features = search_model.encode_image(image_input).to("cpu").detach().numpy().copy()
-        os.makedirs(f'{search_model_meta_dir}/{os.path.split(file)[0]}', exist_ok=True)
+        os.makedirs(f'{search_model_meta_dir}/{os.path.split(file)[0]}')
         np.save(f'{search_model_meta_dir}/{file}.npy', image_features)
-        return file, image_features
+        return image_features
     except:
         print(file)
-        return None, None
+        return None
 
 async def main():
     parser = argparse.ArgumentParser()
@@ -70,14 +73,13 @@ async def main():
     parser.add_argument("--meta_dir", help="dir", default="./meta")
     parser.add_argument("--search_model_name", help="model_name", default="ViT-L-14-336")
     parser.add_argument("--search_model_pretrained", help="pretrained", default="openai")
-    parser.add_argument("--nlist", help="nlist", default=16)
-    parser.add_argument("--M", help="M", default=256)
+    parser.add_argument("--nlist", help="nlist", default=64)
+    parser.add_argument("--M", help="M", default=128)
     parser.add_argument("--bits_per_code", help="bits_per_code", default=4)
     parser.add_argument("--metas_pickle_file_name", help="metas_pickle_file_name", default="metafiles.pickle")
     parser.add_argument("--metas_faiss_index_file_name", help="metas_faiss_index_file_name", default="metafiles.index")
     args = parser.parse_args()
     search_model_meta_dir: str = f"{args.meta_dir}/{args.search_model_name}-{args.search_model_pretrained}"
-    print("load")
     
     metasPickleFile = args.metas_pickle_file_name
     metasFaissIndexFile = args.metas_faiss_index_file_name
@@ -93,10 +95,23 @@ async def main():
 
     files_list: list[str]= sorted(map(lambda f: str(f.relative_to(dirPath)), files))
 
+    print(len(files_list))
+
+    print("load_db")
+    con = sqlite3.connect("./sqlite_example.db")
+    cur = con.cursor()
+    cur.execute("""
+                create table if not exists image_meta(
+                  image_id text PRIMARY KEY,
+                  image_path text,
+                  meta blob,
+                  aesthetic_quality integer
+                )""")
 
     # GPUが使用可能か
     device= "cuda" if torch.cuda.is_available() else "cpu"
     # モデルの読み込み
+    print("load_model")
 
     search_model, _, preprocess = open_clip.create_model_and_transforms(
         args.search_model_name, 
@@ -104,64 +119,56 @@ async def main():
         device=device,
         jit=True
     )
-
-    print("mkdir")
-
-    #ディレクトリを初期化
-    # os.remove(args.meta_dir)
-    # shutil.rmtree(args.meta_dir)
-    # os.mkdir(args.meta_dir)
     
     with torch.no_grad():
-        pbar: tqdm[str] = tqdm(files_list)
-        index_item_list = {}
-        metas = {}
-
-        tasks = []
-        metas = {}
-        for file in pbar:
-            tasks.append(asyncio.create_task(create_meta_file(args, search_model_meta_dir, file, search_model, preprocess, device)))
-            await asyncio.sleep(0.0001)
+        index_item_list = []
         
-        for i, _ in enumerate(pbar):
-            file, meta = await tasks[i]
-            if file:
-                metas[file] = meta
 
-
-        for file in tqdm(metas.keys()):
+        for file in tqdm.tqdm(files_list):
             imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
-            index_item_list[imege_id] = {"path":file}
-        
-        with open(f'{search_model_meta_dir}/{metasPickleFile}', 'wb') as f:
-            pickle.dump(metas, f)
+            index_item_list.append((imege_id, file))
 
-        with open(f'{args.meta_dir}/index_item_list.json', 'w') as f:
-            json.dump(index_item_list, f)
+        cur.executemany("insert into image_meta(image_id, image_path) values(?,?) on conflict(image_id) do nothing", index_item_list)
+        con.commit()
+        null_ids: pd.DataFrame = pd.read_sql_query('select * from image_meta where meta IS NULL', con)
+        
+        pbar = tqdm.tqdm(zip(null_ids["image_id"], null_ids["image_path"]))
+        for image_id, image_path in pbar:
+            meta = create_meta_file(args, search_model_meta_dir, image_path, search_model, preprocess, device)
+            a = (meta.tobytes(), str(image_id))
+            cur.execute("update image_meta set meta=? where image_id=?", a)
+        
+        con.commit()
+        
         
 
+        print("aesthetic_quality")
         aesthetic_quality_json_dict = {}
 
         amodel= get_aesthetic_model(clip_model="vit_l_14")
         amodel.eval()
-
-        for file in tqdm(metas.keys()):
+        null_ids: pd.DataFrame = pd.read_sql_query('select * from image_meta where aesthetic_quality IS NULL', con)
+        pbar = tqdm.tqdm(zip(null_ids["image_id"], null_ids["image_path"]))
+        for image_id, image_path in pbar:
             try:
-                meta_path = f"{args.meta_dir}/ViT-L-14-336-openai/{file}.npy"
+                meta_path = f"{args.meta_dir}/ViT-L-14-336-openai/{image_path}.npy"
 
                 image_features = torch.from_numpy(np.load(meta_path))
                 image_features /= image_features.norm(dim=-1, keepdim=True)
                 aesthetic_quality = amodel(image_features).item()
             except:
                 aesthetic_quality: float = 0.0
-            imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
-            aesthetic_quality_json_dict[imege_id] = {"path":file,"aesthetic_quality": aesthetic_quality}
+            a = (aesthetic_quality, str(image_id))
+            cur.execute("update image_meta set aesthetic_quality=? where image_id=?", a)
 
-        with open(f'{args.meta_dir}/aesthetic_quality.json', 'w') as f:
-            json.dump(aesthetic_quality_json_dict, f)
+        con.commit()
         
         print("createIndexFile")
-        metalist = list(metas.values())
+        db: pd.DataFrame = pd.read_sql_query('select * from image_meta', con)
+        con.close()
+
+        metalist = [np.frombuffer(i) for i in db["meta"]]
+
         a = np.squeeze(np.asarray(metalist)).astype(np.float32)
         faiss.normalize_L2(a)
         dim: int = a.shape[1]
