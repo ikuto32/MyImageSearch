@@ -16,27 +16,27 @@ class Accessor():
         pass
 
     @abstractmethod
-    def load_index_file(self, id: ModelId) -> Any:
+    def load_index_file(self, model_id: ModelId) -> Any:
         """外部から対応したインデックスを読み込む"""
 
         pass
 
     @abstractmethod
-    def load_model(self, id: ModelId) -> Model:
+    def load_model(self, model_id: ModelId) -> Model:
 
         pass
 
     @abstractmethod
-    def load_tokenizer(self, id: ModelId) -> Tokenizer:
+    def load_tokenizer(self, model_id: ModelId) -> Tokenizer:
 
         pass
 
     @abstractmethod
-    def load_index_item_list(self) -> list[ImageItem]:
+    def load_index_item_list(self, model_id: ModelId) -> list[ImageItem]:
 
         pass
 
     @abstractmethod
-    def load_aesthetic_quality_list(self) -> dict[ImageId, float]:
+    def load_aesthetic_quality_list(self, model_id: ModelId) -> dict[ImageId, float]:
 
         pass

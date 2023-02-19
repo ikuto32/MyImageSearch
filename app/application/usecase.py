@@ -61,7 +61,7 @@ class Usecase:
 
     
 
-    def eval(self, item_list: list[ImageItem], index, features, result_size=1000) -> list[ResultImageItem]:
+    def eval(self, item_list: list[ImageItem], index, features, result_size=2048) -> list[ResultImageItem]:
 
         faiss.normalize_L2(features)
         item_list_len: int = len(item_list)
@@ -99,10 +99,10 @@ class Usecase:
         index = self._accessor.load_index_file(model_id)
 
         # 類似度を計算する
-        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(),
+        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(model_id),
                                                    index=index, features=features)
         
-        aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list()
+        aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list(model_id)
 
         beta: float = 0.05
         scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score + aesthetic_quality_item[i.item.id]*beta)), scores))
@@ -121,7 +121,7 @@ class Usecase:
         temp = []
         for select_image_id in id_list:
             # テキストの埋め込みを計算
-            load_image: Image = self._repository.load_image(
+            load_image = self._repository.load_image(
                 select_image_id).to_ptl_image()
             image = preprocess(load_image).unsqueeze(0).to("cpu")
             meta = model.encode_image(image).to("cpu").detach().numpy().copy()
@@ -133,10 +133,10 @@ class Usecase:
         index = self._accessor.load_index_file(model_id)
 
         # 類似度を計算する
-        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(),
+        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(model_id),
                                                    index=index, features=features)
         
-        aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list()
+        aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list(model_id)
         beta: float = 0.05
         scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score + aesthetic_quality_item[i.item.id]*beta)), scores))
         return scores

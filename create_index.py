@@ -59,9 +59,7 @@ def create_meta_file(args, search_model_meta_dir, file, search_model, preprocess
     try:
         data = Image.open(f'{args.image_dir}/{file}')
         image_input = preprocess(data).unsqueeze(0).to(device)
-        image_features = search_model.encode_image(image_input).to("cpu").detach().numpy().copy()
-        os.makedirs(f'{search_model_meta_dir}/{os.path.split(file)[0]}')
-        np.save(f'{search_model_meta_dir}/{file}.npy', image_features)
+        image_features = search_model.encode_image(image_input).to("cpu").detach().numpy().copy().astype(np.float32)
         return image_features
     except:
         print(file)
@@ -70,18 +68,16 @@ def create_meta_file(args, search_model_meta_dir, file, search_model, preprocess
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="./meta")
+    parser.add_argument("--meta_dir", help="dir", default="F:/dataset/clip_meta")
     parser.add_argument("--search_model_name", help="model_name", default="ViT-L-14-336")
     parser.add_argument("--search_model_pretrained", help="pretrained", default="openai")
     parser.add_argument("--nlist", help="nlist", default=64)
     parser.add_argument("--M", help="M", default=128)
     parser.add_argument("--bits_per_code", help="bits_per_code", default=4)
-    parser.add_argument("--metas_pickle_file_name", help="metas_pickle_file_name", default="metafiles.pickle")
     parser.add_argument("--metas_faiss_index_file_name", help="metas_faiss_index_file_name", default="metafiles.index")
     args = parser.parse_args()
     search_model_meta_dir: str = f"{args.meta_dir}/{args.search_model_name}-{args.search_model_pretrained}"
     
-    metasPickleFile = args.metas_pickle_file_name
     metasFaissIndexFile = args.metas_faiss_index_file_name
     
     print("files")
@@ -98,14 +94,14 @@ async def main():
     print(len(files_list))
 
     print("load_db")
-    con = sqlite3.connect("./sqlite_example.db")
-    cur = con.cursor()
+    con: sqlite3.Connection = sqlite3.connect(f"{search_model_meta_dir}/sqlite_image_meta.db", isolation_level="DEFERRED")
+    cur: sqlite3.Cursor = con.cursor()
     cur.execute("""
                 create table if not exists image_meta(
                   image_id text PRIMARY KEY,
                   image_path text,
                   meta blob,
-                  aesthetic_quality integer
+                  aesthetic_quality real
                 )""")
 
     # GPUが使用可能か
@@ -121,55 +117,89 @@ async def main():
     )
     
     with torch.no_grad():
-        index_item_list = []
-        
 
+        index_item_list: dict[str, str] = {}
+        
         for file in tqdm.tqdm(files_list):
-            imege_id: str = hashlib.sha256(str(file).encode()).hexdigest()
-            index_item_list.append((imege_id, file))
+            image_id: str = hashlib.sha256(str(file).encode()).hexdigest()
+            index_item_list[image_id] = file
 
-        cur.executemany("insert into image_meta(image_id, image_path) values(?,?) on conflict(image_id) do nothing", index_item_list)
-        con.commit()
-        null_ids: pd.DataFrame = pd.read_sql_query('select * from image_meta where meta IS NULL', con)
-        
-        pbar = tqdm.tqdm(zip(null_ids["image_id"], null_ids["image_path"]))
-        for image_id, image_path in pbar:
-            meta = create_meta_file(args, search_model_meta_dir, image_path, search_model, preprocess, device)
-            a = (meta.tobytes(), str(image_id))
-            cur.execute("update image_meta set meta=? where image_id=?", a)
-        
-        con.commit()
-        
-        
 
-        print("aesthetic_quality")
-        aesthetic_quality_json_dict = {}
+        id_list: list[str] = list(index_item_list.keys())
+        
+        temp = []
+        n = 10000
+        for i in tqdm.tqdm(range(0, len(id_list), n)):
+            placeholder: str = ",".join(["(?)"] * len(id_list[i:i + n]))
+            result: pd.DataFrame = pd.read_sql_query(f"""
+
+                /* 有効なIDの導出テーブル */
+                WITH valid_id_table(valid_id) AS (
+                VALUES 
+                    {placeholder}
+                )
+
+                /* 有効なIDと突合する。 不足している場合、 その値は、nullになる。 */
+                SELECT 
+                    valid_id_table.valid_id,
+                    image_meta.image_path,
+                    image_meta.meta,
+                    image_meta.aesthetic_quality
+                FROM
+                    valid_id_table
+                    LEFT OUTER JOIN image_meta
+                    ON valid_id_table.valid_id = image_meta.image_id
+
+            """, con, params=id_list[i:i + n])
+            temp.append(result)
+
+        result = pd.concat(temp)
 
         amodel= get_aesthetic_model(clip_model="vit_l_14")
         amodel.eval()
-        null_ids: pd.DataFrame = pd.read_sql_query('select * from image_meta where aesthetic_quality IS NULL', con)
-        pbar = tqdm.tqdm(zip(null_ids["image_id"], null_ids["image_path"]))
-        for image_id, image_path in pbar:
-            try:
-                meta_path = f"{args.meta_dir}/ViT-L-14-336-openai/{image_path}.npy"
 
-                image_features = torch.from_numpy(np.load(meta_path))
+        search_meta_list = []
+
+        pbar = tqdm.tqdm(zip(result["valid_id"], result["meta"]), total=len(result["valid_id"]))
+        for i, (image_id, meta) in enumerate(pbar):
+
+            if meta != None:
+                search_meta_list.append(np.frombuffer(meta, dtype=np.float32))
+                continue
+
+            image_path = index_item_list[image_id]
+
+            new_search_meta = create_meta_file(args, search_model_meta_dir, image_path, search_model, preprocess, device)
+
+            if type(new_search_meta).__module__ != "numpy":
+                continue
+                
+            search_meta_list.append(new_search_meta)
+            new_search_meta_bytes = new_search_meta.tobytes()
+
+            quality_meta_path = f"{args.meta_dir}/ViT-L-14-336-openai/{image_path}.npy"
+            try:
+                new_quality_meta = np.load(quality_meta_path)
+                image_features = torch.from_numpy(new_quality_meta)
                 image_features /= image_features.norm(dim=-1, keepdim=True)
                 aesthetic_quality = amodel(image_features).item()
             except:
                 aesthetic_quality: float = 0.0
-            a = (aesthetic_quality, str(image_id))
-            cur.execute("update image_meta set aesthetic_quality=? where image_id=?", a)
+
+            
+            param = (image_id, image_path, new_search_meta_bytes, aesthetic_quality)
+            cur.execute("insert into image_meta values(?, ?, ?, ?)", param)
+
+            if i%1000 == 0:
+                print("commit")
+                con.commit()
+            
 
         con.commit()
-        
-        print("createIndexFile")
-        db: pd.DataFrame = pd.read_sql_query('select * from image_meta', con)
         con.close()
+        
 
-        metalist = [np.frombuffer(i) for i in db["meta"]]
-
-        a = np.squeeze(np.asarray(metalist)).astype(np.float32)
+        a = np.squeeze(np.asarray(search_meta_list)).astype(np.float32)
         faiss.normalize_L2(a)
         dim: int = a.shape[1]
         q = faiss.IndexFlatIP(dim)
