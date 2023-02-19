@@ -68,7 +68,7 @@ def create_meta_file(args, search_model_meta_dir, file, search_model, preprocess
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="F:/dataset/clip_meta")
+    parser.add_argument("--meta_dir", help="dir", default="./meta")
     parser.add_argument("--search_model_name", help="model_name", default="ViT-L-14-336")
     parser.add_argument("--search_model_pretrained", help="pretrained", default="openai")
     parser.add_argument("--nlist", help="nlist", default=64)
