@@ -1,11 +1,13 @@
 
 from functools import cache
 import json
+import sqlite3
 from typing import Any
 
 import pathlib
 
 import numpy as np
+import pandas as pd
 import torch
 import faiss
 import open_clip
@@ -29,36 +31,41 @@ class LocalAccessor(Accessor):
         return np.load(f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/{image_id}.npy')
 
     @cache
-    def load_index_file(self, id: ModelId) -> Any:
+    def load_index_file(self, model_id: ModelId) -> Any:
 
         index = faiss.read_index(
-            f'{self._meta_dir_path}/{id.model_name}-{id.pretrained}/{"metafiles.index"}')
+            f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/{"metafiles.index"}')
         return index
 
     @cache
-    def load_model(self, id: ModelId) -> Model:
+    def load_model(self, model_id: ModelId) -> Model:
 
-        model_name, pretrained = id.model_name, id.pretrained
+        model_name, pretrained = model_id.model_name, model_id.pretrained
         return Model(open_clip.create_model_and_transforms(model_name, pretrained=pretrained))
 
     @cache
-    def load_tokenizer(self, id: ModelId) -> Tokenizer:
-        return Tokenizer(open_clip.get_tokenizer(id.model_name))
+    def load_tokenizer(self, model_id: ModelId) -> Tokenizer:
+        return Tokenizer(open_clip.get_tokenizer(model_id.model_name))
 
     @cache
-    def load_index_item_list(self) -> list[ImageItem]:
+    def load_index_item_list(self, model_id: ModelId) -> list[ImageItem]:
         print("start:load_index_item_list")
-        with open(f'{self._meta_dir_path}/{"index_item_list.json"}', 'r') as f:
-            json_dict = json.load(f)
-            image_item: list[ImageItem] = [ImageItem(id=ImageId(id), display_name=ImageName(json_dict[id]["path"])) for id in json_dict]
+        con: sqlite3.Connection = sqlite3.connect(f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db', isolation_level="DEFERRED")
+        result: pd.DataFrame = pd.read_sql_query("""
+            SELECT image_id, image_path FROM image_meta
+            """, con)
+        sorted_result: pd.DataFrame= result.sort_values('image_path').reset_index()
         print("end:load_index_item_list")
+        image_item: list[ImageItem] = [ImageItem(id=ImageId(sorted_result.iat[index, 1]), display_name=ImageName(sorted_result.iat[index, 2])) for index, _ in enumerate(sorted_result["image_id"])]
         return image_item
 
     @cache
-    def load_aesthetic_quality_list(self) -> dict[ImageId, float]:
+    def load_aesthetic_quality_list(self, model_id: ModelId) -> dict[ImageId, float]:
         print("start:load_aesthetic_quality_list")
-        with open(f'{self._meta_dir_path}/{"aesthetic_quality.json"}', 'r') as f:
-            json_dict = json.load(f)
-            aesthetic_quality_item: dict[ImageId, float] = {ImageId(id=str(id)):float(json_dict[id]["aesthetic_quality"]) for id in json_dict}
+        con: sqlite3.Connection = sqlite3.connect(f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db', isolation_level="DEFERRED")
+        result: pd.DataFrame = pd.read_sql_query("""
+            SELECT image_id, aesthetic_quality FROM image_meta
+            """, con)
+        aesthetic_quality_item: dict[ImageId, float] = {ImageId(id=str(id)):float(q) for id, q in zip(result["image_id"], result["aesthetic_quality"])}
         print("end:load_aesthetic_quality_list")
         return aesthetic_quality_item
