@@ -3,6 +3,7 @@ import hashlib
 import itertools
 import pathlib
 import mimetypes
+from typing import List
 
 import torch
 
@@ -25,31 +26,21 @@ class LocalRepository(Repository):
         self._id_to_path : dict[ImageId, pathlib.Path] = {}
 
 
-    def load_all_image_item(self) -> list[ImageItem]:
-        
-        #一覧取得
-        files : list[pathlib.Path] = []
-        extensions: list[str] = ["png", "jpg", "gif", "webp"]
-  
+    def load_all_image_item(self) -> List[ImageItem]:
+        # Define a function to create ImageItem from a file
+        def create_image_item(file: pathlib.Path) -> ImageItem:
+            relative_file = file.relative_to(self._image_dir_path)
+            id = ImageId(hashlib.sha256(str(relative_file).encode()).hexdigest())
+            self._id_to_path[id] = relative_file
+            return ImageItem(id, ImageName(str(relative_file)))
+
+        # Get all files with specified extensions
+        extensions = ["png", "jpg", "gif", "webp"]
         files = itertools.chain.from_iterable(self._image_dir_path.glob(f'**/*.{e}') for e in extensions)
-        #相対パスに変換
-        files = list(map(lambda f: f.relative_to(self._image_dir_path), files))
 
-        #辞書順に並び替え
-        files = sorted(files)
-
-        #PathからIDを決定し、Itemに変換
-        items : list[ImageItem] = []
-        for f in files:
-
-            #ID生成
-            id : ImageId = ImageId(hashlib.sha256(str(f).encode()).hexdigest())
-            
-            #IDとPathの対応を記録
-            self._id_to_path[id] = f
-
-            #Itemに変換
-            items.append(ImageItem(id, ImageName(str(f))))
+        # Convert files to ImageItems, sort, and return
+        items = list(map(create_image_item, files))
+        items.sort(key=lambda item: item.display_name.name)
 
         return items
 
