@@ -2,7 +2,7 @@
 from functools import cache
 import json
 import sqlite3
-from typing import Any
+from typing import Any, Dict, List
 
 import pathlib
 
@@ -25,7 +25,7 @@ class LocalAccessor(Accessor):
     ) -> None:
 
         self._meta_dir_path = meta_dir_path
-        self._id_to_path: dict[ImageId, pathlib.Path] = {}
+        self._id_to_path: Dict[ImageId, pathlib.Path] = {}
 
     def load_meta(self, model_id: ModelId, image_id: ImageId) -> np.ndarray:
         return np.load(f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/{image_id}.npy')
@@ -48,7 +48,7 @@ class LocalAccessor(Accessor):
         return Tokenizer(open_clip.get_tokenizer(model_id.model_name))
 
     @cache
-    def load_index_item_list(self, model_id: ModelId) -> list[ImageItem]:
+    def load_index_item_list(self, model_id: ModelId) -> List[ImageItem]:
         print("start:load_index_item_list")
         con: sqlite3.Connection = sqlite3.connect(f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db', isolation_level="DEFERRED")
         result: pd.DataFrame = pd.read_sql_query("""
@@ -56,16 +56,16 @@ class LocalAccessor(Accessor):
             """, con)
         sorted_result: pd.DataFrame= result.sort_values('image_path').reset_index()
         print("end:load_index_item_list")
-        image_item: list[ImageItem] = [ImageItem(id=ImageId(sorted_result.iat[index, 1]), display_name=ImageName(sorted_result.iat[index, 2])) for index, _ in enumerate(sorted_result["image_id"])]
+        image_item: List[ImageItem] = [ImageItem(id=ImageId(sorted_result.iat[index, 1]), display_name=ImageName(sorted_result.iat[index, 2])) for index, _ in enumerate(sorted_result["image_id"])]
         return image_item
 
     @cache
-    def load_aesthetic_quality_list(self, model_id: ModelId) -> dict[ImageId, float]:
+    def load_aesthetic_quality_list(self, model_id: ModelId) -> Dict[ImageId, float]:
         print("start:load_aesthetic_quality_list")
         con: sqlite3.Connection = sqlite3.connect(f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db', isolation_level="DEFERRED")
         result: pd.DataFrame = pd.read_sql_query("""
             SELECT image_id, aesthetic_quality FROM image_meta
             """, con)
-        aesthetic_quality_item: dict[ImageId, float] = {ImageId(id=str(id)):float(q) for id, q in zip(result["image_id"], result["aesthetic_quality"])}
+        aesthetic_quality_item: Dict[ImageId, float] = {ImageId(id=str(id)):float(q) for id, q in zip(result["image_id"], result["aesthetic_quality"])}
         print("end:load_aesthetic_quality_list")
         return aesthetic_quality_item

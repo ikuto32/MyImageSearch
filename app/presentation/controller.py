@@ -103,7 +103,8 @@ def search_text():
     text: str = args.get("text")
     print({"parameter": {"model_name": model_name,
           "pretrained": pretrained, "text": text}})
-    return from_result_to_json(usecase.search_text(ModelId(model_name, pretrained), UploadText(text)))
+    result = usecase.search_text(ModelId(model_name, pretrained), UploadText(text))
+    return from_result_to_json(result)
 
 
 @app.route("/search/image", methods=["POST"])
@@ -119,8 +120,8 @@ def search_image():
     # IDのリストを取得する。
     id_text_list: list[str] = json_obj["id"]
     id_list: list[ImageId] = list(map(ImageId, id_text_list))
-
-    return from_result_to_json(usecase.search_image(model_id, id_list))
+    result = usecase.search_image(model_id, id_list)
+    return from_result_to_json(result)
 
 
 @app.route("/search/name", methods=["POST"])
@@ -131,7 +132,8 @@ def search_name():
     text: str = args.get("text")
     is_regexp: bool = (args.get("is_regexp") == "true")
     print({"parameter": {"text": text}})
-    return from_result_to_json(usecase.search_name(UploadText(text), is_regexp))
+    result = usecase.search_name(UploadText(text), is_regexp)
+    return from_result_to_json(result)
 
 
 @app.route("/search/uploadimage", methods=["POST"])

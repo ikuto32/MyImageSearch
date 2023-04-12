@@ -171,15 +171,15 @@ new Vue({
 
 			return promise.then(array => {
 
-
+				console.log('ソート前' + JSON.stringify(array))
 
 				//並び替え
 				array = array.sort(util.cancatComparator(
 					(a, b) => b.score - a.score, 
 					(a, b) => natsort.default()(a.item.name, b.item.name)
 				))
-
-				console.log(`ソート後 ${JSON.stringify(array)}`)
+				
+				console.log('ソート後' + JSON.stringify(array))
 
 				//バッファに登録
 				this.resultBuffer = array

@@ -61,29 +61,36 @@ class Usecase:
 
     
 
-    def eval(self, item_list: list[ImageItem], index, features, result_size=2048) -> list[ResultImageItem]:
+    def eval(self, item_list: list[ImageItem], index, query_features, result_size=2048) -> list[ResultImageItem]:
 
-        faiss.normalize_L2(features)
-        item_list_len: int = len(item_list)
-        if result_size > item_list_len:
-            result_size = item_list_len
+        faiss.normalize_L2(query_features)
+        item_list_length: int = len(item_list)
+        if result_size > item_list_length:
+            result_size = item_list_length
 
         index.nprobe = 64
 
-        print(index.ntotal)
-        D, I = index.search(features, k=result_size)
+        print(f"index len:{index.ntotal}")
+        distances, indices = index.search(query_features, k=result_size)
 
-        temp: list[int] = [0 for _ in range(item_list_len)]
-        sorted_item_list: list[ImageItem] = sorted(
+        sorted_items: list[ImageItem] = sorted(
             item_list, key=lambda x: x.display_name.name)
-        for i, d in zip(I, D):
-            for id, distance in zip(i, d):
-                temp[id] += distance
-        results: list[ResultImageItem] = []
-        for i, score in enumerate(temp):
-            results.append(ResultImageItem(sorted_item_list[i], Score(score)))
 
-        return results
+        item_distances: dict[int, float] = {}
+
+        for matched_indices, matched_distances in zip(indices, distances):
+            for item_id, item_distance in zip(matched_indices, matched_distances):
+                if item_id in item_distances:
+                    item_distances[item_id] += item_distance
+                else:
+                    item_distances[item_id] = item_distance
+
+        result_image_items: list[ResultImageItem] = []
+        for item_id, total_distance in item_distances.items():
+                result_image_items.append(ResultImageItem(sorted_items[item_id], Score(total_distance)))
+
+        print(f"results len:{len(result_image_items)}")
+        return result_image_items
 
     def search_text(self, model_id: ModelId, text: UploadText) -> list[ResultImageItem]:
         """文字列から検索する"""
@@ -100,7 +107,7 @@ class Usecase:
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(model_id),
-                                                   index=index, features=features)
+                                                   index=index, query_features=features)
         
         aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list(model_id)
 
@@ -134,7 +141,7 @@ class Usecase:
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(model_id),
-                                                   index=index, features=features)
+                                                   index=index, query_features=features)
         
         aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list(model_id)
         beta: float = 0.05
