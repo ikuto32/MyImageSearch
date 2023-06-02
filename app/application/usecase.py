@@ -1,23 +1,32 @@
-
+from functools import cache
 import re
+import traceback
 import numpy as np
 import faiss
 import tqdm
 
 from app.application.accessor import Accessor
-from app.domain.domain_object import ImageItem, ImageId, Image, ImageName, Model, Score, Tokenizer, UploadImage, ModelItem, ModelId, ResultImageItem, UploadText
+from app.domain.domain_object import (
+    ImageItem,
+    ImageId,
+    Image,
+    ImageName,
+    Model,
+    Score,
+    Tokenizer,
+    UploadImage,
+    ModelItem,
+    ModelId,
+    ResultImageItem,
+    UploadText,
+)
 from app.domain.repository import Repository
 
 
 class Usecase:
     """このアプリケーションの動作を実装するクラス"""
 
-    def __init__(
-        self,
-        repository: Repository,
-        accessor: Accessor
-    ) -> None:
-
+    def __init__(self, repository: Repository, accessor: Accessor) -> None:
         self._repository: Repository = repository
         self._accessor: Accessor = accessor
         self._id_to_image_items: dict[ImageId, ImageItem] = {}
@@ -28,9 +37,7 @@ class Usecase:
         # 画像IDと画像項目の対応を作成
         self._id_to_image_items = dict(map(lambda i: (i.id, i), items))
 
-
-# ===================================================================
-
+    # ===================================================================
 
     def get_all_image_item(self) -> list[ImageItem]:
         """すべての画像項目を取得する"""
@@ -47,22 +54,18 @@ class Usecase:
 
         return self._repository.load_image(id)
 
-
-# ===================================================================
-
+    # ===================================================================
 
     def get_all_model(self) -> list[ModelItem]:
         """すべての検索モデルを取得する"""
 
         return self._repository.load_all_model_item()
 
+    # ===================================================================
 
-# ===================================================================
-
-    
-
-    def eval(self, item_list: list[ImageItem], index, query_features, result_size=2048) -> list[ResultImageItem]:
-
+    def similarity_eval(
+        self, item_list: list[ImageItem], index, query_features, result_size=2048
+    ) -> list[ResultImageItem]:
         faiss.normalize_L2(query_features)
         item_list_length: int = len(item_list)
         if result_size > item_list_length:
@@ -74,7 +77,8 @@ class Usecase:
         distances, indices = index.search(query_features, k=result_size)
 
         sorted_items: list[ImageItem] = sorted(
-            item_list, key=lambda x: x.display_name.name)
+            item_list, key=lambda x: x.display_name.name
+        )
 
         item_distances: dict[int, float] = {}
 
@@ -87,11 +91,18 @@ class Usecase:
 
         result_image_items: list[ResultImageItem] = []
         for item_id, total_distance in item_distances.items():
-                result_image_items.append(ResultImageItem(sorted_items[item_id], Score(total_distance)))
+            try:
+                result_image_items.append(
+                    ResultImageItem(sorted_items[item_id], Score(total_distance))
+                )
+            except IndexError:
+                traceback.print_exc()
+                continue
 
         print(f"results len:{len(result_image_items)}")
         return result_image_items
 
+    @cache
     def search_text(self, model_id: ModelId, text: UploadText) -> list[ResultImageItem]:
         """文字列から検索する"""
 
@@ -100,36 +111,59 @@ class Usecase:
 
         # テキストの埋め込みを計算
         tokenizer: Tokenizer = self._accessor.load_tokenizer(model_id)
-        features = model.model_obj[0].encode_text(
-            tokenizer.tokenizer_obj([text.text])).to("cpu").detach().numpy().copy()
+        features = (
+            model.model_obj[0]
+            .encode_text(tokenizer.tokenizer_obj([text.text]))
+            .to("cpu")
+            .detach()
+            .numpy()
+            .copy()
+        )
         # indexを読み込み
         index = self._accessor.load_index_file(model_id)
 
         # 類似度を計算する
-        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(model_id),
-                                                   index=index, query_features=features)
-        
-        aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list(model_id)
+        scores: list[ResultImageItem] = self.similarity_eval(
+            item_list=self._accessor.load_index_item_list(model_id),
+            index=index,
+            query_features=features,
+        )
+
+        aesthetic_quality_item: dict[
+            ImageId, float
+        ] = self._accessor.load_aesthetic_quality_list(model_id)
 
         beta: float = 0.05
-        scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score + aesthetic_quality_item[i.item.id]*beta)), scores))
+        scores = list(
+            map(
+                lambda i: ResultImageItem(
+                    i.item,
+                    Score(i.score.score + aesthetic_quality_item[i.item.id] * beta),
+                ),
+                scores,
+            )
+        )
 
         return scores
 
-    def search_image(self, model_id: ModelId, id_list: list[ImageId]) -> list[ResultImageItem]:
+    def search_image(
+        self, model_id: ModelId, id_list: list[ImageId]
+    ) -> list[ResultImageItem]:
         """画像から検索する"""
 
-        
         # モデルの読み込み
         model_obj: Model = self._accessor.load_model(model_id)
-        model, _, preprocess = model_obj.model_obj[0], model_obj.model_obj[1], model_obj.model_obj[2]
+        model, _, preprocess = (
+            model_obj.model_obj[0],
+            model_obj.model_obj[1],
+            model_obj.model_obj[2],
+        )
 
         # 選択した画像のmetaを結合する
         temp = []
         for select_image_id in id_list:
             # テキストの埋め込みを計算
-            load_image = self._repository.load_image(
-                select_image_id).to_ptl_image()
+            load_image = self._repository.load_image(select_image_id).to_ptl_image()
             image = preprocess(load_image).unsqueeze(0).to("cpu")
             meta = model.encode_image(image).to("cpu").detach().numpy().copy()
             temp.append(meta)
@@ -140,14 +174,28 @@ class Usecase:
         index = self._accessor.load_index_file(model_id)
 
         # 類似度を計算する
-        scores: list[ResultImageItem] = self.eval(item_list=self._accessor.load_index_item_list(model_id),
-                                                   index=index, query_features=features)
-        
-        aesthetic_quality_item: dict[ImageId, float] = self._accessor.load_aesthetic_quality_list(model_id)
+        scores: list[ResultImageItem] = self.similarity_eval(
+            item_list=self._accessor.load_index_item_list(model_id),
+            index=index,
+            query_features=features,
+        )
+
+        aesthetic_quality_item: dict[
+            ImageId, float
+        ] = self._accessor.load_aesthetic_quality_list(model_id)
         beta: float = 0.05
-        scores = list(map(lambda i: ResultImageItem(i.item, Score(i.score.score + aesthetic_quality_item[i.item.id]*beta)), scores))
+        scores = list(
+            map(
+                lambda i: ResultImageItem(
+                    i.item,
+                    Score(i.score.score + aesthetic_quality_item[i.item.id] * beta),
+                ),
+                scores,
+            )
+        )
         return scores
 
+    @cache
     def search_name(self, text: UploadText, is_regexp: bool) -> list[ResultImageItem]:
         """文字列から名前検索する"""
 
@@ -163,14 +211,19 @@ class Usecase:
 
             if hasMatch:
                 scores.append(ResultImageItem(image_item, Score(1.0)))
-            else:
-                scores.append(ResultImageItem(image_item, Score(0.0)))
         return scores
 
-    def search_upload_image(self, model_id: ModelId, image: UploadImage) -> list[ResultImageItem]:
+    def search_upload_image(
+        self, model_id: ModelId, image: UploadImage
+    ) -> list[ResultImageItem]:
         """アップロードされた画像から検索する"""
 
-        return [ResultImageItem(item=ImageItem(id=ImageId(id=""), display_name=ImageName(name="")), score=Score(score=0.0))]
+        return [
+            ResultImageItem(
+                item=ImageItem(id=ImageId(id=""), display_name=ImageName(name="")),
+                score=Score(score=0.0),
+            )
+        ]
 
 
 # ===================================================================

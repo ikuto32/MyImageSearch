@@ -1,4 +1,5 @@
 
+from functools import cache
 import hashlib
 import itertools
 import pathlib
@@ -25,7 +26,7 @@ class LocalRepository(Repository):
         self._image_dir_path: pathlib.Path  = image_dir_path
         self._id_to_path : dict[ImageId, pathlib.Path] = {}
 
-
+    @cache
     def load_all_image_item(self) -> List[ImageItem]:
         # Define a function to create ImageItem from a file
         def create_image_item(file: pathlib.Path) -> ImageItem:
@@ -44,12 +45,13 @@ class LocalRepository(Repository):
 
         return items
 
-
+    @cache
     def load_all_model_item(self) -> list[ModelItem]:
 
         items: list[ModelItem] = [ModelItem(ModelId(model_name, dataset), ModelName(f"{model_name}-{dataset}")) for (model_name, dataset) in open_clip.list_pretrained()]
         return items
     
+    @cache
     def load_image(self, id: ImageId) -> Image:
 
         path: pathlib.Path = pathlib.Path(f"{self._image_dir_path}/{self._id_to_path.get(id)}")
