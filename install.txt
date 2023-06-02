@@ -1,0 +1,8 @@
+conda create -n MyImageSearch python=3.9
+conda activate MyImageSearch
+conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia
+conda install -c pytorch faiss-cpu
+conda install -c anaconda pandas
+pip install Flask
+pip install open_clip_torch
+python app.py
