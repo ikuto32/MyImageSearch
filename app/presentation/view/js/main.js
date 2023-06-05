@@ -221,4 +221,5 @@ const app = Vue.createApp({
     }   
 })
 
-app.use(vuetify).mount('#app')
+app.use(vuetify)
+app.mount('#app')
