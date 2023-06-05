@@ -17,14 +17,10 @@
                 <v-app-bar id="controlArea">
                     <v-app-bar-nav-icon @click.stop="isShowSetting = !isShowSetting"></v-app-bar-nav-icon>
                     <v-text-field label="search" id="textSearchBox" single-line dense clearable hide-details="auto" v-model="text" placeholder="Text"></v-text-field>
-                    <!-- <input type="search" id="textSearchBox" placeholder="文字列" v-model="text"> -->
                     <v-btn @click="textSearchButton" icon="mdi-text-box-search"></v-btn>
                     <v-btn @click="imagesSearchButton" icon="mdi-image-search "></v-btn>
-                    <!-- <input type="button" value="テキスト検索" @click="textSearchButton">
-                    <input type="button" value="画像検索" @click="imagesSearchButton">
-                    <input type="button" value="名前検索" @click="nameSearchButton">
-                    <input type="button" value="画像をコピー" @click="copyImagesButton"> -->
                 </v-app-bar>
+
                 <v-navigation-drawer
                 v-model="isShowSetting"
                 location="bottom"
@@ -33,13 +29,9 @@
                     {{ text }}
                     <v-btn @click="nameSearchButton">名前検索</v-btn>
                     <v-btn @click="copyImagesButton">画像をコピー</v-btn>
-                    <span class="checkboxBlock">
-                        <input type="checkbox" id="trueRegexp" v-model:value="isRegexp">
-                        <label for="trueRegexp" class="label">正規表現を使う</label>
-                    </span>
+                    <v-switch label="正規表現を使う" id="trueRegexp" v-model="isRegexp"></v-switch>
                     <span class="rangeSpan">
-                        ImageSize
-                        <v-slider id="setImageSize" :min="20" :max="1000" :step="10"
+                        <v-slider label="ImageSize" id="setImageSize" :min="40" :max="1000" :step="10"
                         v-model="image_size"
                         append-icon="mdi-magnify-plus-outline"
                         prepend-icon="mdi-magnify-minus-outline"
@@ -54,29 +46,51 @@
                         style="width: 100px"
                         ></v-text-field>
                     </span>
-                    <span class="rangeSpan">
-                        Ratio
-                        <v-slider id="setRatio" :min="0" :max="1" :step="0.05" :value="0.5" thumb-label></v-slider>
-                    </span>
+                    <v-autocomplete
+                    v-model="model_name"
+                    label="model_name"
+                    :items="['ViT-L-14-336']"
+                    ></v-autocomplete>
+                    <v-autocomplete
+                    v-model="pretrained"
+                    label="pretrained"
+                    :items="['openai']"
+                    ></v-autocomplete>
                 </v-navigation-drawer>
-                    <v-card variant="tonal">
-                        <div id="itemArea">
-                            <div v-for="item in displayItems">
-                                <div @click="item.selected = !item.selected"
-                                    :class="[{'selectedItem' : item.selected}, 'itemBlock']">
-                                    <figure>
-                                        <v-img :src="item.img" :title="item.img_name" :width="image_size">
-                                        <figcaption>
-                                            <span class="meta" :style="{width: image_size + 'px'}">{{ item.img_name }}</span><br>
-                                            <span class="score" :style="{width: image_size + 'px'}">{{ item.score }}</span>
-                                        </figcaption>
-                                    </figure>
+
+                <v-main>
+                    <v-container>
+                        <v-card variant="tonal">
+                            <div id="itemArea">
+                                <div v-for="item in displayItems">
+                                    <div @click="item.selected = !item.selected"
+                                        :class="[{'selectedItem' : item.selected}, 'itemBlock']">
+                                        <figure>
+                                            <v-img :src="item.img" :title="item.img_name" :width="image_size">
+                                                <v-btn variant="text" icon>
+                                                    <v-icon icon="mdi-arrow-expand"></v-icon>
+                                                    <v-dialog
+                                                        activator="parent"
+                                                        width="auto"
+                                                    >
+                                                        <v-card>
+                                                            <v-img :src="item.img" :title="item.img_name" :style="{height: '90vh', width: '90vw'}"></v-img>
+                                                        </v-card>
+                                                    </v-dialog>
+                                                </v-btn>    
+                                            </v-img>
+                                            <figcaption>
+                                                <span class="meta" :style="{width: image_size + 'px'}">{{ item.img_name }}</span><br>
+                                                <span class="score" :style="{width: image_size + 'px'}">{{ item.score }}</span>
+                                            </figcaption>
+                                        </figure>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    </v-card>
-                </v-container>
-                <v-btn @click="showNextImg">
+                        </v-card>
+                    </v-container>
+                </v-main>
+                <v-btn variant="tonal" @click="showNextImg">
                     show img
                 </v-btn>
             </v-app>
