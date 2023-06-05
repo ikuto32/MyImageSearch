@@ -19,6 +19,17 @@ body{
 	outline: skyblue solid 2px;
 }
 
+.itemBlock button {
+
+	display: none;
+}
+
+.itemBlock:hover button {
+
+	display: block;
+}
+
+
 .selectedItem{
 	background-color: lightcyan;
 }
@@ -29,6 +40,7 @@ body{
 	overflow:hidden;
 	text-overflow:ellipsis;
 }
+
 
 #itemArea {
 	/* FlexBoxを使用 */
