@@ -228,7 +228,7 @@ def main():
             ),
             batch_size=64,
             shuffle=False,
-            num_workers=4,
+            num_workers=1,
         )
 
         for i, (batched_image_input, batched_image_index) in enumerate(
@@ -271,18 +271,18 @@ def main():
                 image_path = uncreated_image_paths[image_index]
                 image_id: str = hashlib.sha256(str(image_path).encode()).hexdigest()
 
+                print(image_index)
                 param = (
                     image_id,
                     image_path,
                     new_search_meta_bytes,
                     aesthetic_quality,
-                    image_path,
                     new_search_meta_bytes,
                     aesthetic_quality,
                 )
                 try:
                     cur.execute(
-                        "insert into image_meta values(?, ?, ?, ?) on conflict(image_id) do update set image_path=?, meta=?, aesthetic_quality=?",
+                        "insert into image_meta values(?, ?, ?, ?) on conflict(image_id) do update set meta=?, aesthetic_quality=?",
                         param,
                     )
                 except:

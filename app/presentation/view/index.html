@@ -4,64 +4,86 @@
 <head>
     <meta charset="UTF-8">
     <link href="./css/common.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/vuetify@3.x/dist/vuetify.min.css" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, minimal-ui">
 </head>
 
 <body>
     <main>
+        
         <div id="app" ref="hogehoge">
-            <div id="controlArea">
-                <input type="search" id="textSearchBox" placeholder="文字列" v-model:text="text">
-                <input type="button" value="テキスト検索" @click="textSearchButton">
-                <input type="button" value="画像検索" @click="imagesSearchButton">
-                <input type="button" value="名前検索" @click="nameSearchButton">
-                <input type="button" value="画像をコピー" @click="copyImagesButton">
-
-                <div v-if="isShowSetting">
+            <v-app>
+                <v-app-bar id="controlArea">
+                    <v-app-bar-nav-icon @click.stop="isShowSetting = !isShowSetting"></v-app-bar-nav-icon>
+                    <v-text-field label="search" id="textSearchBox" single-line dense clearable hide-details="auto" v-model="text" placeholder="Text"></v-text-field>
+                    <!-- <input type="search" id="textSearchBox" placeholder="文字列" v-model="text"> -->
+                    <v-btn @click="textSearchButton" icon="mdi-text-box-search"></v-btn>
+                    <v-btn @click="imagesSearchButton" icon="mdi-image-search "></v-btn>
+                    <!-- <input type="button" value="テキスト検索" @click="textSearchButton">
+                    <input type="button" value="画像検索" @click="imagesSearchButton">
+                    <input type="button" value="名前検索" @click="nameSearchButton">
+                    <input type="button" value="画像をコピー" @click="copyImagesButton"> -->
+                </v-app-bar>
+                <v-navigation-drawer
+                v-model="isShowSetting"
+                location="bottom"
+                temporary
+                >
+                    {{ text }}
+                    <v-btn @click="nameSearchButton">名前検索</v-btn>
+                    <v-btn @click="copyImagesButton">画像をコピー</v-btn>
                     <span class="checkboxBlock">
                         <input type="checkbox" id="trueRegexp" v-model:value="isRegexp">
                         <label for="trueRegexp" class="label">正規表現を使う</label>
                     </span>
                     <span class="rangeSpan">
                         ImageSize
-                        <input type="range" id="setImageSize" min="10" max="1000" step="10" v-model:value="image_size">
-                        <span id="showImageSize">{{ image_size }}</span>
+                        <v-slider id="setImageSize" :min="20" :max="1000" :step="10"
+                        v-model="image_size"
+                        append-icon="mdi-magnify-plus-outline"
+                        prepend-icon="mdi-magnify-minus-outline"
+                        thumb-label
+                        ></v-slider>
+                        <v-text-field
+                        v-model="image_size"
+                        hide-details
+                        single-line
+                        density="compact"
+                        type="number"
+                        style="width: 100px"
+                        ></v-text-field>
                     </span>
                     <span class="rangeSpan">
                         Ratio
-                        <input type="range" id="setRatio" min="0" max="1" step="0.05" value="0.5">
-                        <span id="showRatio">0.5</span>
+                        <v-slider id="setRatio" :min="0" :max="1" :step="0.05" :value="0.5" thumb-label></v-slider>
                     </span>
-                    <span class="selectCountBlock"><span id="num">0</span>個を選択中</span>
-                </div>
-            </div>
-            {{ message }}
-            <nav>
-                <ul>
-                    <li @click="isShowSetting = !isShowSetting" :class="{'selectedItem': isShowSetting}">setting</li>
-                </ul>
-            </nav>
-
-            <div id="itemArea">
-                <div v-for="item in displayItems">
-                    <div @click="item.selected = !item.selected"
-                        :class="[{'selectedItem' : item.selected}, 'itemBlock']">
-                        <figure>
-                            <img :src="item.img" :title="item.img_name" :style="{width: image_size + 'px'}">
-                            <figcaption>
-                                <span class="meta" :style="{width: image_size + 'px'}">{{ item.img_name }}</span><br>
-                                <span class="score" :style="{width: image_size + 'px'}">{{ item.score }}</span>
-                            </figcaption>
-                        </figure>
-                    </div>
-                </div>
-
-                <button @click="showNextImg">show img</button>
-            </div>
-
-
+                </v-navigation-drawer>
+                    <v-card variant="tonal">
+                        <div id="itemArea">
+                            <div v-for="item in displayItems">
+                                <div @click="item.selected = !item.selected"
+                                    :class="[{'selectedItem' : item.selected}, 'itemBlock']">
+                                    <figure>
+                                        <v-img :src="item.img" :title="item.img_name" :width="image_size">
+                                        <figcaption>
+                                            <span class="meta" :style="{width: image_size + 'px'}">{{ item.img_name }}</span><br>
+                                            <span class="score" :style="{width: image_size + 'px'}">{{ item.score }}</span>
+                                        </figcaption>
+                                    </figure>
+                                </div>
+                            </div>
+                        </div>
+                    </v-card>
+                </v-container>
+                <v-btn @click="showNextImg">
+                    show img
+                </v-btn>
+            </v-app>
         </div>
     </main>
-
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.x/dist/vue.global.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vuetify@3.x/dist/vuetify.min.js"></script>
     <script type="module" src="./js/main.js"></script>
 </body>
 
