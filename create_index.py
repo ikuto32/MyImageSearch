@@ -22,9 +22,8 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class Loader(Dataset):
-    def __init__(self, batch_size, images_dir, file_names, transform):
+    def __init__(self, images_dir, file_names, transform):
         self.images_dir = images_dir
-        self.batch_size = batch_size
         self.img_list = file_names
         self.transform = transform
         self.i = 0
@@ -80,8 +79,8 @@ def get_aesthetic_model(clip_model="vit_l_14"):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="./meta")
+    parser.add_argument("--image_dir", help="dir", default="D:/dataset/gallery-dl")
+    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
     parser.add_argument(
         "--search_model_name", help="model_name", default="ViT-L-14-336"
     )
@@ -91,7 +90,7 @@ def main():
     parser.add_argument(
         "--search_model_out_dim", help="search_model_out_dim", default=768
     )
-    parser.add_argument("--batch_size", help="batch size", default=64)
+    parser.add_argument("--batch_size", help="batch size", default=256)
     parser.add_argument("--nlist", help="nlist", default=16)
     parser.add_argument("--M", help="M", default=256)
     parser.add_argument("--bits_per_code", help="bits_per_code", default=4)
@@ -221,12 +220,11 @@ def main():
 
         loader = DataLoader(
             Loader(
-                args.batch_size,
                 args.image_dir,
                 uncreated_image_paths,
                 transform=eval_transform,
             ),
-            batch_size=64,
+            batch_size=args.batch_size,
             shuffle=False,
             num_workers=1,
         )
@@ -271,7 +269,6 @@ def main():
                 image_path = uncreated_image_paths[image_index]
                 image_id: str = hashlib.sha256(str(image_path).encode()).hexdigest()
 
-                print(image_index)
                 param = (
                     image_id,
                     image_path,

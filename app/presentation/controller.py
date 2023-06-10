@@ -98,12 +98,13 @@ def get_image(id: str):
 def search_text():
     """文字列から検索して、結果を返す"""
     args = ast.literal_eval(request.data.decode('utf-8')).get("params")
-    model_name: str = args.get("model_name")
-    pretrained: str = args.get("pretrained")
+    model_id: ModelId = ModelId(args.get("model_name"), args.get("pretrained"))
     text: str = args.get("text")
-    print({"parameter": {"model_name": model_name,
-          "pretrained": pretrained, "text": text}})
-    result = usecase.search_text(ModelId(model_name, pretrained), UploadText(text))
+    # 美感スコアの重要度を取得する。
+    aesthetic_quality_beta: float = args.get("aesthetic_quality_beta")
+    aesthetic_quality_range = args.get("aesthetic_quality_range")
+    print({"parameter": {"model_id": model_id, "text": text, "aesthetic_quality_beta": aesthetic_quality_beta, "aesthetic_quality_range": aesthetic_quality_range}})
+    result = usecase.search_text(model_id, UploadText(text), aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
     return from_result_to_json(result)
 
 
@@ -117,10 +118,15 @@ def search_image():
     # 検索モデルのIDを取得する。
     model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
 
+    # 美感スコアの重要度を取得する。
+    aesthetic_quality_beta: float = json_obj["aesthetic_quality_beta"]
+
+    aesthetic_quality_range = json_obj["aesthetic_quality_range"]
+
     # IDのリストを取得する。
     id_text_list: list[str] = json_obj["id"]
     id_list: list[ImageId] = list(map(ImageId, id_text_list))
-    result = usecase.search_image(model_id, id_list)
+    result = usecase.search_image(model_id, id_list, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
     return from_result_to_json(result)
 
 
@@ -129,10 +135,15 @@ def search_name():
     """名前から検索して、結果を返す"""
     print(request.data.decode('utf-8'))
     args = ast.literal_eval(request.data.decode('utf-8')).get("params")
+    # 検索モデルのIDを取得する。
+    model_id: ModelId = ModelId(args.get("model_name"), args.get("pretrained"))
     text: str = args.get("text")
     is_regexp: bool = (args.get("is_regexp") == "true")
+    # 美感スコアの重要度を取得する。
+    aesthetic_quality_beta: float = args.get("aesthetic_quality_beta")
+    aesthetic_quality_range = args.get("aesthetic_quality_range")
     print({"parameter": {"text": text}})
-    result = usecase.search_name(UploadText(text), is_regexp)
+    result = usecase.search_name(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
     return from_result_to_json(result)
 
 

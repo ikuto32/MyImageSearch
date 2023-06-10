@@ -7,6 +7,7 @@ import mimetypes
 from typing import List
 
 import torch
+import tqdm
 
 from app.domain.domain_object import ImageItem, ImageId, Image, ImageName, Model, ModelId, ModelItem, ModelName
 from app.domain.repository import Repository
@@ -40,7 +41,7 @@ class LocalRepository(Repository):
         files = itertools.chain.from_iterable(self._image_dir_path.glob(f'**/*.{e}') for e in extensions)
 
         # Convert files to ImageItems, sort, and return
-        items = list(map(create_image_item, files))
+        items = list(map(create_image_item, tqdm.tqdm(files)))
         items.sort(key=lambda item: item.display_name.name)
 
         return items
