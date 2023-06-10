@@ -8,7 +8,7 @@ import pathlib
 
 import numpy as np
 import pandas as pd
-import torch
+import tqdm
 import faiss
 import open_clip
 
@@ -55,9 +55,10 @@ class LocalAccessor(Accessor):
             SELECT image_id, image_path FROM image_meta
             """, con)
         sorted_result: pd.DataFrame= result.sort_values('image_path').reset_index()
+
+        image_items: List[ImageItem] = [ImageItem(id=ImageId(sorted_result.iat[index, 1]), display_name=ImageName(sorted_result.iat[index, 2])) for index, _ in enumerate(tqdm.tqdm(sorted_result["image_id"]))]
         print("end:load_index_item_list")
-        image_item: List[ImageItem] = [ImageItem(id=ImageId(sorted_result.iat[index, 1]), display_name=ImageName(sorted_result.iat[index, 2])) for index, _ in enumerate(sorted_result["image_id"])]
-        return image_item
+        return image_items
 
     @cache
     def load_aesthetic_quality_list(self, model_id: ModelId) -> Dict[ImageId, float]:
@@ -66,6 +67,6 @@ class LocalAccessor(Accessor):
         result: pd.DataFrame = pd.read_sql_query("""
             SELECT image_id, aesthetic_quality FROM image_meta
             """, con)
-        aesthetic_quality_item: Dict[ImageId, float] = {ImageId(id=str(id)):float(q) for id, q in zip(result["image_id"], result["aesthetic_quality"])}
+        aesthetic_quality_item: Dict[ImageId, float] = {ImageId(id=str(id)):float(q) for id, q in tqdm.tqdm(zip(result["image_id"], result["aesthetic_quality"]))}
         print("end:load_aesthetic_quality_list")
         return aesthetic_quality_item

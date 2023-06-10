@@ -102,8 +102,21 @@ class Usecase:
         print(f"results len:{len(result_image_items)}")
         return result_image_items
 
+    def aesthetic_quality_eval(self, model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max) -> list[ResultImageItem]:
+        aesthetic_quality_item: dict[
+            ImageId, float
+        ] = self._accessor.load_aesthetic_quality_list(model_id)
+        new_scores = []
+        for i in scores:
+            if aesthetic_quality_item[i.item.id] >= aesthetic_quality_range_min and aesthetic_quality_item[i.item.id] <= aesthetic_quality_range_max:
+                new_score = i.score.score * (1-aesthetic_quality_beta**2) + aesthetic_quality_item[i.item.id] * aesthetic_quality_beta
+            else:
+                new_score = 0
+            new_scores.append(ResultImageItem(i.item, Score(new_score)))
+        return new_scores
+
     @cache
-    def search_text(self, model_id: ModelId, text: UploadText) -> list[ResultImageItem]:
+    def search_text(self, model_id: ModelId, text: UploadText, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> list[ResultImageItem]:
         """文字列から検索する"""
 
         # モデルの読み込み
@@ -129,25 +142,12 @@ class Usecase:
             query_features=features,
         )
 
-        aesthetic_quality_item: dict[
-            ImageId, float
-        ] = self._accessor.load_aesthetic_quality_list(model_id)
-
-        beta: float = 0.05
-        scores = list(
-            map(
-                lambda i: ResultImageItem(
-                    i.item,
-                    Score(i.score.score + aesthetic_quality_item[i.item.id] * beta),
-                ),
-                scores,
-            )
-        )
+        scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
 
         return scores
 
     def search_image(
-        self, model_id: ModelId, id_list: list[ImageId]
+        self, model_id: ModelId, id_list: list[ImageId], aesthetic_quality_beta :float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float
     ) -> list[ResultImageItem]:
         """画像から検索する"""
 
@@ -180,23 +180,11 @@ class Usecase:
             query_features=features,
         )
 
-        aesthetic_quality_item: dict[
-            ImageId, float
-        ] = self._accessor.load_aesthetic_quality_list(model_id)
-        beta: float = 0.05
-        scores = list(
-            map(
-                lambda i: ResultImageItem(
-                    i.item,
-                    Score(i.score.score + aesthetic_quality_item[i.item.id] * beta),
-                ),
-                scores,
-            )
-        )
+        scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
         return scores
 
     @cache
-    def search_name(self, text: UploadText, is_regexp: bool) -> list[ResultImageItem]:
+    def search_name(self, model_id: ModelId, text: UploadText, is_regexp: bool, aesthetic_quality_beta :float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> list[ResultImageItem]:
         """文字列から名前検索する"""
 
         scores: list[ResultImageItem] = []
@@ -211,6 +199,7 @@ class Usecase:
 
             if hasMatch:
                 scores.append(ResultImageItem(image_item, Score(1.0)))
+            scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
         return scores
 
     def search_upload_image(

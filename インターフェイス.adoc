@@ -114,6 +114,9 @@ model::
 text::
 検索文字列
 
+aesthetic_quality_beta::
+美感スコアの重要度
+
 戻り値::
 [source, ts]
 ----
@@ -141,6 +144,7 @@ payload::
 {
     "model": string, //画像モデルのID
     "id": string[], //選択された画像ID
+    "aesthetic_quality_beta": float //美感スコアの重要度
 }
 ----
 

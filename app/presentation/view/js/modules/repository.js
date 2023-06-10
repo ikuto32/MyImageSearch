@@ -57,14 +57,16 @@ export async function getItem(itemId) {
  * 
  * @return {Promise<ResultItem[]>}
  */
-export async function searchText(modelName, pretrained, text) {
+export async function searchText(modelName, pretrained, text, aesthetic_quality_beta, aesthetic_quality_range) {
 
     let payload = {
 
         params:{
             model_name: modelName, 
             pretrained: pretrained, 
-            text : text
+            text : text,
+            aesthetic_quality_beta: aesthetic_quality_beta,
+            aesthetic_quality_range: aesthetic_quality_range
         }
     }
 
@@ -81,14 +83,16 @@ export async function searchText(modelName, pretrained, text) {
  * 
  * @return {Promise<ResultItem[]>}
  */
-export async function searchImage(modelName, pretrained, itemId_list) {
+export async function searchImage(modelName, pretrained, itemId_list, aesthetic_quality_beta, aesthetic_quality_range) {
 
     let payload = {
 
         params:{
             model_name: modelName, 
             pretrained: pretrained, 
-            id : itemId_list
+            id : itemId_list,
+            aesthetic_quality_beta: aesthetic_quality_beta,
+            aesthetic_quality_range: aesthetic_quality_range
         }
     }
 
@@ -104,13 +108,17 @@ export async function searchImage(modelName, pretrained, itemId_list) {
  * 
  * @return {Promise<ResultItem[]>}
  */
-export async function searchName(itemId_list, is_regexp) {
+export async function searchName(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range) {
 
     let payload = {
 
         params:{
+            model_name: modelName,
+            pretrained: pretrained,
             text : itemId_list,
-            is_regexp : is_regexp.toString()
+            is_regexp : is_regexp.toString(),
+            aesthetic_quality_beta: aesthetic_quality_beta,
+            aesthetic_quality_range: aesthetic_quality_range
         }
     }
 

@@ -24,6 +24,8 @@ const app = Vue.createApp({
             model_name: "ViT-L-14-336",
             pretrained: "openai",
             showedItemIndex: 0,
+            aesthetic_quality_beta: 0.05,
+            aesthetic_quality_range: [0, 10],
 
             /**
              * @type {ResultItem[]}
@@ -191,7 +193,7 @@ const app = Vue.createApp({
         //テキストから検索するボタンの動作
         textSearchButton() {
 
-            this.setBuffer(repository.searchText(this.model_name, this.pretrained, this.text))
+            this.setBuffer(repository.searchText(this.model_name, this.pretrained, this.text, this.aesthetic_quality_beta, this.aesthetic_quality_range))
             .then(this.initImage);
             
         },
@@ -201,14 +203,14 @@ const app = Vue.createApp({
 
             let selectedId = [...this.displayItems].filter(item => item.selected).map(item => item.id)
 
-            this.setBuffer(repository.searchImage(this.model_name, this.pretrained, selectedId))
+            this.setBuffer(repository.searchImage(this.model_name, this.pretrained, selectedId, this.aesthetic_quality_beta, this.aesthetic_quality_range))
             .then(this.initImage);
         },
 
         //画像名前から検索するボタンの動作
         nameSearchButton() {
 
-            this.setBuffer(repository.searchName(this.text, this.isRegexp))
+            this.setBuffer(repository.searchName(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range))
             .then(this.initImage);
         },
 
