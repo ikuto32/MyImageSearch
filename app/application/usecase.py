@@ -108,8 +108,9 @@ class Usecase:
         ] = self._accessor.load_aesthetic_quality_list(model_id)
         new_scores = []
         for i in scores:
-            if aesthetic_quality_item[i.item.id] >= aesthetic_quality_range_min and aesthetic_quality_item[i.item.id] <= aesthetic_quality_range_max:
-                new_score = i.score.score * (1-aesthetic_quality_beta**2) + aesthetic_quality_item[i.item.id] * aesthetic_quality_beta
+            aesthetic_quality_score: float = aesthetic_quality_item[i.item.id]
+            if aesthetic_quality_score >= aesthetic_quality_range_min and aesthetic_quality_score <= aesthetic_quality_range_max:
+                new_score = i.score.score * (1-aesthetic_quality_beta**2) + aesthetic_quality_score * aesthetic_quality_beta
             else:
                 new_score = 0
             new_scores.append(ResultImageItem(i.item, Score(new_score)))
@@ -184,7 +185,7 @@ class Usecase:
         return scores
 
     @cache
-    def search_name(self, model_id: ModelId, text: UploadText, is_regexp: bool, aesthetic_quality_beta :float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> list[ResultImageItem]:
+    def search_name(self, model_id: ModelId, text: UploadText, is_regexp: bool, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> list[ResultImageItem]:
         """文字列から名前検索する"""
 
         scores: list[ResultImageItem] = []
@@ -199,7 +200,8 @@ class Usecase:
 
             if hasMatch:
                 scores.append(ResultImageItem(image_item, Score(1.0)))
-            scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
+
+        scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
         return scores
 
     def search_upload_image(

@@ -15,16 +15,16 @@ const app = Vue.createApp({
     el:"#app",
     data() {
         return {
-            load_size: 10,
+            load_size: 50,
             message: "test",
             text: "",
             isShowSetting: false,
             isRegexp: false,
-            image_size: 250,
+            image_size: 150,
             model_name: "ViT-L-14-336",
             pretrained: "openai",
             showedItemIndex: 0,
-            aesthetic_quality_beta: 0.05,
+            aesthetic_quality_beta: 0.00,
             aesthetic_quality_range: [0, 10],
 
             /**

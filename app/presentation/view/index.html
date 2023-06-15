@@ -71,35 +71,37 @@
                             :items="['openai','laion2b_s39b_b160k','commonpool_xl_s13b_b90k']"
                             ></v-autocomplete>
                         </v-navigation-drawer>
-                
-                        <v-card variant="tonal">
-                            <div id="itemArea">
-                                <div v-for="item in displayItems">
-                                    <div @click="item.selected = !item.selected"
-                                        :class="[{'selectedItem' : item.selected}, 'itemBlock']">
-                                        <figure>
-                                            <v-img :src="item.img" :title="item.img_name" :width="image_size">
-                                                <v-btn icon>
-                                                    <v-icon icon="mdi-arrow-expand-all" color="info"></v-icon>
-                                                    <v-dialog
-                                                        activator="parent"
-                                                        width="auto"
-                                                    >
-                                                        <v-card>
-                                                            <v-img :src="item.img" :title="item.img_name" :style="{height: '90vh', width: '90vw'}"></v-img>
-                                                        </v-card>
-                                                    </v-dialog>
-                                                </v-btn>    
-                                            </v-img>
-                                            <figcaption>
-                                                <span class="meta" :style="{width: image_size + 'px'}">{{ item.img_name }}</span><br>
-                                                <span class="score" :style="{width: image_size + 'px'}">{{ item.score }}</span>
-                                            </figcaption>
-                                        </figure>
-                                    </div>
+
+                        <v-row no-gutters>
+                            <v-col>
+                                <div id="itemArea">
+                                    <v-card v-for="item in displayItems"
+                                    @click="item.selected = !item.selected"
+                                    :class="[{'selectedItem' : item.selected}, 'itemBlock']"
+                                    :color="item.selected ? 'light-blue-lighten-4' : null"
+                                    >
+                                        <v-img :src="item.img" :title="item.img_name" :style="{width: image_size + 'px'}">
+                                            <v-btn icon>
+                                                <v-icon icon="mdi-arrow-expand-all" color="info"></v-icon>
+                                                <v-dialog
+                                                    activator="parent"
+                                                    width="auto"
+                                                >
+                                                    <v-card>
+                                                        <v-img :src="item.img" :title="item.img_name" width="90vw" height="90vh"></v-img>
+                                                        <v-card-title>
+                                                            <span class="meta">{{ item.img_name }}</span>
+                                                        </v-card-title>
+                                                    </v-card>
+                                                </v-dialog>
+                                            </v-btn>
+                                        </v-img>
+                                        <span class="meta" :style="{width: image_size + 'px'}">{{ item.img_name }}</span><br>
+                                        <span class="score" :style="{width: image_size + 'px'}">{{ item.score }}</span>
+                                    </v-card>
                                 </div>
-                            </div>
-                        </v-card>
+                            </v-col>
+                        </v-row>
                     </v-container>
                 </v-main>
                 <v-btn variant="tonal" @click="showNextImg">
