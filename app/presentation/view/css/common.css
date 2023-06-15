@@ -30,10 +30,6 @@ body{
 }
 
 
-.selectedItem{
-	background-color: lightcyan;
-}
-
 .meta, .score{
 	display:inline-block;
 	white-space:nowrap;
