@@ -12,7 +12,7 @@ def main():
 
     #コンフィグ
     image_dir_path: pathlib.Path = pathlib.Path('./images')
-    meta_dir_path: pathlib.Path = pathlib.Path('./clip_mata')
+    meta_dir_path: pathlib.Path = pathlib.Path('./clip_meta')
 
     #TODO 使用するパッケージをインストールすることが手間であるため、ダミーを使用している。
     accessor: LocalAccessor = LocalAccessor(meta_dir_path)

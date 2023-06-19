@@ -21,7 +21,6 @@
                     <v-btn @click="imagesSearchButton" prepend-icon="mdi-image-search " class="d-none d-md-flex">画像検索</v-btn>
                     <v-btn @click="textSearchButton" icon="mdi-text-box-search" class="d-md-none"></v-btn>
                     <v-btn @click="imagesSearchButton" icon="mdi-image-search " class="d-md-none"></v-btn>
-                    
                 </v-app-bar>
                 <v-main>
                     <v-container>
@@ -71,11 +70,14 @@
                             :items="['openai','laion2b_s39b_b160k','commonpool_xl_s13b_b90k']"
                             ></v-autocomplete>
                         </v-navigation-drawer>
-
-                        <v-row no-gutters>
-                            <v-col>
-                                <div id="itemArea">
-                                    <v-card v-for="item in displayItems"
+                        <div id="itemArea">
+                            <v-virtual-scroll
+                            :items="displayItems"
+                            height="aute"
+                            item-height="50"
+                            >
+                                <template v-slot:default="{ item }">
+                                    <v-card
                                     @click="item.selected = !item.selected"
                                     :class="[{'selectedItem' : item.selected}, 'itemBlock']"
                                     :color="item.selected ? 'light-blue-lighten-4' : null"
@@ -99,9 +101,9 @@
                                         <span class="meta" :style="{width: image_size + 'px'}">{{ item.img_name }}</span><br>
                                         <span class="score" :style="{width: image_size + 'px'}">{{ item.score }}</span>
                                     </v-card>
-                                </div>
-                            </v-col>
-                        </v-row>
+                                </template>
+                            </v-virtual-scroll>
+                        </div>
                     </v-container>
                 </v-main>
                 <v-btn variant="tonal" @click="showNextImg">

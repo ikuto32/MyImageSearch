@@ -102,10 +102,10 @@ export async function searchImage(modelName, pretrained, itemId_list, aesthetic_
 
 /**
  * 画像項目を名前で検索する
- * 
+ *
  * @param {string} isRegexp
  * @param {string} text
- * 
+ *
  * @return {Promise<ResultItem[]>}
  */
 export async function searchName(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range) {

@@ -38,7 +38,7 @@ body{
 }
 
 
-#itemArea {
+#itemArea .v-virtual-scroll__container {
 	/* FlexBoxを使用 */
 	display: flex;
 
