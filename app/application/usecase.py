@@ -103,6 +103,8 @@ class Usecase:
         return result_image_items
 
     def aesthetic_quality_eval(self, model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max) -> list[ResultImageItem]:
+        if aesthetic_quality_beta == 0 and aesthetic_quality_range_min <= 0 and aesthetic_quality_range_max >= 10:
+            return scores
         aesthetic_quality_item: dict[
             ImageId, float
         ] = self._accessor.load_aesthetic_quality_list(model_id)

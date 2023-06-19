@@ -185,10 +185,10 @@ def from_result_to_json(value: list[ResultImageItem]) -> str:
 
     objs = map(lambda r: {
         "item": {
-            "id": r.item.id.id,
-            "name": r.item.display_name.name
+            "id": str(r.item.id.id),
+            "name": str(r.item.display_name.name)
         },
-        "score": r.score.score
+        "score": float(r.score.score)
     },
         value
     )
