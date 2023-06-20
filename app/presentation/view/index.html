@@ -11,7 +11,6 @@
 
 <body>
     <main>
-        
         <div id="app" ref="hogehoge">
             <v-app>
                 <v-app-bar id="controlArea">
@@ -35,15 +34,15 @@
                             <v-btn @click="copyImagesButton">画像をコピー</v-btn>
                             <v-switch label="正規表現を使う" id="trueRegexp" v-model="isRegexp"></v-switch>
                             <span class="rangeSpan d-flex flex-row">
-                                <v-slider class="" label="ImageSize" id="setImageSize" :min="40" :max="1000" :step="10"
-                                v-model="image_size"
+                                <v-slider class="" label="numCols" id="setnNumCols" :min="1" :max="24" :step="1"
+                                v-model="numCols"
                                 append-icon="mdi-magnify-plus-outline"
                                 prepend-icon="mdi-magnify-minus-outline"
                                 thumb-label
                                 ></v-slider>
                                 <v-text-field
                                 class=""
-                                v-model="image_size"
+                                v-model="numCols"
                                 hide-details
                                 single-line
                                 density="compact"
@@ -70,39 +69,34 @@
                             :items="['openai','laion2b_s39b_b160k','commonpool_xl_s13b_b90k']"
                             ></v-autocomplete>
                         </v-navigation-drawer>
-                        <div id="itemArea">
-                            <v-virtual-scroll
-                            :items="displayItems"
-                            height="aute"
-                            item-height="50"
+                        <div id="itemArea"
+                        :style="'grid-template-columns: repeat(' + numCols + ', minmax(100px, 1fr)); padding-top: ' + padding_top + 'px; padding-bottom: ' + padding_bottom + 'px;'"
+                        >
+                            <v-card
+                            v-for="item in displayItems"
+                            @click="item.selected = !item.selected"
+                            :class="[{'selectedItem' : item.selected}, 'itemBlock']"
+                            :color="item.selected ? 'light-blue-lighten-4' : null"
                             >
-                                <template v-slot:default="{ item }">
-                                    <v-card
-                                    @click="item.selected = !item.selected"
-                                    :class="[{'selectedItem' : item.selected}, 'itemBlock']"
-                                    :color="item.selected ? 'light-blue-lighten-4' : null"
-                                    >
-                                        <v-img :src="item.img" :title="item.img_name" :style="{width: image_size + 'px'}">
-                                            <v-btn icon>
-                                                <v-icon icon="mdi-arrow-expand-all" color="info"></v-icon>
-                                                <v-dialog
-                                                    activator="parent"
-                                                    width="auto"
-                                                >
-                                                    <v-card>
-                                                        <v-img :src="item.img" :title="item.img_name" width="90vw" height="90vh"></v-img>
-                                                        <v-card-title>
-                                                            <span class="meta">{{ item.img_name }}</span>
-                                                        </v-card-title>
-                                                    </v-card>
-                                                </v-dialog>
-                                            </v-btn>
-                                        </v-img>
-                                        <span class="meta" :style="{width: image_size + 'px'}">{{ item.img_name }}</span><br>
-                                        <span class="score" :style="{width: image_size + 'px'}">{{ item.score }}</span>
-                                    </v-card>
-                                </template>
-                            </v-virtual-scroll>
+                                <v-img :src="item.img" :title="item.img_name" height="200" transition="false">
+                                    <v-btn icon>
+                                        <v-icon icon="mdi-arrow-expand-all" color="info"></v-icon>
+                                        <v-dialog
+                                            activator="parent"
+                                            width="auto"
+                                        >
+                                            <v-card>
+                                                <v-img :src="item.img" :title="item.img_name" width="90vw" height="90vh"></v-img>
+                                                <v-card-title>
+                                                    <span class="meta">{{ item.img_name }}</span>
+                                                </v-card-title>
+                                            </v-card>
+                                        </v-dialog>
+                                    </v-btn>
+                                </v-img>
+                                <span class="meta" :style="{width: 1 + 'fr'}">{{ item.img_name }}</span>
+                                <span class="score" :style="{width: 1 + 'fr'}">{{ item.score }}</span>
+                            </v-card>
                         </div>
                     </v-container>
                 </v-main>
