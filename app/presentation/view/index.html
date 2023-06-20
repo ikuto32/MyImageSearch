@@ -10,18 +10,21 @@
 </head>
 
 <body>
-    <main>
-        <div id="app" ref="hogehoge">
-            <v-app>
-                <v-app-bar id="controlArea">
-                    <v-app-bar-nav-icon @click.stop="isShowSetting = !isShowSetting"></v-app-bar-nav-icon>
-                    <v-text-field label="search" id="textSearchBox" single-line dense clearable hide-details="auto" v-model="text" placeholder="Text"></v-text-field>
-                    <v-btn @click="textSearchButton" prepend-icon="mdi-text-box-search" class="d-none d-md-flex">テキスト検索</v-btn>
-                    <v-btn @click="imagesSearchButton" prepend-icon="mdi-image-search " class="d-none d-md-flex">画像検索</v-btn>
-                    <v-btn @click="textSearchButton" icon="mdi-text-box-search" class="d-md-none"></v-btn>
-                    <v-btn @click="imagesSearchButton" icon="mdi-image-search " class="d-md-none"></v-btn>
-                </v-app-bar>
-                <v-main>
+    <div id="app" ref="hogehoge">
+        <v-app>
+            <v-app-bar id="controlArea">
+                <v-app-bar-nav-icon @click.stop="isShowSetting = !isShowSetting"></v-app-bar-nav-icon>
+                <v-text-field label="search" id="textSearchBox" single-line dense clearable hide-details="auto" v-model="text" placeholder="Text"></v-text-field>
+                <v-btn @click="textSearchButton" prepend-icon="mdi-text-box-search" class="d-none d-md-flex">テキスト検索</v-btn>
+                <v-btn @click="imagesSearchButton" prepend-icon="mdi-image-search " class="d-none d-md-flex">画像検索</v-btn>
+                <v-btn @click="textSearchButton" icon="mdi-text-box-search" class="d-md-none"></v-btn>
+                <v-btn @click="imagesSearchButton" icon="mdi-image-search " class="d-md-none"></v-btn>
+            </v-app-bar>
+            <v-main>
+                <div class="scrollArea"
+                    id="scroll-target"
+                    v-scroll:#scroll-target="updateImageFromScroll"
+                    >
                     <v-container>
                         <v-navigation-drawer
                         class="px-5"
@@ -71,7 +74,7 @@
                         </v-navigation-drawer>
                         <div id="itemArea"
                         :style="'grid-template-columns: repeat(' + numCols + ', minmax(100px, 1fr)); padding-top: ' + padding_top + 'px; padding-bottom: ' + padding_bottom + 'px;'"
-                        >
+                            >
                             <v-card
                             v-for="item in displayItems"
                             @click="item.selected = !item.selected"
@@ -86,7 +89,7 @@
                                             width="auto"
                                         >
                                             <v-card>
-                                                <v-img :src="item.img" :title="item.img_name" width="90vw" height="90vh"></v-img>
+                                                <v-img :src="item.img" :title="item.img_name" width="90vw" height="85vh"></v-img>
                                                 <v-card-title>
                                                     <span class="meta">{{ item.img_name }}</span>
                                                 </v-card-title>
@@ -99,13 +102,13 @@
                             </v-card>
                         </div>
                     </v-container>
-                </v-main>
-                <v-btn variant="tonal" @click="showNextImg">
-                    show img
-                </v-btn>
-            </v-app>
-        </div>
-    </main>
+                </div>
+            </v-main>
+            <v-btn variant="tonal" @click="showNextImg">
+                show img
+            </v-btn>
+        </v-app>
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/vue@3.x/dist/vue.global.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/vuetify@3.x/dist/vuetify.min.js"></script>
     <script type="module" src="./js/main.js"></script>

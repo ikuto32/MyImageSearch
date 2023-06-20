@@ -51,6 +51,10 @@ body{
 	display:flex;
 	flex-direction: column;
 }
+.scrollArea {
+	height: 85vh;
+	overflow: auto;
+}
 
 
 
