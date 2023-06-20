@@ -20,12 +20,16 @@ const app = Vue.createApp({
             text: "",
             isShowSetting: false,
             isRegexp: false,
-            image_size: 150,
+            numCols: 6,
+            numRows: 10,
             model_name: "ViT-L-14-336",
             pretrained: "openai",
             showedItemIndex: 0,
             aesthetic_quality_beta: 0.00,
             aesthetic_quality_range: [0, 10],
+            padding_top: 0,
+            padding_bottom: 500,
+            item_height:258,
 
             /**
              * @type {ResultItem[]}
@@ -61,14 +65,14 @@ const app = Vue.createApp({
             //現在表示されているものを削除
             this.displayItems = []
             this.showedItemIndex = 0;
-            
             //一部表示
-            this.showNextImg()
+            this.sliceShowImg(0, this.numRows * this.numCols)
+            this.padding_bottom = this.item_height * this.resultBuffer.length / this.numCols - this.padding_top;
         },
 
         /**
          * バッファを初期化する
-         * 
+         *
          * @return {Promise<void>}
          */
         initBuffer() {
@@ -92,38 +96,29 @@ const app = Vue.createApp({
 
         //下までスクロールすると、次の画像を読み込む。
         updateImageFromScroll() {
-
-            // ページ全体の高さ
-            let pageHeight = document.body.clientHeight;
-
-            // スクロールバー等を含まないブラウザの表示領域
-            let viewportHeight = document.documentElement.clientHeight;
-            
-            // スクロールの最大値
-            let scrollMaxY = pageHeight - viewportHeight;
-
             // 現在のスクロール値
-            let scrollY = window.pageYOffset;
+            let scrollY = Math.max(window.pageYOffset - this.item_height*2, 0);
 
-            console.log("スクロール: " + scrollY + " / " + scrollMaxY);
+            console.log("スクロール: " + scrollY + " / " + (this.item_height * this.resultBuffer.length / this.numCols));
 
-            //最後に近づいたら、更新
-            if(scrollMaxY - scrollY < 20)
-            {
+            while (scrollY - this.padding_top > this.item_height){
+                this.padding_top += this.item_height;
+                this.padding_bottom = (this.item_height * this.resultBuffer.length / this.numCols) - this.padding_top;
                 this.showNextImg();
             }
-
+            while (scrollY - this.padding_top < -this.item_height){
+                this.padding_top -= this.item_height;
+                this.padding_bottom = (this.item_height * this.resultBuffer.length / this.numCols) - this.padding_top;
+                this.showPrevImg();
+            }
         },
 
-        
 
 
         /**
          * バッファ上の画像項目を逐次、描画する
          */
         showNextImg(){
-            
-            
             if(this.resultBuffer.length < this.showedItemIndex)
             {
                 console.log("これ以上描画できません。")
@@ -131,14 +126,39 @@ const app = Vue.createApp({
             }
 
             //今回、追加表示する範囲
-            let start = this.showedItemIndex
-            let end = Math.min(start + this.load_size - 1, this.resultBuffer.length)
-
+            let start = Math.min(this.showedItemIndex + this.numCols, this.resultBuffer.length)
+            let end = Math.min(start + this.numRows * this.numCols, this.resultBuffer.length)
+            console.log("下に追加：先頭: " + JSON.stringify(start) + "後尾:" + JSON.stringify(end))
 
             //不足した情報を追加して、表示
+            this.displayItems = []
+            this.sliceShowImg(start, end)
+            //最後のインデックス
+            this.showedItemIndex = start
+        },
+
+        showPrevImg(){
+            if(0 > this.showedItemIndex)
+            {
+                console.log("これ以上描画できません。")
+                return
+            }
+
+            //今回、追加表示する範囲
+            let start = Math.max(this.showedItemIndex - this.numCols, 0)
+            let end = Math.min(start + this.numRows * this.numCols, this.resultBuffer.length)
+            console.log("上に追加：先頭: " + JSON.stringify(start) + "後尾:" + JSON.stringify(end))
+
+            //不足した情報を追加して、表示
+            this.displayItems = []
+            this.sliceShowImg(start, end)
+            //最後のインデックス
+            this.showedItemIndex = start
+        },
+
+        sliceShowImg(start, end){
             this.resultBuffer.slice(start, end).forEach(result => {
 
-                
                 console.log("表示: " + JSON.stringify(result))
 
                 /**
@@ -151,18 +171,10 @@ const app = Vue.createApp({
                     img_name: result.item.name,
                     img: repository.getImageUrl(result.item.id),
                     selected: false
-                }); 
-                
-                
+                });
             });
-
-
-            
-            //最後のインデックス
-            this.showedItemIndex = end + 1;
-            
-
         },
+
 
         /**
          * 検索結果をバッファに登録する
@@ -177,10 +189,10 @@ const app = Vue.createApp({
 
                 //並び替え
                 array = array.sort(util.cancatComparator(
-                    (a, b) => b.score - a.score, 
+                    (a, b) => b.score - a.score,
                     (a, b) => natsort.default()(a.item.name, b.item.name)
                 ))
-                
+
                 console.log('ソート後' + JSON.stringify(array))
 
                 //バッファに登録
@@ -195,7 +207,6 @@ const app = Vue.createApp({
 
             this.setBuffer(repository.searchText(this.model_name, this.pretrained, this.text, this.aesthetic_quality_beta, this.aesthetic_quality_range))
             .then(this.initImage);
-            
         },
 
         //画像から検索するボタンの動作
@@ -220,7 +231,7 @@ const app = Vue.createApp({
             console.log("未実装")
         },
 
-    }   
+    }
 })
 
 app.use(vuetify)

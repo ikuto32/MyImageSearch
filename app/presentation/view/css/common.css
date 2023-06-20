@@ -1,8 +1,4 @@
 
-img{
-	width: 250px;
-}
-
 body{
 	margin: 0px;
 }
@@ -20,7 +16,6 @@ body{
 }
 
 .itemBlock button {
-
 	display: none;
 }
 
@@ -30,36 +25,31 @@ body{
 }
 
 
-.meta, .score{
-	display:inline-block;
-	white-space:nowrap;
-	overflow:hidden;
-	text-overflow:ellipsis;
+#itemArea .meta, #itemArea .score{
+	display: inline-block;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 
-#itemArea .v-virtual-scroll__container {
-	/* FlexBoxを使用 */
-	display: flex;
+#itemArea {
+	/* gridを使用 */
+	display: grid;
 
-	/* 横並び */
-	flex-direction: row;
+	/* 中央寄せ */
+	justify-content: center;
 
-	/* 下に折り返す */
-	flex-wrap: wrap;
+	/* 中央寄せ */
+	align-items: stretch;
 
-	/* 左寄せ */
-	justify-content: flex-start;
-
-	/* 上揃え */
-	align-items: flex-start;
-
-	/* 複数行になっても上揃え */
-	align-content: flex-start;
+	/* 複数行になって中央寄せ */
+	align-content: center;
 }
 
-figure {
-	margin: 0;
+#itemArea .v-card {
+	display:flex;
+	flex-direction: column;
 }
 
 
