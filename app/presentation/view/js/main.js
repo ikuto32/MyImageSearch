@@ -43,7 +43,7 @@ const app = Vue.createApp({
         }
     },
     mounted() {
-        window.addEventListener("scroll", this.updateImageFromScroll)
+        // window.addEventListener("scroll", this.updateImageFromScroll)
         window.addEventListener("load", this.init)
     },
     methods:{
@@ -95,9 +95,9 @@ const app = Vue.createApp({
 
 
         //下までスクロールすると、次の画像を読み込む。
-        updateImageFromScroll() {
+        updateImageFromScroll(e) {
             // 現在のスクロール値
-            let scrollY = Math.max(window.pageYOffset - this.item_height*2, 0);
+            let scrollY = Math.max(e.target.scrollTop - 2 * this.item_height, 0);
 
             console.log("スクロール: " + scrollY + " / " + (this.item_height * this.resultBuffer.length / this.numCols));
 
@@ -106,7 +106,7 @@ const app = Vue.createApp({
                 this.padding_bottom = (this.item_height * this.resultBuffer.length / this.numCols) - this.padding_top;
                 this.showNextImg();
             }
-            while (scrollY - this.padding_top < -this.item_height){
+            while (scrollY - this.padding_top <= -this.item_height){
                 this.padding_top -= this.item_height;
                 this.padding_bottom = (this.item_height * this.resultBuffer.length / this.numCols) - this.padding_top;
                 this.showPrevImg();
