@@ -39,7 +39,12 @@ const app = Vue.createApp({
             /**
              * @type {DisplayItem[]}
              */
-            displayItems:[]
+            displayItems:[],
+
+            /**
+             * @type {{[itemId: string]: boolean}}
+             */
+            selectedItemId:{}
         }
     },
     mounted() {
@@ -64,6 +69,7 @@ const app = Vue.createApp({
 
             //現在表示されているものを削除
             this.displayItems = []
+            this.selectedItemId = {}
             this.showedItemIndex = 0;
             //一部表示
             this.sliceShowImg(0, this.numRows * this.numCols)
@@ -211,7 +217,7 @@ const app = Vue.createApp({
         //画像から検索するボタンの動作
         imagesSearchButton() {
 
-            let selectedId = [...this.displayItems].filter(item => item.selected).map(item => item.id)
+            let selectedId = Object.keys(this.selectedItemId)
 
             this.setBuffer(repository.searchImage(this.model_name, this.pretrained, selectedId, this.aesthetic_quality_beta, this.aesthetic_quality_range))
             .then(this.initImage);
@@ -230,6 +236,17 @@ const app = Vue.createApp({
             console.log("未実装")
         },
 
+        onSelectItem(event) {
+
+            const index = event.currentTarget.dataset.index;
+            const item = this.displayItems[index];
+
+            if(this.selectedItemId[item.id]) {
+                delete this.selectedItemId[item.id];
+            } else {
+                this.selectedItemId[item.id] = true;
+            }
+        }
     }
 })
 

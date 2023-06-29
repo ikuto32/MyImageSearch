@@ -33,6 +33,7 @@
                         temporary
                         >
                             {{ text }}
+                            {{ selectedItemId }}
                             <v-btn @click="nameSearchButton">名前検索</v-btn>
                             <v-btn @click="copyImagesButton">画像をコピー</v-btn>
                             <v-switch label="正規表現を使う" id="trueRegexp" v-model="isRegexp"></v-switch>
@@ -78,9 +79,11 @@
                             <v-card
                             v-for="(item, index) in displayItems"
                             :key="item.id"
-                            @click="item.selected = !item.selected"
-                            :class="[{'selectedItem' : item.selected}, 'itemBlock']"
-                            :color="item.selected ? 'light-blue-lighten-4' : null"
+                            @click="onSelectItem"
+                            :class="[{'selectedItem' : selectedItemId[item.id]}, 'itemBlock']"
+                            :color="selectedItemId[item.id] ? 'light-blue-lighten-4' : null"
+                            :data-index="index"
+                            :data-selected="selectedItemId[item.id]"
                             >
                                 <v-img :src="item.img" :title="item.img_name" height="200" transition="false">
                                     <v-btn icon>
