@@ -165,7 +165,6 @@ const app = Vue.createApp({
                  * @type {DisplayItem[]}
                  */
                 this.displayItems.push({
-
                     id: result.item.id,
                     score: result.score,
                     img_name: result.item.name,
