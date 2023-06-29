@@ -34,12 +34,12 @@ class Loader(Dataset):
     def __getitem__(self, idx):
         while True:
             try:
-                image = Image.open(
-                    f"{self.images_dir}/{self.img_list[self.i]}"
-                ).convert("RGB")
+                image_path = f"{self.images_dir}/{self.img_list[self.i]}"
+                image = Image.open(image_path).convert("RGB")
                 break
-            except:
-                traceback.print_exc()
+            except Exception as e:
+                print(f"An error occurred while opening image: {image_path}")
+                print(e)
                 self.i += 1
                 self.i %= len(self.img_list)
 
@@ -79,13 +79,13 @@ def get_aesthetic_model(clip_model="vit_l_14"):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
+    parser.add_argument("--image_dir", help="dir", default="D:/dataset/gallery-dl")
+    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
     parser.add_argument(
-        "--search_model_name", help="model_name", default="ViT-L-14-336"
+        "--search_model_name", help="model_name", default="ViT-L-14"
     )
     parser.add_argument(
-        "--search_model_pretrained", help="pretrained", default="openai"
+        "--search_model_pretrained", help="pretrained", default="commonpool_xl_s13b_b90k"
     )
     parser.add_argument(
         "--search_model_out_dim", help="search_model_out_dim", default=768
@@ -113,9 +113,11 @@ def main():
 
     files = itertools.chain.from_iterable(dirPath.glob(f"**/*.{e}") for e in extensions)
 
-    files_list: list[str] = sorted(map(lambda f: str(f.relative_to(dirPath)), files))
+    files_list: list[str] = sorted(map(lambda f: str(f.relative_to(dirPath)), tqdm.tqdm(files)))
 
     print(len(files_list))
+
+    del files
 
     print("load_db")
     os.makedirs(f"{search_model_meta_dir}", exist_ok=True)
@@ -130,13 +132,14 @@ def main():
     cur.execute("pragma mmap_size = 1073741824")  # 1 GB
 
     cur.execute(
-        """
+                """
                 create table if not exists image_meta(
-                  image_id text PRIMARY KEY,
-                  image_path text,
-                  meta blob,
-                  aesthetic_quality real
-                )"""
+                    image_id text PRIMARY KEY,
+                    image_path text,
+                    meta blob,
+                    aesthetic_quality real
+                )
+                """
     )
 
     # GPUが使用可能か
@@ -184,13 +187,15 @@ def main():
                     LEFT OUTER JOIN image_meta
                     ON valid_id_table.valid_id = image_meta.image_id
 
-            """,
+                """,
                 con,
                 params=id_list[i : i + n],
             )
             temp.append(result)
 
         result = pd.concat(temp)
+
+        del temp, id_list
 
         amodel = get_aesthetic_model(clip_model="vit_l_14")
         amodel.eval()
@@ -201,6 +206,9 @@ def main():
         pbar = tqdm.tqdm(
             zip(result["valid_id"], result["meta"]), total=len(result["valid_id"])
         )
+
+        del result
+
         for i, (image_id, meta) in enumerate(pbar):
             if meta is not None:
                 meta = np.squeeze(meta)
@@ -212,10 +220,10 @@ def main():
             uncreated_image_paths.append(index_item_list[image_id])
 
         print(
-            f"meta is None:{len(uncreated_image_paths)}/{len(index_item_list)} ({len(uncreated_image_paths)/len(index_item_list)*100.:.4f}%)"
+            f"uncreated images:{len(uncreated_image_paths)}/{len(index_item_list)} ({len(uncreated_image_paths)/len(index_item_list)*100.:.4f}%)"
         )
         print(
-            f"meta is not None:{len(search_meta_list)}/{len(index_item_list)} ({len(search_meta_list)/len(index_item_list)*100.:.4f}%)"
+            f"existing metas:{len(search_meta_list)}/{len(index_item_list)} ({len(search_meta_list)/len(index_item_list)*100.:.4f}%)"
         )
 
         loader = DataLoader(
@@ -227,6 +235,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=1,
+            pin_memory=True
         )
 
         for i, (batched_image_input, batched_image_index) in enumerate(
@@ -250,21 +259,24 @@ def main():
                 batched_new_search_meta, batched_image_index
             ):
                 if type(new_search_meta).__module__ != "numpy":
+                    print(f"{type(new_search_meta).__module__} != numpy")
                     continue
 
                 if new_search_meta.shape[0] != args.search_model_out_dim:
+                    print(f"{new_search_meta.shape[0]} != {args.search_model_out_dim}")
                     continue
 
                 search_meta_list.append(new_search_meta)
                 new_search_meta_bytes = new_search_meta.tobytes()
 
                 aesthetic_quality: float = 0.0
-                try:
-                    image_features = torch.from_numpy(new_search_meta)
-                    image_features /= image_features.norm(dim=-1, keepdim=True)
-                    aesthetic_quality = amodel(image_features).item()
-                except:
-                    traceback.print_exc()
+                if new_search_meta.shape[0] == 768:
+                    try:
+                        image_features = torch.from_numpy(new_search_meta)
+                        image_features /= image_features.norm(dim=-1, keepdim=True)
+                        aesthetic_quality = amodel(image_features).item()
+                    except:
+                        traceback.print_exc()
 
                 image_path = uncreated_image_paths[image_index]
                 image_id: str = hashlib.sha256(str(image_path).encode()).hexdigest()
@@ -303,7 +315,7 @@ def main():
         cur.execute("pragma optimize")
         print("close")
         con.close()
-
+        del uncreated_image_paths, amodel, index_item_list, search_model, loader, pbar
         a = np.squeeze(np.array(search_meta_list, dtype=np.float32))
         faiss.normalize_L2(a)
         dim: int = a.shape[1]

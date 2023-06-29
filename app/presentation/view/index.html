@@ -64,19 +64,20 @@
                             <v-autocomplete
                             v-model="model_name"
                             label="model_name"
-                            :items="['ViT-L-14','ViT-L-14-336','ViT-bigG-14']"
+                            :items="['ViT-bigG-14','ViT-L-14','ViT-L-14-336']"
                             ></v-autocomplete>
                             <v-autocomplete
                             v-model="pretrained"
                             label="pretrained"
-                            :items="['openai','laion2b_s39b_b160k','commonpool_xl_s13b_b90k']"
+                            :items="['laion2b_s39b_b160k','commonpool_xl_s13b_b90k','openai']"
                             ></v-autocomplete>
                         </v-navigation-drawer>
                         <div id="itemArea"
                         :style="'grid-template-columns: repeat(' + numCols + ', minmax(100px, 1fr)); padding-top: ' + padding_top + 'px; padding-bottom: ' + padding_bottom + 'px;'"
                             >
                             <v-card
-                            v-for="item in displayItems"
+                            v-for="(item, index) in displayItems"
+                            :key="item.id"
                             @click="item.selected = !item.selected"
                             :class="[{'selectedItem' : item.selected}, 'itemBlock']"
                             :color="item.selected ? 'light-blue-lighten-4' : null"
