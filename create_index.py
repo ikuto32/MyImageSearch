@@ -16,15 +16,15 @@ import torch
 import torch.nn as nn
 import tqdm
 from PIL import Image, ImageFile
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, get_worker_info
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class Loader(Dataset):
-    def __init__(self, images_dir, file_names, transform):
+    def __init__(self, images_dir, img_list, transform):
         self.images_dir = images_dir
-        self.img_list = file_names
+        self.img_list = img_list
         self.transform = transform
         self.i = 0
 
@@ -77,15 +77,25 @@ def get_aesthetic_model(clip_model="vit_l_14"):
     return m
 
 
+def worker_init_fn(worker_id):
+    worker_info = get_worker_info()
+    dataset = worker_info.dataset  # the dataset copy in this worker process
+    print(worker_info)
+    sub_dataset_size = (len(dataset.img_list) // worker_info.num_workers)
+    dataset.i = sub_dataset_size * worker_id
+    print(f"sub dataset size:{sub_dataset_size}")
+    print(f"dataset index:{dataset.i}")
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image_dir", help="dir", default="D:/dataset/gallery-dl")
-    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
+    parser.add_argument("--image_dir", help="dir", default="./images")
+    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
     parser.add_argument(
-        "--search_model_name", help="model_name", default="ViT-L-14"
+        "--search_model_name", help="model_name", default="ViT-L-14-336"
     )
     parser.add_argument(
-        "--search_model_pretrained", help="pretrained", default="commonpool_xl_s13b_b90k"
+        "--search_model_pretrained", help="pretrained", default="openai"
     )
     parser.add_argument(
         "--search_model_out_dim", help="search_model_out_dim", default=768
@@ -234,8 +244,9 @@ def main():
             ),
             batch_size=args.batch_size,
             shuffle=False,
-            num_workers=1,
-            pin_memory=True
+            num_workers=4,
+            pin_memory=True,
+            worker_init_fn=worker_init_fn
         )
 
         for i, (batched_image_input, batched_image_index) in enumerate(
