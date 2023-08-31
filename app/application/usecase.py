@@ -71,7 +71,7 @@ class Usecase:
         if result_size > item_list_length:
             result_size = item_list_length
 
-        index.nprobe = 64
+        index.nprobe = 256
 
         print(f"index len:{index.ntotal}")
         distances, indices = index.search(query_features, k=result_size)
@@ -118,7 +118,6 @@ class Usecase:
             new_scores.append(ResultImageItem(i.item, Score(new_score)))
         return new_scores
 
-    @cache
     def search_text(self, model_id: ModelId, text: UploadText, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> list[ResultImageItem]:
         """文字列から検索する"""
 
@@ -186,7 +185,6 @@ class Usecase:
         scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
         return scores
 
-    @cache
     def search_name(self, model_id: ModelId, text: UploadText, is_regexp: bool, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> list[ResultImageItem]:
         """文字列から名前検索する"""
 

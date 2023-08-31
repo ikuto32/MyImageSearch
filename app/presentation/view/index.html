@@ -15,9 +15,9 @@
             <v-app-bar id="controlArea">
                 <v-app-bar-nav-icon @click.stop="isShowSetting = !isShowSetting"></v-app-bar-nav-icon>
                 <v-text-field label="search" id="textSearchBox" single-line dense clearable hide-details="auto" v-model="text" placeholder="Text"></v-text-field>
-                <v-btn @click="textSearchButton" prepend-icon="mdi-text-box-search" class="d-none d-md-flex">テキスト検索</v-btn>
+                <v-btn @click="textSearchButton" prepend-icon="mdi-format-text-variant" class="d-none d-md-flex">テキスト検索</v-btn>
                 <v-btn @click="imagesSearchButton" prepend-icon="mdi-image-search " class="d-none d-md-flex">画像検索</v-btn>
-                <v-btn @click="textSearchButton" icon="mdi-text-box-search" class="d-md-none"></v-btn>
+                <v-btn @click="textSearchButton" icon="mdi-format-text-variant" class="d-md-none"></v-btn>
                 <v-btn @click="imagesSearchButton" icon="mdi-image-search " class="d-md-none"></v-btn>
             </v-app-bar>
             <v-main>

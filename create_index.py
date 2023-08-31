@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import hashlib
 import itertools
 import os
@@ -32,7 +33,7 @@ class Loader(Dataset):
         return len(self.img_list)
 
     def __getitem__(self, idx):
-        while True:
+        for _ in self.img_list:
             try:
                 image_path = f"{self.images_dir}/{self.img_list[self.i]}"
                 image = Image.open(image_path).convert("RGB")
@@ -44,12 +45,13 @@ class Loader(Dataset):
                 self.i %= len(self.img_list)
 
         image_index = self.i
+        image_hash = get_image_hash(image)
         if self.transform is not None:
             image = self.transform(image)
 
         self.i += 1
         self.i %= len(self.img_list)
-        return image, image_index
+        return image, image_index, image_hash
 
 
 def get_aesthetic_model(clip_model="vit_l_14"):
@@ -87,6 +89,15 @@ def worker_init_fn(worker_id):
     print(f"dataset index:{dataset.i}")
 
 
+def get_image_hash(pil_image, hash_size=8):
+    pil_image = pil_image.resize((hash_size, hash_size))
+    pil_image = pil_image.convert("L")
+    pixels = list(pil_image.getdata())
+    avg_pixel = sum(pixels) / len(pixels)
+    image_hash = ''.join(['1' if pixel > avg_pixel else '0' for pixel in pixels])
+    return image_hash
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image_dir", help="dir", default="./images")
@@ -101,9 +112,9 @@ def main():
         "--search_model_out_dim", help="search_model_out_dim", default=768
     )
     parser.add_argument("--batch_size", help="batch size", default=256)
-    parser.add_argument("--nlist", help="nlist", default=16)
-    parser.add_argument("--M", help="M", default=256)
-    parser.add_argument("--bits_per_code", help="bits_per_code", default=4)
+    parser.add_argument("--nlist", help="centroid size", default=32)
+    parser.add_argument("--M", help="M", default=768)
+    parser.add_argument("--bits_per_code", help="bits_per_code", default=8)
     parser.add_argument(
         "--metas_faiss_index_file_name",
         help="metas_faiss_index_file_name",
@@ -147,7 +158,9 @@ def main():
                     image_id text PRIMARY KEY,
                     image_path text,
                     meta blob,
-                    aesthetic_quality real
+                    aesthetic_quality real,
+                    time_stamp_ISO text,
+                    image_hash text
                 )
                 """
     )
@@ -244,12 +257,12 @@ def main():
             ),
             batch_size=args.batch_size,
             shuffle=False,
-            num_workers=4,
+            num_workers=8,
             pin_memory=True,
             worker_init_fn=worker_init_fn
         )
 
-        for i, (batched_image_input, batched_image_index) in enumerate(
+        for i, (batched_image_input, batched_image_index, batched_image_hash) in enumerate(
             tqdm.tqdm(loader)
         ):
             batched_image_input = batched_image_input.to(device)
@@ -266,8 +279,8 @@ def main():
                 traceback.print_exc()
                 continue
 
-            for new_search_meta, image_index in zip(
-                batched_new_search_meta, batched_image_index
+            for new_search_meta, image_index, image_hash in zip(
+                batched_new_search_meta, batched_image_index, batched_image_hash
             ):
                 if type(new_search_meta).__module__ != "numpy":
                     print(f"{type(new_search_meta).__module__} != numpy")
@@ -292,17 +305,24 @@ def main():
                 image_path = uncreated_image_paths[image_index]
                 image_id: str = hashlib.sha256(str(image_path).encode()).hexdigest()
 
+                time_stamp_ISO = datetime.datetime.now(datetime.timezone.utc).isoformat() #UTC time
+
                 param = (
                     image_id,
                     image_path,
                     new_search_meta_bytes,
                     aesthetic_quality,
+                    time_stamp_ISO,
+                    image_hash,
+
                     new_search_meta_bytes,
                     aesthetic_quality,
+                    time_stamp_ISO,
+                    image_hash
                 )
                 try:
                     cur.execute(
-                        "insert into image_meta values(?, ?, ?, ?) on conflict(image_id) do update set meta=?, aesthetic_quality=?",
+                        "insert into image_meta values(?, ?, ?, ?, ?, ?) on conflict(image_id) do update set meta=?, aesthetic_quality=?, time_stamp_ISO=?, image_hash=?",
                         param,
                     )
                 except:
@@ -330,12 +350,12 @@ def main():
         a = np.squeeze(np.array(search_meta_list, dtype=np.float32))
         faiss.normalize_L2(a)
         dim: int = a.shape[1]
-        q = faiss.IndexFlatIP(dim)
-        nlist = args.nlist
+        quantizer = faiss.IndexFlatIP(dim)
+        n_centroids = args.nlist
         M = args.M
         bits_per_code = args.bits_per_code
         index = faiss.IndexIVFPQ(
-            q, dim, nlist, M, bits_per_code, faiss.METRIC_INNER_PRODUCT
+            quantizer, dim, n_centroids, M, bits_per_code, faiss.METRIC_INNER_PRODUCT
         )
         print("train")
         index.train(a)
