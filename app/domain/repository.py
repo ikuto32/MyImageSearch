@@ -10,22 +10,15 @@ class Repository(metaclass=ABCMeta):
 
     @abstractmethod
     def load_all_image_item(self) -> list[ImageItem]:
-    
+
         pass
-    
+
     @abstractmethod
     def load_image(self, id : ImageId) -> Image:
-        
+
         pass
 
     @abstractmethod
     def load_all_model_item(self) -> list[ModelItem]:
 
         pass
-
-
-
-
-
-
-    

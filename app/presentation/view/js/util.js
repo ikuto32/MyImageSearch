@@ -2,8 +2,8 @@
 
 
 /**
- * 
- * @param {(any, any) => number} f1 
+ *
+ * @param {(any, any) => number} f1
  * @param {(any, any) => number} f2
  * @return {(any, any) => number}
  */
