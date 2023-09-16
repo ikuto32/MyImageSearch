@@ -1,4 +1,5 @@
 import natsort from 'https://cdn.jsdelivr.net/npm/natsort@2.0.3/+esm'
+import jszip from 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm'
 
 
 import * as repository from "./modules/repository.js"
@@ -230,10 +231,53 @@ const app = Vue.createApp({
             .then(this.initImage);
         },
 
-        //画像をコピーするボタンの動作
-        copyImagesButton() {
+        //画像をダウンロードするボタンの動作
+        allDownloadImagesButton() {
+            const images = this.resultBuffer.map(result => {
+                const ImageUrl = repository.getImageUrl(result.item.id)
 
-            console.log("未実装")
+                return fetch(ImageUrl).then((response) => ({
+                    data: response.arrayBuffer(),
+                    fileName: result.item.name.split('\\').pop()
+                }))
+            })
+            Promise.all(images).then((response) => this.generateImagesZip(response))
+        },
+
+        generateImagesZip(images) {
+            let zip = new jszip();
+
+          // フォルダ作成
+            const folderName = "images";
+            let folder = zip.folder(folderName);
+
+            // フォルダ下に画像を格納
+            images.forEach(image => {
+                if (image.data && image.fileName) {
+                    folder.file(image.fileName, image.data)
+                }
+            });
+
+            // zip を生成
+            zip.generateAsync({ type: "blob" }).then(blob => {
+              // ダウンロードリンクを 生成
+                let dlLink = document.createElement("a");
+
+              // blob から URL を生成
+                const dataUrl = URL.createObjectURL(blob);
+                dlLink.href = dataUrl;
+                dlLink.download = `${folderName}.zip`;
+
+              // 設置/クリック/削除
+                document.body.insertAdjacentElement("beforeEnd", dlLink);
+                dlLink.click();
+                dlLink.remove();
+
+              // オブジェクト URL の開放
+                setTimeout(function() {
+                window.URL.revokeObjectURL(dataUrl);
+                }, 1000);
+            });
         },
 
         onSelectItem(event) {

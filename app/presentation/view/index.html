@@ -33,7 +33,7 @@
                         temporary
                         >
                             <v-btn @click="nameSearchButton">名前検索</v-btn>
-                            <v-btn @click="copyImagesButton">画像をコピー</v-btn>
+                            <v-btn @click="allDownloadImagesButton">画像を一括ダウンロード</v-btn>
                             <v-switch label="正規表現を使う" id="trueRegexp" v-model="isRegexp"></v-switch>
                             <span class="rangeSpan d-flex flex-row">
                                 <v-slider class="" label="numCols" id="setnNumCols" :min="1" :max="24" :step="1"
@@ -94,6 +94,9 @@
                                                 <v-img :src="item.img" :title="item.img_name" width="90vw" height="85vh"></v-img>
                                                 <v-card-title>
                                                     <span class="meta">{{ item.img_name }}</span>
+                                                    <a :href="item.img" :download="item.img_name.split('\\').pop()">
+                                                        <v-icon icon="mdi-download" color="info"></v-icon>
+                                                    </a>
                                                 </v-card-title>
                                             </v-card>
                                         </v-dialog>
