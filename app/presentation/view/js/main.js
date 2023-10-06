@@ -233,7 +233,7 @@ const app = Vue.createApp({
 
         //画像をダウンロードするボタンの動作
         allDownloadImagesButton() {
-            const images = this.resultBuffer.map(result => {
+            const images = this.resultBuffer.slice(0, 1000).map(result => {
                 const ImageUrl = repository.getImageUrl(result.item.id)
 
                 return fetch(ImageUrl).then((response) => ({

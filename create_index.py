@@ -108,20 +108,20 @@ def get_image_hash(pil_image, hash_size=8):
 
 def parse_argument(parser: argparse.ArgumentParser):
     "起動引数をパースする"
-    parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
+    parser.add_argument("--image_dir", help="dir", default="D:/dataset/gallery-dl")
+    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
     parser.add_argument(
-        "--search_model_name", help="model_name", default="ViT-L-14-336"
+        "--search_model_name", help="model_name", default="ViT-bigG-14"
     )
     parser.add_argument(
-        "--search_model_pretrained", help="pretrained", default="openai"
+        "--search_model_pretrained", help="pretrained", default="laion2b_s39b_b160k"
     )
     parser.add_argument(
-        "--search_model_out_dim", help="search_model_out_dim", default=768
+        "--search_model_out_dim", help="search_model_out_dim", default=1280
     )
     parser.add_argument("--batch_size", help="batch size", default=256)
     parser.add_argument("--nlist", help="centroid size", default=64)
-    parser.add_argument("--M", help="M", default=768)
+    parser.add_argument("--M", help="M", default=1280)
     parser.add_argument("--bits_per_code", help="bits_per_code", default=8)
     parser.add_argument(
         "--metas_faiss_index_file_name",
@@ -311,7 +311,7 @@ def main():
         ),
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=16,
+        num_workers=8,
         pin_memory=True,
         worker_init_fn=worker_init_fn
     )
@@ -398,18 +398,21 @@ def main():
     cur.execute("pragma vacuum")
     print("pragma optimize")
     cur.execute("pragma optimize")
+    print("close")
+    con.close()
 
+    del uncreated_image_paths, amodel, index_item_list, search_model, loader, pbar
     # データベースに問い合わせる。
+    con: sqlite3.Connection = connect_db(search_model_meta_dir)
+    cur: sqlite3.Cursor = con.cursor()
     result = pd.read_sql_query(
         """
         SELECT image_id, image_path, meta FROM image_meta
         """, con)
     sorted_result = result.sort_values('image_path').reset_index()
 
-    print("close")
     con.close()
-    del uncreated_image_paths, amodel, index_item_list, search_model, loader, pbar
-
+    
     pbar = tqdm.tqdm(
         zip(sorted_result["image_path"], sorted_result["meta"]), total=len(sorted_result["image_path"])
     )
