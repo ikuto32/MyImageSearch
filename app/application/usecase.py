@@ -69,7 +69,7 @@ class Usecase:
 
     def parse_search_query(self, search_query_text: str):
         try:
-            return np.fromstring(search_query_text.strip('[]'), sep=',', dtype=np.float32).reshape(1, -1)
+            return np.fromstring(search_query_text.strip('[]'), sep=',', dtype=np.float32)
         except ValueError:
             print("Invalid input format for a numpy array.")
             return None
@@ -79,10 +79,8 @@ class Usecase:
     def similarity_eval(
         self, item_list: list[ImageItem], index, query_features, result_size=2048
     ) -> list[ResultImageItem]:
-        # クエリベクトルの平均を計算
-        averaged_query_features = query_features.mean(axis=0).reshape(1, -1)
         # 正規化
-        faiss.normalize_L2(averaged_query_features)
+        faiss.normalize_L2(query_features)
         item_list_length: int = len(item_list)
         if result_size > item_list_length:
             result_size = item_list_length
@@ -90,8 +88,8 @@ class Usecase:
         index.nprobe = 256
 
         print(f"index len:{index.ntotal}")
-        print(f"averaged_query_features:{averaged_query_features}")
-        distances, indices = index.search(averaged_query_features, k=result_size)
+        print(f"averaged_query_features:{query_features}")
+        distances, indices = index.search(query_features, k=result_size)
 
         sorted_items: list[ImageItem] = sorted(
             item_list, key=lambda x: x.display_name.name
@@ -186,7 +184,8 @@ class Usecase:
             meta = model.encode_image(image).to("cpu").detach().numpy().copy()
             temp.append(meta)
 
-        features: np.ndarray = np.vstack(temp)
+        # クエリベクトルの平均を計算
+        features: np.ndarray = np.vstack(temp).mean(axis=0).reshape(1, -1)
 
         # indexを読み込み
         index = self._accessor.load_index_file(model_id)
