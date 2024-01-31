@@ -69,7 +69,7 @@ class Usecase:
 
     def parse_search_query(self, search_query_text: str):
         try:
-            return np.fromstring(search_query_text.strip('[]'), sep=',', dtype=np.float32)
+            return np.fromstring(search_query_text.strip('[]'), sep=',', dtype=np.float32).reshape(1, -1)
         except ValueError:
             print("Invalid input format for a numpy array.")
             return None
@@ -79,6 +79,7 @@ class Usecase:
     def similarity_eval(
         self, item_list: list[ImageItem], index, query_features, result_size=2048
     ) -> list[ResultImageItem]:
+        print(query_features.shape)
         # 正規化
         faiss.normalize_L2(query_features)
         item_list_length: int = len(item_list)
@@ -247,6 +248,7 @@ class Usecase:
             index=index,
             query_features=features,
         )
+        return ResultImageItemList(scores, self.format_search_query(features))
 
     def search_query(
         self, model_id: ModelId, search_query: str, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float
