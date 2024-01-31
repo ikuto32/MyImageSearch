@@ -70,7 +70,7 @@ export async function searchText(modelName, pretrained, text, aesthetic_quality_
         }
     }
 
-    return axios.post("/search/text", payload).then(res => res.data) 
+    return axios.post("/search/text", payload).then(res => res.data)
 }
 
 
@@ -88,15 +88,15 @@ export async function searchImage(modelName, pretrained, itemId_list, aesthetic_
     let payload = {
 
         params:{
-            model_name: modelName, 
-            pretrained: pretrained, 
+            model_name: modelName,
+            pretrained: pretrained,
             id : itemId_list,
             aesthetic_quality_beta: aesthetic_quality_beta,
             aesthetic_quality_range: aesthetic_quality_range
         }
     }
 
-    return axios.post("/search/image", payload).then(res => res.data) 
+    return axios.post("/search/image", payload).then(res => res.data)
 }
 
 
@@ -122,5 +122,56 @@ export async function searchName(modelName, pretrained, itemId_list, is_regexp, 
         }
     }
 
-    return axios.post("/search/name", payload).then(res => res.data) 
+    return axios.post("/search/name", payload).then(res => res.data)
+}
+
+
+/**
+ * 画像項目を乱数で検索する
+ * 
+ * @param {string} modelName
+ * @param {string} pretrained
+ * @param {string[]} itemId_list
+ * 
+ * @return {Promise<ResultItem[]>}
+ */
+export async function searchRandom(modelName, pretrained, aesthetic_quality_beta, aesthetic_quality_range) {
+
+    let payload = {
+
+        params:{
+            model_name: modelName,
+            pretrained: pretrained,
+            aesthetic_quality_beta: aesthetic_quality_beta,
+            aesthetic_quality_range: aesthetic_quality_range
+        }
+    }
+
+    return axios.post("/search/random", payload).then(res => res.data)
+}
+
+
+/**
+ * 画像項目をクエリで検索する
+ * 
+ * @param {string} modelName
+ * @param {string} pretrained
+ * @param {string[]} itemId_list
+ * 
+ * @return {Promise<ResultItem[]>}
+ */
+export async function searchQuery(modelName, pretrained, search_query, aesthetic_quality_beta, aesthetic_quality_range) {
+
+    let payload = {
+
+        params:{
+            model_name: modelName,
+            pretrained: pretrained,
+            search_query: search_query,
+            aesthetic_quality_beta: aesthetic_quality_beta,
+            aesthetic_quality_range: aesthetic_quality_range
+        }
+    }
+
+    return axios.post("/search/query", payload).then(res => res.data)
 }

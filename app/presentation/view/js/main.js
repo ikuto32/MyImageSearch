@@ -25,6 +25,7 @@ const app = Vue.createApp({
             numRows: 10,
             model_name: "ViT-L-14-336",
             pretrained: "openai",
+            search_query: "",
             showedItemIndex: 0,
             aesthetic_quality_beta: 0.00,
             aesthetic_quality_range: [0, 10],
@@ -189,8 +190,10 @@ const app = Vue.createApp({
          */
         setBuffer(promise) {
 
-            return promise.then(array => {
+            return promise.then(result => {
 
+                let array = result.list
+                console.log('結果', result)
                 console.log('ソート前' + JSON.stringify(array))
 
                 //並び替え
@@ -202,6 +205,7 @@ const app = Vue.createApp({
                 console.log('ソート後' + JSON.stringify(array))
 
                 //バッファに登録
+                this.search_query = result.search_query
                 this.resultBuffer = array
             })
         },
@@ -242,6 +246,20 @@ const app = Vue.createApp({
                 }))
             })
             Promise.all(images).then((response) => this.generateImagesZip(response))
+        },
+
+        //乱数から検索するボタンの動作
+        randomSearchButton() {
+
+            this.setBuffer(repository.searchRandom(this.model_name, this.pretrained, this.aesthetic_quality_beta, this.aesthetic_quality_range))
+            .then(this.initImage);
+        },
+
+        //クエリから検索するボタンの動作
+        querySearchButton() {
+
+            this.setBuffer(repository.searchQuery(this.model_name, this.pretrained, this.search_query, this.aesthetic_quality_beta, this.aesthetic_quality_range))
+            .then(this.initImage);
         },
 
         generateImagesZip(images) {

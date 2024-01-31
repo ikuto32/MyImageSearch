@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass
 from typing import Any
 from PIL import Image as PILImage
@@ -92,6 +91,14 @@ class ResultImageItem:
 
     item: ImageItem
     score: Score
+
+
+@dataclass(frozen=True)
+class ResultImageItemList:
+    """検索結果の画像項目のリストを表すエンティティクラス"""
+
+    list: list[ResultImageItem]
+    search_query: str
 
 
 # =====================================================
