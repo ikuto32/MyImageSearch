@@ -115,8 +115,8 @@ def parse_arguments():
     """Parse command-line arguments."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image_dir", help="dir", default="D:/dataset/gallery-dl")
-    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
+    parser.add_argument("--image_dir", help="dir", default="./images")
+    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
     parser.add_argument(
         "--search_model_name", help="model_name", default="ViT-L-14-336"
     )
