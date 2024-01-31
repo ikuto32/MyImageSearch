@@ -24,8 +24,8 @@ class LocalRepository(Repository):
             image_dir_path: pathlib.Path
             ) -> None:
 
-        self._image_dir_path: pathlib.Path  = image_dir_path
-        self._id_to_path : dict[ImageId, pathlib.Path] = {}
+        self._image_dir_path: pathlib.Path = image_dir_path
+        self._id_to_path: dict[ImageId, pathlib.Path] = {}
 
     @cache
     def load_all_image_item(self) -> List[ImageItem]:

@@ -24,6 +24,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class DirImageDataset(Dataset):
+    """Custom Dataset for loading images from a directory."""
 
     def __init__(self, images_dir, img_list, transform):
         self.images_dir = images_dir
@@ -63,6 +64,8 @@ class DirImageDataset(Dataset):
 
 
 def worker_init_fn(worker_id):
+    """Initializes dataset workers for DataLoader."""
+
     worker_info = get_worker_info()
     dataset = worker_info.dataset  # the dataset copy in this worker process
     print(worker_info)
@@ -98,6 +101,8 @@ def get_aesthetic_model(clip_model="vit_l_14"):
 
 
 def get_image_hash(pil_image, hash_size=8):
+    """Generate hash for an image."""
+
     pil_image = pil_image.resize((hash_size, hash_size))
     pil_image = pil_image.convert("L")
     pixels = list(pil_image.getdata())
@@ -106,22 +111,24 @@ def get_image_hash(pil_image, hash_size=8):
     return image_hash
 
 
-def parse_argument(parser: argparse.ArgumentParser):
-    "起動引数をパースする"
-    parser.add_argument("--image_dir", help="dir", default="D:/dataset/gallery-dl")
-    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
+def parse_arguments():
+    """Parse command-line arguments."""
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--image_dir", help="dir", default="./images")
+    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
     parser.add_argument(
-        "--search_model_name", help="model_name", default="ViT-bigG-14"
+        "--search_model_name", help="model_name", default="ViT-L-14-336"
     )
     parser.add_argument(
-        "--search_model_pretrained", help="pretrained", default="laion2b_s39b_b160k"
+        "--search_model_pretrained", help="pretrained", default="openai"
     )
     parser.add_argument(
-        "--search_model_out_dim", help="search_model_out_dim", default=1280
+        "--search_model_out_dim", help="search_model_out_dim", default=768
     )
     parser.add_argument("--batch_size", help="batch size", default=256)
     parser.add_argument("--nlist", help="centroid size", default=64)
-    parser.add_argument("--M", help="M", default=1280)
+    parser.add_argument("--M", help="M", default=768)
     parser.add_argument("--bits_per_code", help="bits_per_code", default=8)
     parser.add_argument(
         "--metas_faiss_index_file_name",
@@ -225,7 +232,7 @@ def createIndex(n_centroids, M, bits_per_code, dim) -> faiss.IndexIVFPQ:
 def main():
 
     # 起動引数
-    args = parse_argument(argparse.ArgumentParser())
+    args = parse_arguments()
 
     # 作業フォルダの作成
     search_model_meta_dir: str = (
@@ -261,21 +268,17 @@ def main():
         jit=False,
     )
 
+    aesthetic_model = get_aesthetic_model(clip_model="vit_l_14")
+    aesthetic_model.eval()
+
     index_item_list: dict[str, str] = {}
 
     for file in tqdm.tqdm(file_list):
         image_id: str = hashlib.sha256(str(file).encode()).hexdigest()
         index_item_list[image_id] = file
 
-    id_list: list[str] = list(index_item_list.keys())
-
     # データベースに問い合わせる
-    result = load_image_meta_from_db(con, id_list, loop_size=10000)
-
-    del id_list
-
-    amodel = get_aesthetic_model(clip_model="vit_l_14")
-    amodel.eval()
+    result = load_image_meta_from_db(con, id_list=list(index_item_list.keys()), loop_size=10000)
 
     search_meta_list = []
     uncreated_image_paths = []
@@ -352,14 +355,15 @@ def main():
                 try:
                     image_features = torch.from_numpy(new_search_meta)
                     image_features /= image_features.norm(dim=-1, keepdim=True)
-                    aesthetic_quality = amodel(image_features).item()
+                    aesthetic_quality = aesthetic_model(image_features).item()
                 except:
                     traceback.print_exc()
 
             image_path = uncreated_image_paths[image_index]
             image_id: str = hashlib.sha256(str(image_path).encode()).hexdigest()
 
-            time_stamp_ISO = datetime.datetime.now(datetime.timezone.utc).isoformat() #UTC time
+            # UTC time
+            time_stamp_ISO = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
             param = (
                 image_id,
@@ -401,21 +405,24 @@ def main():
     print("close")
     con.close()
 
-    del uncreated_image_paths, amodel, index_item_list, search_model, loader, pbar
+    del uncreated_image_paths, aesthetic_model, index_item_list, search_model, loader, pbar, con, cur
     # データベースに問い合わせる。
     con: sqlite3.Connection = connect_db(search_model_meta_dir)
-    cur: sqlite3.Cursor = con.cursor()
     result = pd.read_sql_query(
         """
         SELECT image_id, image_path, meta FROM image_meta
         """, con)
     sorted_result = result.sort_values('image_path').reset_index()
 
+    del result
+
     con.close()
-    
+
     pbar = tqdm.tqdm(
         zip(sorted_result["image_path"], sorted_result["meta"]), total=len(sorted_result["image_path"])
     )
+
+    del sorted_result
 
     search_meta_list = []
     for i, (image_path, meta) in enumerate(pbar):
@@ -425,8 +432,11 @@ def main():
             if a.shape[0] == args.search_model_out_dim:
                 search_meta_list.append(a)
 
+    del pbar
     # faissの入力形式に変換する。
     a = np.squeeze(np.array(search_meta_list, dtype=np.float32))
+
+    del search_meta_list
 
     # 正規化する。
     faiss.normalize_L2(a)

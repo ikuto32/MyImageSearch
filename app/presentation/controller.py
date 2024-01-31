@@ -1,5 +1,6 @@
 
 import ast
+import logging
 from flask import Flask, request, make_response
 
 import pathlib
@@ -8,7 +9,7 @@ import base64
 import mimetypes
 
 from app.application.usecase import Usecase
-from app.domain.domain_object import ImageItem, ImageId, ModelId, ModelItem, UploadImage, ResultImageItem, UploadText
+from app.domain.domain_object import ImageItem, ImageId, ModelId, ModelItem, ResultImageItemList, UploadImage, ResultImageItem, UploadText
 
 
 # ============================================================
@@ -28,6 +29,10 @@ def start_app(in_usecase: Usecase):
     # text/javascript が text/plain になる問題の対策
     # https://bugs.python.org/issue43975
     mimetypes.add_type("text/javascript", ".js", True)
+
+    # ログレベルをWARNING以上に設定することで、INFOレベルのログを非表示にします
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.WARNING)
 
     # Flask実行
     print(app.url_map)
@@ -165,6 +170,48 @@ def search_upload_image():
 
     return from_result_to_json(usecase.search_upload_image(model_id, image))
 
+
+@app.route("/search/random", methods=["POST"])
+def search_random():
+    """乱数から検索して、結果を返す"""
+
+    # jsonを解釈
+    json_obj = json.loads(request.data).get("params")
+
+    # 検索モデルのIDを取得する。
+    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+
+    # 美感スコアの重要度を取得する。
+    aesthetic_quality_beta: float = json_obj["aesthetic_quality_beta"]
+
+    aesthetic_quality_range = json_obj["aesthetic_quality_range"]
+
+    # IDのリストを取得する。
+    result = usecase.search_random(model_id, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
+    return from_result_to_json(result)
+
+
+@app.route("/search/query", methods=["POST"])
+def search_query():
+    """クエリから検索して、結果を返す"""
+
+    # jsonを解釈
+    json_obj = json.loads(request.data).get("params")
+
+    # 検索モデルのIDを取得する。
+    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+
+    search_query = json_obj["search_query"]
+
+    # 美感スコアの重要度を取得する。
+    aesthetic_quality_beta: float = json_obj["aesthetic_quality_beta"]
+
+    aesthetic_quality_range = json_obj["aesthetic_quality_range"]
+
+    # IDのリストを取得する。
+    result = usecase.search_query(model_id, search_query, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
+    return from_result_to_json(result)
+
 # ============================================================
 
 
@@ -181,7 +228,25 @@ def from_image_item_list_to_json(value: list[ImageItem]) -> str:
     return json.dumps(objs)
 
 
-def from_result_to_json(value: list[ResultImageItem]) -> str:
+def from_result_to_json(value: ResultImageItemList) -> str:
+
+    objs = map(lambda r: {
+        "item": {
+            "id": str(r.item.id.id),
+            "name": str(r.item.display_name.name)
+        },
+        "score": float(r.score.score)
+    },
+        value.list
+    )
+
+    return json.dumps({
+        "list": list(objs),
+        "search_query": value.search_query
+    })
+
+
+def from_result_list_to_json(value: list[ResultImageItem]) -> str:
 
     objs = map(lambda r: {
         "item": {
@@ -193,8 +258,7 @@ def from_result_to_json(value: list[ResultImageItem]) -> str:
         value
     )
 
-    objs = list(objs)
-    return json.dumps(objs)
+    return json.dumps(list(objs))
 
 
 def from_model_id_to_json(value: list[ModelItem]) -> str:

@@ -12,6 +12,7 @@ from app.domain.domain_object import (
     Image,
     ImageName,
     Model,
+    ResultImageItemList,
     Score,
     Tokenizer,
     UploadImage,
@@ -63,10 +64,25 @@ class Usecase:
 
     # ===================================================================
 
+    def format_search_query(self, search_query_obj) -> str:
+        return np.array2string(search_query_obj, separator=', ')
+
+    def parse_search_query(self, search_query_text: str):
+        try:
+            return np.fromstring(search_query_text.strip('[]'), sep=',', dtype=np.float32).reshape(1, -1)
+        except ValueError:
+            print("Invalid input format for a numpy array.")
+            return None
+
+    # ===================================================================
+
     def similarity_eval(
         self, item_list: list[ImageItem], index, query_features, result_size=2048
     ) -> list[ResultImageItem]:
-        faiss.normalize_L2(query_features)
+        # クエリベクトルの平均を計算
+        averaged_query_features = query_features.mean(axis=0).reshape(1, -1)
+        # 正規化
+        faiss.normalize_L2(averaged_query_features)
         item_list_length: int = len(item_list)
         if result_size > item_list_length:
             result_size = item_list_length
@@ -74,7 +90,8 @@ class Usecase:
         index.nprobe = 256
 
         print(f"index len:{index.ntotal}")
-        distances, indices = index.search(query_features, k=result_size)
+        print(f"averaged_query_features:{averaged_query_features}")
+        distances, indices = index.search(averaged_query_features, k=result_size)
 
         sorted_items: list[ImageItem] = sorted(
             item_list, key=lambda x: x.display_name.name
@@ -118,7 +135,7 @@ class Usecase:
             new_scores.append(ResultImageItem(i.item, Score(new_score)))
         return new_scores
 
-    def search_text(self, model_id: ModelId, text: UploadText, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> list[ResultImageItem]:
+    def search_text(self, model_id: ModelId, text: UploadText, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> ResultImageItemList:
         """文字列から検索する"""
 
         # モデルの読み込み
@@ -145,12 +162,11 @@ class Usecase:
         )
 
         scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
-
-        return scores
+        return ResultImageItemList(scores, self.format_search_query(features))
 
     def search_image(
         self, model_id: ModelId, id_list: list[ImageId], aesthetic_quality_beta :float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float
-    ) -> list[ResultImageItem]:
+    ) -> ResultImageItemList:
         """画像から検索する"""
 
         # モデルの読み込み
@@ -183,9 +199,9 @@ class Usecase:
         )
 
         scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
-        return scores
+        return ResultImageItemList(scores, self.format_search_query(features))
 
-    def search_name(self, model_id: ModelId, text: UploadText, is_regexp: bool, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> list[ResultImageItem]:
+    def search_name(self, model_id: ModelId, text: UploadText, is_regexp: bool, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> ResultImageItemList:
         """文字列から名前検索する"""
 
         scores: list[ResultImageItem] = []
@@ -202,19 +218,56 @@ class Usecase:
                 scores.append(ResultImageItem(image_item, Score(1.0)))
 
         scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
-        return scores
+        return ResultImageItemList(scores, "")
 
     def search_upload_image(
         self, model_id: ModelId, image: UploadImage
-    ) -> list[ResultImageItem]:
+    ) -> ResultImageItemList:
         """アップロードされた画像から検索する"""
 
-        return [
+        return ResultImageItemList([
             ResultImageItem(
                 item=ImageItem(id=ImageId(id=""), display_name=ImageName(name="")),
                 score=Score(score=0.0),
             )
-        ]
+        ], "")
+
+    def search_random(
+        self, model_id: ModelId, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float
+    ) -> ResultImageItemList:
+        """乱数から検索する"""
+
+        features: np.ndarray = np.random.normal(0, 1, [1, 768]).astype(np.float32)
+
+        # indexを読み込み
+        index = self._accessor.load_index_file(model_id)
+
+        # 類似度を計算する
+        scores: list[ResultImageItem] = self.similarity_eval(
+            item_list=self._accessor.load_index_item_list(model_id),
+            index=index,
+            query_features=features,
+        )
+
+    def search_query(
+        self, model_id: ModelId, search_query: str, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float
+    ) -> ResultImageItemList:
+        """クエリから検索する"""
+
+        features: np.ndarray = self.parse_search_query(search_query)
+
+        # indexを読み込み
+        index = self._accessor.load_index_file(model_id)
+
+        # 類似度を計算する
+        scores: list[ResultImageItem] = self.similarity_eval(
+            item_list=self._accessor.load_index_item_list(model_id),
+            index=index,
+            query_features=features,
+        )
+
+        scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
+        return ResultImageItemList(scores, self.format_search_query(features))
 
 
 # ===================================================================

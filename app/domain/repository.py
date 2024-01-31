@@ -14,7 +14,7 @@ class Repository(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def load_image(self, id : ImageId) -> Image:
+    def load_image(self, id: ImageId) -> Image:
 
         pass
 
