@@ -113,7 +113,6 @@ def get_image_hash(pil_image, hash_size=8):
 
 def parse_arguments():
     """Parse command-line arguments."""
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--image_dir", help="dir", default="./images")
     parser.add_argument("--meta_dir", help="dir", default="./clip_meta")

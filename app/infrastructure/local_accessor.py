@@ -21,7 +21,7 @@ class LocalAccessor(Accessor):
 
     def __init__(
         self,
-        meta_dir_path: pathlib  # type: ignore
+        meta_dir_path
     ) -> None:
 
         self._meta_dir_path = meta_dir_path

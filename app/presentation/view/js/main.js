@@ -29,6 +29,7 @@ const app = Vue.createApp({
             showedItemIndex: 0,
             aesthetic_quality_beta: 0.00,
             aesthetic_quality_range: [0, 10],
+            features_strength: 1.00,
             padding_top: 0,
             padding_bottom: 500,
             item_height:258,
@@ -259,6 +260,13 @@ const app = Vue.createApp({
         querySearchButton() {
 
             this.setBuffer(repository.searchQuery(this.model_name, this.pretrained, this.search_query, this.aesthetic_quality_beta, this.aesthetic_quality_range))
+            .then(this.initImage);
+        },
+
+        //クエリにテキストの特徴を足して検索するボタンの動作
+        querySearchButton() {
+
+            this.setBuffer(repository.addTextFeatures(this.model_name, this.pretrained, this.text, this.search_query, this.features_strength, this.aesthetic_quality_beta, this.aesthetic_quality_range))
             .then(this.initImage);
         },
 

@@ -175,3 +175,30 @@ export async function searchQuery(modelName, pretrained, search_query, aesthetic
 
     return axios.post("/search/query", payload).then(res => res.data)
 }
+
+/**
+ * 画像項目をクエリにstrengthの強さ分テキストの特徴を足してから検索する
+ * 
+ * @param {string} modelName
+ * @param {string} pretrained
+ * @param {string[]} itemId_list
+ * 
+ * @return {Promise<ResultItem[]>}
+ */
+export async function addTextFeatures(modelName, pretrained, text, search_query, features_strength, aesthetic_quality_beta, aesthetic_quality_range) {
+
+    let payload = {
+
+        params:{
+            model_name: modelName,
+            pretrained: pretrained,
+            text : text,
+            search_query: search_query,
+            features_strength: features_strength,
+            aesthetic_quality_beta: aesthetic_quality_beta,
+            aesthetic_quality_range: aesthetic_quality_range
+        }
+    }
+
+    return axios.post("/search/queryaddtext", payload).then(res => res.data)
+}

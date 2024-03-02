@@ -212,6 +212,30 @@ def search_query():
     result = usecase.search_query(model_id, search_query, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
     return from_result_to_json(result)
 
+@app.route("/search/queryaddtext", methods=["POST"])
+def add_text_features():
+    """クエリにテキストの特徴を足してから検索して、結果を返す"""
+
+    # jsonを解釈
+    json_obj = json.loads(request.data).get("params")
+
+    # 検索モデルのIDを取得する。
+    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+
+    text: str = json_obj["text"]
+
+    search_query = json_obj["search_query"]
+
+    strength = json_obj["features_strength"]
+
+    # 美感スコアの重要度を取得する。
+    aesthetic_quality_beta: float = json_obj["aesthetic_quality_beta"]
+
+    aesthetic_quality_range = json_obj["aesthetic_quality_range"]
+
+    # IDのリストを取得する。
+    result = usecase.add_text_features(model_id, UploadText(text), search_query, strength, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
+    return from_result_to_json(result)
 # ============================================================
 
 

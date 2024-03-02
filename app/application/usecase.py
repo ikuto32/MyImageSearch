@@ -79,7 +79,7 @@ class Usecase:
     def similarity_eval(
         self, item_list: list[ImageItem], index, query_features, result_size=2048
     ) -> list[ResultImageItem]:
-        print(query_features.shape)
+        print(f'shape:{query_features.shape}')
         # 正規化
         faiss.normalize_L2(query_features)
         item_list_length: int = len(item_list)
@@ -126,12 +126,17 @@ class Usecase:
         ] = self._accessor.load_aesthetic_quality_list(model_id)
         new_scores = []
         for i in scores:
-            aesthetic_quality_score: float = aesthetic_quality_item[i.item.id]
-            if aesthetic_quality_score >= aesthetic_quality_range_min and aesthetic_quality_score <= aesthetic_quality_range_max:
-                new_score = i.score.score * (1-aesthetic_quality_beta**2) + aesthetic_quality_score * aesthetic_quality_beta
-            else:
-                new_score = 0
-            new_scores.append(ResultImageItem(i.item, Score(new_score)))
+            try:
+                aesthetic_quality_score: float = aesthetic_quality_item[i.item.id]
+                if aesthetic_quality_score >= aesthetic_quality_range_min and aesthetic_quality_score <= aesthetic_quality_range_max:
+                    new_score = i.score.score * (1-aesthetic_quality_beta**2) + aesthetic_quality_score * aesthetic_quality_beta
+                else:
+                    new_score = 0
+                new_scores.append(ResultImageItem(i.item, Score(new_score)))
+            except IndexError:
+                traceback.print_exc()
+                continue
+
         return new_scores
 
     def search_text(self, model_id: ModelId, text: UploadText, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> ResultImageItemList:
@@ -267,8 +272,44 @@ class Usecase:
             query_features=features,
         )
 
-        scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
+        scores: list[ResultImageItem] = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
         return ResultImageItemList(scores, self.format_search_query(features))
 
+    def add_text_features(
+        self, model_id: ModelId, text: UploadText, search_query: str, strength: float, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float
+    ) -> ResultImageItemList:
+        """クエリにstrengthの強さ分テキストの特徴を足してから検索する"""
+
+        # モデルの読み込み
+        model: Model = self._accessor.load_model(model_id)
+
+        # テキストの埋め込みを計算
+        tokenizer: Tokenizer = self._accessor.load_tokenizer(model_id)
+
+        query_features: np.ndarray = self.parse_search_query(search_query)
+
+        text_features = (
+            model.model_obj[0]
+            .encode_text(tokenizer.tokenizer_obj([text.text]))
+            .to("cpu")
+            .detach()
+            .numpy()
+            .copy()
+        )
+
+        features = query_features + text_features * strength
+
+        # indexを読み込み
+        index = self._accessor.load_index_file(model_id)
+
+        # 類似度を計算する
+        scores: list[ResultImageItem] = self.similarity_eval(
+            item_list=self._accessor.load_index_item_list(model_id),
+            index=index,
+            query_features=features,
+        )
+
+        scores: list[ResultImageItem] = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
+        return ResultImageItemList(scores, self.format_search_query(features))
 
 # ===================================================================
