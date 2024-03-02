@@ -65,7 +65,7 @@ class Usecase:
     # ===================================================================
 
     def format_search_query(self, search_query_obj) -> str:
-        return np.array2string(search_query_obj, separator=', ')
+        return np.array2string(search_query_obj, separator=', ', suppress_small=True)
 
     def parse_search_query(self, search_query_text: str):
         try:
@@ -166,7 +166,7 @@ class Usecase:
         )
 
         scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
-        return ResultImageItemList(scores, self.format_search_query(features))
+        return ResultImageItemList(scores, self.format_search_query(features.copy()))
 
     def search_image(
         self, model_id: ModelId, id_list: list[ImageId], aesthetic_quality_beta :float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float
@@ -297,6 +297,7 @@ class Usecase:
             .copy()
         )
 
+        faiss.normalize_L2(text_features)
         features = query_features + text_features * strength
 
         # indexを読み込み
