@@ -37,6 +37,7 @@
                             <v-btn @click="allDownloadImagesButton">画像を一括ダウンロード</v-btn>
                             <v-btn @click="randomSearchButton">乱数から検索</v-btn>
                             <v-btn @click="querySearchButton">クエリから検索</v-btn>
+                            <v-btn @click="querySearchButton">クエリにテキストの特徴を足す</v-btn>
                             <v-switch label="正規表現を使う" id="trueRegexp" v-model="isRegexp"></v-switch>
                             <span class="rangeSpan d-flex flex-row">
                                 <v-slider class="" label="numCols" id="setnNumCols" :min="1" :max="24" :step="1"
@@ -63,6 +64,10 @@
                             v-model="aesthetic_quality_range"
                             thumb-label
                             ></v-range-slider>
+                            <v-slider label="features strength" :min="-2" :max="2" :step="0.1"
+                                v-model="features_strength"
+                                thumb-label
+                                ></v-slider>
                             <v-autocomplete
                             v-model="model_name"
                             label="model_name"
@@ -90,7 +95,7 @@
                             :data-index="index"
                             :data-selected="selectedItemId[item.id]"
                             >
-                                <v-img :src="item.img" :title="item.img_name" height="200" transition="false">
+                                <v-img :src="item.img" :title="item.img_name" height="200" transition="false" v-show="true">
                                     <v-btn icon>
                                         <v-icon icon="mdi-arrow-expand-all" color="info"></v-icon>
                                         <v-dialog
@@ -118,8 +123,8 @@
             </v-main>
         </v-app>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/vue@3.x/dist/vue.global.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/vuetify@3.x/dist/vuetify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.4/dist/vue.global.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vuetify@3.5/dist/vuetify.min.js"></script>
     <script type="module" src="./js/main.js"></script>
 </body>
 
