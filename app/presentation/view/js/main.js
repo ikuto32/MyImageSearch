@@ -264,7 +264,7 @@ const app = Vue.createApp({
         },
 
         //クエリにテキストの特徴を足して検索するボタンの動作
-        querySearchButton() {
+        addTextFeaturesButton() {
 
             this.setBuffer(repository.addTextFeatures(this.model_name, this.pretrained, this.text, this.search_query, this.features_strength, this.aesthetic_quality_beta, this.aesthetic_quality_range))
             .then(this.initImage);
