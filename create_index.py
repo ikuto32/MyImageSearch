@@ -54,13 +54,12 @@ class DirImageDataset(Dataset):
         assert image_path is not None or image is not None, "An error occurred while opening image"
 
         image_index = self.i
-        image_hash = get_image_hash(image)
         if self.transform is not None:
             image = self.transform(image)
 
         self.i += 1
         self.i %= len(self.img_list)
-        return image, image_index, image_hash
+        return image, image_index
 
 
 def worker_init_fn(worker_id):
@@ -74,41 +73,31 @@ def worker_init_fn(worker_id):
     print(f"sub dataset size:{sub_dataset_size}")
     print(f"dataset index:{dataset.i}")
 
+class Aesthetic_model(nn.Module):
+    def __init__(self, input_dim=768):
+        super(Aesthetic_model, self).__init__()
+        self.fc1 = nn.Sequential(nn.Linear(input_dim, 1024), nn.SiLU())
+        self.fc2 = nn.Sequential(nn.Linear(1024, 1024), nn.SiLU(), nn.Dropout())
+        self.fc3 = nn.Sequential(nn.Linear(1024, 1024), nn.SiLU(), nn.Dropout())
+        self.fc4 = nn.Sequential(nn.Linear(1024, 1))
 
-def get_aesthetic_model(clip_model="vit_l_14"):
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.fc2(x)
+        x = self.fc3(x)
+        x = self.fc4(x)
+        return x
+
+
+def get_aesthetic_model(path_to_model, clip_model="vit_l_14"):
     """load the aethetic model"""
-    home = expanduser("~")
-    cache_folder = home + "/.cache/emb_reader"
-    path_to_model = cache_folder + "/sa_0_4_" + clip_model + "_linear.pth"
-    if not os.path.exists(path_to_model):
-        os.makedirs(cache_folder, exist_ok=True)
-        url_model = (
-            "https://github.com/LAION-AI/aesthetic-predictor/blob/main/sa_0_4_"
-            + clip_model
-            + "_linear.pth?raw=true"
-        )
-        urlretrieve(url_model, path_to_model)
     if clip_model == "vit_l_14":
-        m = nn.Linear(768, 1)
-    elif clip_model == "vit_b_32":
-        m = nn.Linear(512, 1)
+        m = Aesthetic_model()
     else:
         raise ValueError()
-    s = torch.load(path_to_model)
-    m.load_state_dict(s)
+    m.load_state_dict(torch.load(path_to_model))
     m.eval()
     return m
-
-
-def get_image_hash(pil_image, hash_size=8):
-    """Generate hash for an image."""
-
-    pil_image = pil_image.resize((hash_size, hash_size))
-    pil_image = pil_image.convert("L")
-    pixels = list(pil_image.getdata())
-    avg_pixel = sum(pixels) / len(pixels)
-    image_hash = ''.join(['1' if pixel > avg_pixel else '0' for pixel in pixels])
-    return image_hash
 
 
 def parse_arguments():
@@ -116,6 +105,9 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image_dir", help="dir", default="./images")
     parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
+    parser.add_argument(
+        "--aesthetic_model_path", help="aesthetic_model_path", default="C:/Users/ikuto/projects/MyImageSearch/model/aesthetic_ranking20.pth"
+    )
     parser.add_argument(
         "--search_model_name", help="model_name", default="ViT-L-14-336"
     )
@@ -171,8 +163,7 @@ def init_db(cur: sqlite3.Cursor):
                     image_path text,
                     meta blob,
                     aesthetic_quality real,
-                    time_stamp_ISO text,
-                    image_hash text
+                    time_stamp_ISO text
                 )
                 """
     )
@@ -267,8 +258,7 @@ def main():
         jit=False,
     )
 
-    aesthetic_model = get_aesthetic_model(clip_model="vit_l_14")
-    aesthetic_model.eval()
+    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
 
     index_item_list: dict[str, str] = {}
 
@@ -318,7 +308,7 @@ def main():
         worker_init_fn=worker_init_fn
     )
 
-    for i, (batched_image_input, batched_image_index, batched_image_hash) in enumerate(
+    for i, (batched_image_input, batched_image_index) in enumerate(
         tqdm.tqdm(loader)
     ):
         batched_image_input = batched_image_input.to(device)
@@ -335,8 +325,8 @@ def main():
             traceback.print_exc()
             continue
 
-        for new_search_meta, image_index, image_hash in zip(
-            batched_new_search_meta, batched_image_index, batched_image_hash
+        for new_search_meta, image_index in zip(
+            batched_new_search_meta, batched_image_index
         ):
             if type(new_search_meta).__module__ != "numpy":
                 print(f"{type(new_search_meta).__module__} != numpy")
@@ -354,7 +344,7 @@ def main():
                 try:
                     image_features = torch.from_numpy(new_search_meta)
                     image_features /= image_features.norm(dim=-1, keepdim=True)
-                    aesthetic_quality = aesthetic_model(image_features).item()
+                    aesthetic_quality = torch.sigmoid(aesthetic_model(image_features)).item()
                 except:
                     traceback.print_exc()
 
@@ -370,16 +360,14 @@ def main():
                 new_search_meta_bytes,
                 aesthetic_quality,
                 time_stamp_ISO,
-                image_hash,
 
                 new_search_meta_bytes,
                 aesthetic_quality,
-                time_stamp_ISO,
-                image_hash
+                time_stamp_ISO
             )
             try:
                 cur.execute(
-                    "insert into image_meta values(?, ?, ?, ?, ?, ?) on conflict(image_id) do update set meta=?, aesthetic_quality=?, time_stamp_ISO=?, image_hash=?",
+                    "insert into image_meta values(?, ?, ?, ?, ?) on conflict(image_id) do update set meta=?, aesthetic_quality=?, time_stamp_ISO=?",
                     param,
                 )
             except:
