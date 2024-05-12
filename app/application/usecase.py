@@ -1,4 +1,3 @@
-from functools import cache
 import re
 import traceback
 import numpy as np
@@ -65,11 +64,13 @@ class Usecase:
     # ===================================================================
 
     def format_search_query(self, search_query_obj) -> str:
-        return np.array2string(search_query_obj, separator=', ', suppress_small=True)
+        return np.array2string(search_query_obj, separator=", ", suppress_small=True)
 
     def parse_search_query(self, search_query_text: str):
         try:
-            return np.fromstring(search_query_text.strip('[]'), sep=',', dtype=np.float32).reshape(1, -1)
+            return np.fromstring(
+                search_query_text.strip("[]"), sep=",", dtype=np.float32
+            ).reshape(1, -1)
         except ValueError:
             print("Invalid input format for a numpy array.")
             return None
@@ -79,14 +80,14 @@ class Usecase:
     def similarity_eval(
         self, item_list: list[ImageItem], index, query_features, result_size=2048
     ) -> list[ResultImageItem]:
-        print(f'shape:{query_features.shape}')
+        print(f"shape:{query_features.shape}")
         # 正規化
         faiss.normalize_L2(query_features)
         item_list_length: int = len(item_list)
         if result_size > item_list_length:
             result_size = item_list_length
 
-        index.nprobe = 256
+        index.nprobe = 64
 
         print(f"index len:{index.ntotal}")
         print(f"averaged_query_features:{query_features}")
@@ -118,18 +119,35 @@ class Usecase:
         print(f"results len:{len(result_image_items)}")
         return result_image_items
 
-    def aesthetic_quality_eval(self, model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max) -> list[ResultImageItem]:
-        if aesthetic_quality_beta == 0 and aesthetic_quality_range_min <= 0 and aesthetic_quality_range_max >= 10:
+    def aesthetic_quality_eval(
+        self,
+        model_id,
+        scores,
+        aesthetic_quality_beta,
+        aesthetic_quality_range_min,
+        aesthetic_quality_range_max,
+    ) -> list[ResultImageItem]:
+        if (
+            aesthetic_quality_beta == 0
+            and aesthetic_quality_range_min <= 0
+            and aesthetic_quality_range_max >= 10
+        ):
             return scores
-        aesthetic_quality_item: dict[
-            ImageId, float
-        ] = self._accessor.load_aesthetic_quality_list(model_id)
+        aesthetic_quality_item: dict[ImageId, float] = (
+            self._accessor.load_aesthetic_quality_list(model_id)
+        )
         new_scores = []
         for i in scores:
             try:
                 aesthetic_quality_score: float = aesthetic_quality_item[i.item.id]
-                if aesthetic_quality_score >= aesthetic_quality_range_min and aesthetic_quality_score <= aesthetic_quality_range_max:
-                    new_score = i.score.score * (1-aesthetic_quality_beta**2) + aesthetic_quality_score * aesthetic_quality_beta
+                if (
+                    aesthetic_quality_score >= aesthetic_quality_range_min
+                    and aesthetic_quality_score <= aesthetic_quality_range_max
+                ):
+                    new_score = (
+                        i.score.score * (1 - aesthetic_quality_beta**2)
+                        + aesthetic_quality_score * aesthetic_quality_beta
+                    )
                 else:
                     new_score = 0
                 new_scores.append(ResultImageItem(i.item, Score(new_score)))
@@ -139,7 +157,14 @@ class Usecase:
 
         return new_scores
 
-    def search_text(self, model_id: ModelId, text: UploadText, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> ResultImageItemList:
+    def search_text(
+        self,
+        model_id: ModelId,
+        text: UploadText,
+        aesthetic_quality_beta: float,
+        aesthetic_quality_range_min: float,
+        aesthetic_quality_range_max: float,
+    ) -> ResultImageItemList:
         """文字列から検索する"""
 
         # モデルの読み込み
@@ -165,11 +190,22 @@ class Usecase:
             query_features=features,
         )
 
-        scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
+        scores = self.aesthetic_quality_eval(
+            model_id,
+            scores,
+            aesthetic_quality_beta,
+            aesthetic_quality_range_min,
+            aesthetic_quality_range_max,
+        )
         return ResultImageItemList(scores, self.format_search_query(features.copy()))
 
     def search_image(
-        self, model_id: ModelId, id_list: list[ImageId], aesthetic_quality_beta :float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float
+        self,
+        model_id: ModelId,
+        id_list: list[ImageId],
+        aesthetic_quality_beta: float,
+        aesthetic_quality_range_min: float,
+        aesthetic_quality_range_max: float,
     ) -> ResultImageItemList:
         """画像から検索する"""
 
@@ -203,10 +239,24 @@ class Usecase:
             query_features=features,
         )
 
-        scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
+        scores = self.aesthetic_quality_eval(
+            model_id,
+            scores,
+            aesthetic_quality_beta,
+            aesthetic_quality_range_min,
+            aesthetic_quality_range_max,
+        )
         return ResultImageItemList(scores, self.format_search_query(features))
 
-    def search_name(self, model_id: ModelId, text: UploadText, is_regexp: bool, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float) -> ResultImageItemList:
+    def search_name(
+        self,
+        model_id: ModelId,
+        text: UploadText,
+        is_regexp: bool,
+        aesthetic_quality_beta: float,
+        aesthetic_quality_range_min: float,
+        aesthetic_quality_range_max: float,
+    ) -> ResultImageItemList:
         """文字列から名前検索する"""
 
         scores: list[ResultImageItem] = []
@@ -215,14 +265,20 @@ class Usecase:
             name: str = image_item.display_name.name
             # print(args.get("trueRegexp"))
             if is_regexp:
-                hasMatch: bool = re.search(text.text, name) != None
+                has_match: bool = re.search(text.text, name) is not None
             else:
-                hasMatch = text.text in name
+                has_match = text.text in name
 
-            if hasMatch:
+            if has_match:
                 scores.append(ResultImageItem(image_item, Score(1.0)))
 
-        scores = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
+        scores = self.aesthetic_quality_eval(
+            model_id,
+            scores,
+            aesthetic_quality_beta,
+            aesthetic_quality_range_min,
+            aesthetic_quality_range_max,
+        )
         return ResultImageItemList(scores, "")
 
     def search_upload_image(
@@ -230,15 +286,22 @@ class Usecase:
     ) -> ResultImageItemList:
         """アップロードされた画像から検索する"""
 
-        return ResultImageItemList([
-            ResultImageItem(
-                item=ImageItem(id=ImageId(id=""), display_name=ImageName(name="")),
-                score=Score(score=0.0),
-            )
-        ], "")
+        return ResultImageItemList(
+            [
+                ResultImageItem(
+                    item=ImageItem(id=ImageId(id=""), display_name=ImageName(name="")),
+                    score=Score(score=0.0),
+                )
+            ],
+            "",
+        )
 
     def search_random(
-        self, model_id: ModelId, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float
+        self,
+        model_id: ModelId,
+        aesthetic_quality_beta: float,
+        aesthetic_quality_range_min: float,
+        aesthetic_quality_range_max: float,
     ) -> ResultImageItemList:
         """乱数から検索する"""
 
@@ -256,11 +319,16 @@ class Usecase:
         return ResultImageItemList(scores, self.format_search_query(features))
 
     def search_query(
-        self, model_id: ModelId, search_query: str, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float
+        self,
+        model_id: ModelId,
+        search_query: str,
+        aesthetic_quality_beta: float,
+        aesthetic_quality_range_min: float,
+        aesthetic_quality_range_max: float,
     ) -> ResultImageItemList:
         """クエリから検索する"""
 
-        features: np.ndarray = self.parse_search_query(search_query)
+        features = self.parse_search_query(search_query)
 
         # indexを読み込み
         index = self._accessor.load_index_file(model_id)
@@ -272,11 +340,24 @@ class Usecase:
             query_features=features,
         )
 
-        scores: list[ResultImageItem] = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
+        scores: list[ResultImageItem] = self.aesthetic_quality_eval(
+            model_id,
+            scores,
+            aesthetic_quality_beta,
+            aesthetic_quality_range_min,
+            aesthetic_quality_range_max,
+        )
         return ResultImageItemList(scores, self.format_search_query(features))
 
     def add_text_features(
-        self, model_id: ModelId, text: UploadText, search_query: str, strength: float, aesthetic_quality_beta: float, aesthetic_quality_range_min: float, aesthetic_quality_range_max: float
+        self,
+        model_id: ModelId,
+        text: UploadText,
+        search_query: str,
+        strength: float,
+        aesthetic_quality_beta: float,
+        aesthetic_quality_range_min: float,
+        aesthetic_quality_range_max: float,
     ) -> ResultImageItemList:
         """クエリにstrengthの強さ分テキストの特徴を足してから検索する"""
 
@@ -286,7 +367,7 @@ class Usecase:
         # テキストの埋め込みを計算
         tokenizer: Tokenizer = self._accessor.load_tokenizer(model_id)
 
-        query_features: np.ndarray = self.parse_search_query(search_query)
+        query_features = self.parse_search_query(search_query)
 
         text_features = (
             model.model_obj[0]
@@ -310,7 +391,14 @@ class Usecase:
             query_features=features,
         )
 
-        scores: list[ResultImageItem] = self.aesthetic_quality_eval(model_id, scores, aesthetic_quality_beta, aesthetic_quality_range_min, aesthetic_quality_range_max)
+        scores: list[ResultImageItem] = self.aesthetic_quality_eval(
+            model_id,
+            scores,
+            aesthetic_quality_beta,
+            aesthetic_quality_range_min,
+            aesthetic_quality_range_max,
+        )
         return ResultImageItemList(scores, self.format_search_query(features))
+
 
 # ===================================================================
