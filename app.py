@@ -8,13 +8,14 @@ from app.infrastructure.local_repository import LocalRepository
 from app.presentation.controller import start_app
 from app.application import usecase
 
+
 def main():
 
-    #コンフィグ
+    # コンフィグ
     image_dir_path: pathlib.Path = pathlib.Path('./images')
     meta_dir_path: pathlib.Path = pathlib.Path('./clip_meta')
 
-    #TODO 使用するパッケージをインストールすることが手間であるため、ダミーを使用している。
+    # TODO 使用するパッケージをインストールすることが手間であるため、ダミーを使用している。
     accessor: LocalAccessor = LocalAccessor(meta_dir_path)
     # accessor = DummyAccessor()
 
@@ -23,6 +24,7 @@ def main():
 
     in_usecase: usecase.Usecase = usecase.Usecase(repository, accessor)
     start_app(in_usecase)
+
 
 if __name__ == "__main__":
     main()

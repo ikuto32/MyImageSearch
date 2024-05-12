@@ -1,4 +1,3 @@
-
 from typing import Any
 
 
@@ -11,10 +10,8 @@ from app.application.accessor import Accessor
 class DummyAccessor(Accessor):
     """ダミーのAccessor"""
 
-
     def load_meta(self, id: ImageId) -> np.ndarray:
-        return None # type: ignore
-    
-    def load_index_file(self, id : ModelId) -> Any:
-        return None
+        return None  # type: ignore
 
+    def load_index_file(self, id: ModelId) -> Any:
+        return None

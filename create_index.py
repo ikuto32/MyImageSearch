@@ -6,8 +6,6 @@ import os
 import pathlib
 import sqlite3
 import traceback
-from os.path import expanduser  # pylint: disable=import-outside-toplevel
-from urllib.request import urlretrieve  # pylint: disable=import-outside-toplevel
 
 import faiss
 import numpy as np
@@ -20,7 +18,6 @@ from PIL import Image, ImageFile
 from torch.utils.data import DataLoader, Dataset, get_worker_info
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-
 
 
 class DirImageDataset(Dataset):
@@ -66,12 +63,13 @@ def worker_init_fn(worker_id):
     """Initializes dataset workers for DataLoader."""
 
     worker_info = get_worker_info()
-    dataset = worker_info.dataset  # the dataset copy in this worker process
+    dataset = worker_info.dataset  # type: ignore the dataset copy in this worker process
     print(worker_info)
-    sub_dataset_size = (len(dataset.img_list) // worker_info.num_workers)
-    dataset.i = sub_dataset_size * worker_id
+    sub_dataset_size = (len(dataset.img_list) // worker_info.num_workers)  # type: ignore
+    dataset.i = sub_dataset_size * worker_id  # type: ignore
     print(f"sub dataset size:{sub_dataset_size}")
-    print(f"dataset index:{dataset.i}")
+    print(f"dataset index:{dataset.i}")  # type: ignore
+
 
 class Aesthetic_model(nn.Module):
     def __init__(self, input_dim=768):
@@ -106,7 +104,7 @@ def parse_arguments():
     parser.add_argument("--image_dir", help="dir", default="./images")
     parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
     parser.add_argument(
-        "--aesthetic_model_path", help="aesthetic_model_path", default="C:/Users/ikuto/projects/MyImageSearch/model/aesthetic_ranking20.pth"
+        "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_ranking20.pth"
     )
     parser.add_argument(
         "--search_model_name", help="model_name", default="ViT-L-14-336"
@@ -157,15 +155,15 @@ def init_db(cur: sqlite3.Cursor):
     cur.execute("pragma mmap_size = 1073741824")  # 1 GB
 
     cur.execute(
-                """
-                create table if not exists image_meta(
-                    image_id text PRIMARY KEY,
-                    image_path text,
-                    meta blob,
-                    aesthetic_quality real,
-                    time_stamp_ISO text
-                )
-                """
+        """
+        create table if not exists image_meta(
+            image_id text PRIMARY KEY,
+            image_path text,
+            meta blob,
+            aesthetic_quality real,
+            time_stamp_ISO text
+        )
+        """
     )
 
 
@@ -202,7 +200,7 @@ def load_image_meta_from_db(con: sqlite3.Connection, id_list: list[str], loop_si
 
             """,
             con,
-            params=sub_list # type: ignore
+            params=sub_list  # type: ignore
         ))
 
     return pd.concat(temp)
@@ -218,67 +216,39 @@ def createIndex(n_centroids, M, bits_per_code, dim) -> faiss.IndexIVFPQ:
     return index
 
 
-@torch.no_grad()
-def main():
+def create_search_model_meta_dir(args):
+    search_model_meta_dir = f"{args.meta_dir}/{args.search_model_name}-{args.search_model_pretrained}"
+    os.makedirs(search_model_meta_dir, exist_ok=True)
+    return search_model_meta_dir
 
-    # 起動引数
-    args = parse_arguments()
 
-    # 作業フォルダの作成
-    search_model_meta_dir: str = (
-        f"{args.meta_dir}/{args.search_model_name}-{args.search_model_pretrained}"
-    )
-
-    os.makedirs(f"{search_model_meta_dir}", exist_ok=True)
-
-    # 画像ファイル一覧を求める
-    print("files")
-    dir_path: pathlib.Path = pathlib.Path(args.image_dir)
-    print(dir_path)
-
-    file_list: list[str] = get_image_list_from_dir(dir_path, ext=["png", "jpg", "gif", "webp"])
-    print(len(file_list))
-
-    # データベースの準備
-    print("load_db")
-    con: sqlite3.Connection = connect_db(search_model_meta_dir)
-    cur: sqlite3.Cursor = con.cursor()
-    init_db(cur)
-
-    # GPUが使用可能か
+def get_device():
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    return device
 
-    # モデルの読み込み
-    print("load_model")
 
+def load_clip_model(args, device):
     search_model, _, eval_transform = open_clip.create_model_and_transforms(
         args.search_model_name,
         pretrained=args.search_model_pretrained,
         device=device,
         jit=False,
     )
+    return search_model, eval_transform
 
-    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
 
-    index_item_list: dict[str, str] = {}
-
-    for file in tqdm.tqdm(file_list):
-        image_id: str = hashlib.sha256(str(file).encode()).hexdigest()
+def create_image_id_index(file_list):
+    index_item_list = {}
+    for file in file_list:
+        image_id = hashlib.sha256(str(file).encode()).hexdigest()
         index_item_list[image_id] = file
+    return index_item_list
 
-    # データベースに問い合わせる
-    result = load_image_meta_from_db(con, id_list=list(index_item_list.keys()), loop_size=10000)
 
+def filter_valid_image_meta(args, result, index_item_list):
     search_meta_list = []
     uncreated_image_paths = []
-
-    pbar = tqdm.tqdm(
-        zip(result["valid_id"], result["meta"]), total=len(result["valid_id"])
-    )
-
-    del result
-
-    for i, (image_id, meta) in enumerate(pbar):
+    for i, (image_id, meta) in enumerate(tqdm.tqdm(zip(result["valid_id"], result["meta"]), total=len(result["valid_id"]))):
         if meta is not None:
             meta = np.squeeze(meta)
             a = np.frombuffer(meta, dtype=np.float32)
@@ -287,27 +257,19 @@ def main():
                 continue
 
         uncreated_image_paths.append(index_item_list[image_id])
+    return search_meta_list, uncreated_image_paths
 
+
+def print_image_meta_stats(search_meta_list, uncreated_image_paths, max_len):
     print(
-        f"uncreated images:{len(uncreated_image_paths)}/{len(index_item_list)} ({len(uncreated_image_paths)/len(index_item_list)*100.:.4f}%)"
+        f"uncreated images:{len(uncreated_image_paths)}/{max_len} ({len(uncreated_image_paths)/max_len*100.:.4f}%)"
     )
     print(
-        f"existing metas:{len(search_meta_list)}/{len(index_item_list)} ({len(search_meta_list)/len(index_item_list)*100.:.4f}%)"
+        f"existing metas:{len(search_meta_list)}/{max_len} ({len(search_meta_list)/max_len*100.:.4f}%)"
     )
 
-    loader = DataLoader(
-        DirImageDataset(
-            args.image_dir,
-            uncreated_image_paths,
-            transform=eval_transform,
-        ),
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=8,
-        pin_memory=True,
-        worker_init_fn=worker_init_fn
-    )
 
+def extract_image_features(args, device, search_model, aesthetic_model, con, cur, loader, search_meta_list, uncreated_image_paths):
     for i, (batched_image_input, batched_image_index) in enumerate(
         tqdm.tqdm(loader)
     ):
@@ -321,7 +283,7 @@ def main():
                 .copy()
                 .astype(np.float32)
             )
-        except:
+        except Exception:
             traceback.print_exc()
             continue
 
@@ -345,7 +307,7 @@ def main():
                     image_features = torch.from_numpy(new_search_meta)
                     image_features /= image_features.norm(dim=-1, keepdim=True)
                     aesthetic_quality = torch.sigmoid(aesthetic_model(image_features)).item()
-                except:
+                except Exception:
                     traceback.print_exc()
 
             image_path = uncreated_image_paths[image_index]
@@ -370,12 +332,72 @@ def main():
                     "insert into image_meta values(?, ?, ?, ?, ?) on conflict(image_id) do update set meta=?, aesthetic_quality=?, time_stamp_ISO=?",
                     param,
                 )
-            except:
+            except Exception:
                 traceback.print_exc()
 
         if (i * args.batch_size) % 10000 < args.batch_size:
             print("commit")
             con.commit()
+
+
+@torch.no_grad()
+def main():
+
+    # 起動引数
+    args = parse_arguments()
+
+    # 作業フォルダの作成
+    search_model_meta_dir: str = create_search_model_meta_dir(args)
+
+    # 画像ファイル一覧を求める
+    print("files")
+    dir_path: pathlib.Path = pathlib.Path(args.image_dir)
+    print(dir_path)
+
+    index_item_list = get_image_list_from_dir(dir_path, ext=["png", "jpg", "gif", "webp"])
+    print(len(index_item_list))
+
+    # データベースの準備
+    print("load_db")
+    con: sqlite3.Connection = connect_db(search_model_meta_dir)
+    cur: sqlite3.Cursor = con.cursor()
+    init_db(cur)
+
+    # GPUが使用可能か
+    device = get_device()
+
+    # モデルの読み込み
+    print("load_model")
+
+    search_model, eval_transform = load_clip_model(args, device)
+
+    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
+
+    index_item_list = create_image_id_index(index_item_list)
+
+    # データベースに問い合わせる
+    result = load_image_meta_from_db(con, id_list=list(index_item_list.keys()), loop_size=10000)
+
+    search_meta_list, uncreated_image_paths = filter_valid_image_meta(args, result, index_item_list)
+
+    print_image_meta_stats(search_meta_list, uncreated_image_paths, len(index_item_list))
+
+    del result, index_item_list
+
+    loader = DataLoader(
+        DirImageDataset(
+            args.image_dir,
+            uncreated_image_paths,
+            transform=eval_transform,
+        ),
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=8,
+        pin_memory=True,
+        worker_init_fn=worker_init_fn
+    )
+
+    extract_image_features(args, device, search_model, aesthetic_model, con, cur, loader, search_meta_list, uncreated_image_paths)
 
     con.commit()
     print(
@@ -392,7 +414,7 @@ def main():
     print("close")
     con.close()
 
-    del uncreated_image_paths, aesthetic_model, index_item_list, search_model, loader, pbar, con, cur
+    del uncreated_image_paths, aesthetic_model, search_model, loader, con, cur
     # データベースに問い合わせる。
     con: sqlite3.Connection = connect_db(search_model_meta_dir)
     result = pd.read_sql_query(
@@ -412,7 +434,7 @@ def main():
     del sorted_result
 
     search_meta_list = []
-    for i, (image_path, meta) in enumerate(pbar):
+    for (_, meta) in pbar:
         if meta is not None:
             meta = np.squeeze(meta)
             a = np.frombuffer(meta, dtype=np.float32)
