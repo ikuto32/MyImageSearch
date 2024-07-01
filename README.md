@@ -2,6 +2,8 @@
 
 MyImageSearch は、OpenAI の [CLIP](https://openai.com/index/clip/) (Contrastive Language-Image Pre-Training) モデルに基づいて、テキストクエリを使用してローカルマシン上の画像を検索し、画像を見つけることができるWebアプリケーションです。
 
+![アプリケーションの見た目](./figs/fig1.png)
+
 ## Backend
 画像を[openCLIP](https://github.com/mlfoundations/open_clip)を用いてembeddingsに変換し、SQliteデータベースで管理している。検索には[faiss](https://github.com/facebookresearch/faiss)を使用して"index"を作成し、高速なベクトル検索を行っている。ウェブアプリケーションの実装には [Flask](https://flask.palletsprojects.com/en/3.0.x/)フレームワークを使用した。
 
