@@ -1,11 +1,16 @@
 import argparse
+import asyncio
 import datetime
 import hashlib
-import itertools
+import concurrent.futures
 import os
 import pathlib
 import sqlite3
 import traceback
+
+import huggingface_hub
+from torchvision import transforms
+import pickle
 
 import faiss
 import numpy as np
@@ -75,16 +80,103 @@ class Aesthetic_model(nn.Module):
     def __init__(self, input_dim=768):
         super(Aesthetic_model, self).__init__()
         self.fc1 = nn.Sequential(nn.Linear(input_dim, 1024), nn.SiLU())
-        self.fc2 = nn.Sequential(nn.Linear(1024, 1024), nn.SiLU(), nn.Dropout())
-        self.fc3 = nn.Sequential(nn.Linear(1024, 1024), nn.SiLU(), nn.Dropout())
-        self.fc4 = nn.Sequential(nn.Linear(1024, 1))
+        self.dropout1 = nn.Dropout1d(0.5)
+        self.fc2 = nn.Sequential(nn.Linear(1024, 1))
 
     def forward(self, x):
         x = self.fc1(x)
+        x = self.dropout1(x)
         x = self.fc2(x)
-        x = self.fc3(x)
-        x = self.fc4(x)
         return x
+
+
+# ================================================
+# 美的評価（Aesthetic Scorer）クラス
+# ================================================
+class PonyAestheticScorer:
+    def __init__(self, device=None, checkpoint=None):
+        """
+        device: 使用するデバイス。未指定の場合、cuda:0が利用可能ならcuda、なければcpu
+        checkpoint: 学習済みチェックポイントのパス。チェックポイントが存在すればモデル重みを読み込む
+        """
+        self.device = device if device is not None else ('cuda:0' if torch.cuda.is_available() else 'cpu')
+        # CLIPの出力次元は768を想定（実際のモデルに合わせて調整してください）
+        self.aesthetic_model = nn.Sequential(
+            nn.Linear(768, 1024),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, 1)
+        ).to(self.device)
+        if checkpoint is not None:
+            try:
+                checkpoint_data = torch.load(checkpoint, map_location=self.device)
+                # checkpoint_dataの形式に応じてキーを取得（キー名が"state_dict"の場合など）
+                state_dict = checkpoint_data.get('state_dict', checkpoint_data)
+                # "model." のプレフィックスがあれば除去
+                new_state_dict = {k.replace("model.", ""): v for k, v in state_dict.items()}
+                self.aesthetic_model.load_state_dict(new_state_dict)
+                print("Aesthetic model checkpoint loaded.")
+            except Exception as e:
+                print(f"Failed to load aesthetic checkpoint: {e}")
+        self.aesthetic_model.eval()
+
+    def score(self, features):
+        """指定されたfeaturesから美的評価スコアを算出して返す"""
+        # L2正規化
+        norm = features.norm(dim=-1, keepdim=True)
+        features = features / norm
+        with torch.no_grad():
+            score = self.aesthetic_model(features).item()
+        return score
+
+# ================================================
+# スタイルクラスタリング用クラス
+# ================================================
+class StyleCluster:
+    def __init__(self, device=None, checkpoint_model=None, checkpoint_centers=None):
+        """
+        device: 使用するデバイス
+        checkpoint_model: スタイルクラスタリング用モデルの学習済みチェックポイント（例：v3_checkpoint00120000.pth）
+        checkpoint_centers: クラスタ中心の学習済みチェックポイント（例：centers_n1024.pkl）
+        いずれも指定されなければ、CLIPモデルとランダム中心を用いる
+        """
+        self.device = device if device is not None else ('cuda:0' if torch.cuda.is_available() else 'cpu')
+        # 独自の前処理（参考実装と同様）
+        self.preprocess = transforms.Compose([
+            transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=(0.48145466, 0.4578275, 0.40821073),
+                std=(0.26862954, 0.26130258, 0.27577711)
+            )
+        ])
+        try:
+            with open(checkpoint_centers, 'rb') as f:
+                centers_data = pickle.load(f)
+            original_centers = centers_data['cluster_centers']
+            self.cluster_centers = torch.tensor(original_centers, dtype=torch.float32)
+            # 正規化
+            self.cluster_centers = self.cluster_centers / self.cluster_centers.norm(dim=1, keepdim=True)
+            print("Style cluster centers loaded.")
+        except Exception as e:
+            print(f"Failed to load style cluster centers: {e}")
+            self._init_random_centers()
+
+    def _init_random_centers(self, num_clusters=10):
+        torch.manual_seed(42)
+        centers = torch.randn(num_clusters, 768)
+        self.cluster_centers = centers / centers.norm(dim=1, keepdim=True)
+
+    def get_cluster(self, features):
+        """指定されたfeaturesからスタイルクラスタID（文字列）を返す"""
+        centers = self.cluster_centers.to(self.device)
+        distances = torch.norm(features - centers, dim=1)
+        min_index = torch.argmin(distances).item()
+        return str(min_index)
 
 
 def get_aesthetic_model(path_to_model, clip_model="vit_l_14"):
@@ -104,7 +196,7 @@ def parse_arguments():
     parser.add_argument("--image_dir", help="dir", default="./images")
     parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
     parser.add_argument(
-        "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_ranking20.pth"
+        "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_ranking100.pth"
     )
     parser.add_argument(
         "--search_model_name", help="model_name", default="ViT-L-14-336"
@@ -114,6 +206,24 @@ def parse_arguments():
     )
     parser.add_argument(
         "--search_model_out_dim", help="search_model_out_dim", default=768
+    )
+
+    HF_TOKEN = "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"
+
+    model_repo = "purplesmartai/aesthetic-classifier"
+    MODEL_FILENAME = "v2.ckpt"
+    parser.add_argument(
+        "--aesthetic_checkpoint", help="aesthetic_checkpoint", default=huggingface_hub.hf_hub_download(model_repo, MODEL_FILENAME, use_auth_token=HF_TOKEN)
+    )
+
+    model_repo = "purplesmartai/style-classifier"
+    MODEL_FILENAME = "v3_checkpoint00120000.pth"
+    CENTERS_FILENAME = "centers_n1024.pkl"
+    parser.add_argument(
+        "--style_checkpoint_model", help="style_checkpoint_model", default=huggingface_hub.hf_hub_download(model_repo, MODEL_FILENAME, use_auth_token=HF_TOKEN)
+    )
+    parser.add_argument(
+        "--style_checkpoint_centers", help="style_checkpoint_centers", default=huggingface_hub.hf_hub_download(model_repo, CENTERS_FILENAME, use_auth_token=HF_TOKEN)
     )
     parser.add_argument("--batch_size", help="batch size", default=256)
     parser.add_argument("--nlist", help="centroid size", default=64)
@@ -128,14 +238,89 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def get_image_list_from_dir(dir_path: pathlib.Path, ext: list[str]) -> list[str]:
-
-    # 画像ファイルの一覧を作成
-    files = itertools.chain.from_iterable(dir_path.glob(f"**/*.{e}") for e in ext)
-
-    file_list: list[str] = sorted(map(lambda f: str(f.relative_to(dir_path)), tqdm.tqdm(files)))
-
+def get_image_list_from_dir(dir_path: str, ext: list[str]) -> list[str]:
+    # 非同期イベントループを取得
+    loop = asyncio.get_event_loop()
+    # 非同期関数を実行
+    file_list = loop.run_until_complete(_get_image_list_async(dir_path, ext))
     return file_list
+
+
+async def _get_image_list_async(dir_path: str, ext: list[str]) -> list[str]:
+    files = []
+    ext_set = set(e.lower() if e.startswith('.') else f'.{e.lower()}' for e in ext)
+
+    # スレッドプールエグゼキューターを作成
+    with concurrent.futures.ThreadPoolExecutor(max_workers=320) as executor:
+        # ディレクトリ探索を非同期に実行
+        await _scan_dir_async(dir_path, ext_set, files, executor)
+    # ファイルリストをソート
+    files.sort()
+    return files
+
+
+async def _scan_dir_async(dir_path: str, ext_set: set, files: list[str], executor):
+    loop = asyncio.get_event_loop()
+    queue = asyncio.Queue()
+    await queue.put(dir_path)
+
+    progress = tqdm.tqdm(total=0, unit="file", dynamic_ncols=True)
+    update_interval = 1  # 進捗バーの更新間隔
+    counter = 0  # ファイル数カウンタ
+
+    async def worker():
+        nonlocal counter  # カウンタを共有
+        while True:
+            current_dir = await queue.get()
+            try:
+                # ディレクトリエントリを非同期に取得
+                def list_dir(path):
+                    with os.scandir(path) as it:
+                        return [entry for entry in it]
+                entries = await loop.run_in_executor(executor, list_dir, current_dir)
+
+                for entry in entries:
+                    try:
+                        # d_typeを使用してエントリのタイプを判定
+                        if entry.is_dir(follow_symlinks=False):
+                            await queue.put(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            # ファイルの拡張子をチェック
+                            name_lower = entry.name.lower()
+                            if any(name_lower.endswith(ext) for ext in ext_set):
+                                relative_path = os.path.relpath(entry.path, dir_path)
+                                files.append(relative_path)
+                                counter += 1
+                                if counter >= update_interval:
+                                    progress.update(counter)
+                                    counter = 0
+                    except OSError:
+                        # エントリへのアクセスに失敗した場合
+                        continue
+            except PermissionError:
+                pass
+            finally:
+                queue.task_done()
+
+    # ワーカータスクを起動
+    tasks = []
+    for _ in range(640):  # ワーカー数は環境に合わせて調整
+        task = asyncio.create_task(worker())
+        tasks.append(task)
+
+    # キューが空になるまで待機
+    await queue.join()
+
+    # 残ったカウンタを更新
+    if counter > 0:
+        progress.update(counter)
+
+    # ワーカータスクをキャンセル
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    progress.close()
 
 
 def connect_db(current_dir: str) -> sqlite3.Connection:
@@ -161,6 +346,8 @@ def init_db(cur: sqlite3.Cursor):
             image_path text,
             meta blob,
             aesthetic_quality real,
+            pony_aesthetic_quality real,
+            image_tags text,
             time_stamp_ISO text
         )
         """
@@ -270,6 +457,15 @@ def print_image_meta_stats(search_meta_list, uncreated_image_paths, max_len):
 
 
 def extract_image_features(args, device, search_model, aesthetic_model, con, cur, loader, search_meta_list, uncreated_image_paths):
+    # 事前学習済みチェックポイントのパスは args から取得（各自適宜設定してください）
+    aesthetic_checkpoint = getattr(args, "aesthetic_checkpoint", None)
+    style_checkpoint_model = getattr(args, "style_checkpoint_model", None)
+    style_checkpoint_centers = getattr(args, "style_checkpoint_centers", None)
+
+    # 美的評価（PonyAestheticScorer）とスタイルクラスタリング（StyleCluster）のグローバルインスタンスを生成
+    pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
+    style_cluster = StyleCluster(device=device, checkpoint_model=style_checkpoint_model, checkpoint_centers=style_checkpoint_centers)
+
     for i, (batched_image_input, batched_image_index) in enumerate(
         tqdm.tqdm(loader)
     ):
@@ -306,9 +502,23 @@ def extract_image_features(args, device, search_model, aesthetic_model, con, cur
                 try:
                     image_features = torch.from_numpy(new_search_meta)
                     image_features /= image_features.norm(dim=-1, keepdim=True)
-                    aesthetic_quality = torch.sigmoid(aesthetic_model(image_features)).item()
+                    aesthetic_quality = torch.sigmoid(aesthetic_model(image_features.unsqueeze(dim=0))).item()
                 except Exception:
                     traceback.print_exc()
+
+            try:
+                new_search_meta_tensor = torch.from_numpy(new_search_meta).to(device).unsqueeze(0)
+                pony_aesthetic_quality = pony_scorer.score(new_search_meta_tensor)
+            except Exception:
+                traceback.print_exc()
+                pony_aesthetic_quality = 0.0
+
+            try:
+                style_cluster_number = style_cluster.get_cluster(new_search_meta_tensor)
+                image_tags = f'style_cluster_{style_cluster_number}'
+            except Exception:
+                traceback.print_exc()
+                image_tags = ''
 
             image_path = uncreated_image_paths[image_index]
             image_id: str = hashlib.sha256(str(image_path).encode()).hexdigest()
@@ -321,15 +531,19 @@ def extract_image_features(args, device, search_model, aesthetic_model, con, cur
                 image_path,
                 new_search_meta_bytes,
                 aesthetic_quality,
+                pony_aesthetic_quality,
+                image_tags,
                 time_stamp_ISO,
 
                 new_search_meta_bytes,
                 aesthetic_quality,
+                pony_aesthetic_quality,
+                image_tags,
                 time_stamp_ISO
             )
             try:
                 cur.execute(
-                    "insert into image_meta values(?, ?, ?, ?, ?) on conflict(image_id) do update set meta=?, aesthetic_quality=?, time_stamp_ISO=?",
+                    "insert into image_meta values(?, ?, ?, ?, ?, ?, ?) on conflict(image_id) do update set meta=?, aesthetic_quality=?, pony_aesthetic_quality=?, image_tags=?, time_stamp_ISO=?",
                     param,
                 )
             except Exception:
@@ -392,7 +606,7 @@ def main():
         ),
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=8,
+        num_workers=2,
         pin_memory=True,
         worker_init_fn=worker_init_fn
     )

@@ -14,6 +14,7 @@ from app.domain.domain_object import (
     ImageId,
     ImageItem,
     ImageName,
+    ImageTags,
     ModelId,
     Model,
     Tokenizer,
@@ -63,7 +64,7 @@ class LocalAccessor(Accessor):
         )
         result: pd.DataFrame = pd.read_sql_query(
             """
-            SELECT image_id, image_path FROM image_meta
+            SELECT image_id, image_path, image_tags FROM image_meta
             """,
             con,
         )
@@ -73,6 +74,7 @@ class LocalAccessor(Accessor):
             ImageItem(
                 id=ImageId(sorted_result.iat[index, 1]),
                 display_name=ImageName(sorted_result.iat[index, 2]),
+                tags=ImageTags(sorted_result.iat[index, 3]),
             )
             for index, _ in enumerate(tqdm.tqdm(sorted_result["image_id"]))
         ]
@@ -80,7 +82,7 @@ class LocalAccessor(Accessor):
         return image_items
 
     @cache
-    def load_aesthetic_quality_list(self, model_id: ModelId) -> Dict[ImageId, float]:
+    def load_aesthetic_quality_list(self, model_id: ModelId, aesthetic_model_name) -> Dict[ImageId, float]:
         print("start:load_aesthetic_quality_list")
         con: sqlite3.Connection = sqlite3.connect(
             f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db",
@@ -88,13 +90,14 @@ class LocalAccessor(Accessor):
         )
         result: pd.DataFrame = pd.read_sql_query(
             """
-            SELECT image_id, aesthetic_quality FROM image_meta
+            SELECT image_id, aesthetic_quality, pony_aesthetic_quality FROM image_meta
             """,
             con,
         )
+        aesthetic_name = "pony_aesthetic_quality" if not aesthetic_model_name == "original" else "aesthetic_quality"
         aesthetic_quality_item: Dict[ImageId, float] = {
             ImageId(id=str(id)): float(q)
-            for id, q in tqdm.tqdm(zip(result["image_id"], result["aesthetic_quality"]))
+            for id, q in tqdm.tqdm(zip(result["image_id"], result[aesthetic_name]))
         }
         print("end:load_aesthetic_quality_list")
         return aesthetic_quality_item

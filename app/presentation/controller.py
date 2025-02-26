@@ -108,8 +108,9 @@ def search_text():
     # 美感スコアの重要度を取得する。
     aesthetic_quality_beta: float = args.get("aesthetic_quality_beta")
     aesthetic_quality_range = args.get("aesthetic_quality_range")
-    print({"parameter": {"model_id": model_id, "text": text, "aesthetic_quality_beta": aesthetic_quality_beta, "aesthetic_quality_range": aesthetic_quality_range}})
-    result = usecase.search_text(model_id, UploadText(text), aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
+    aesthetic_model_name = args.get("aesthetic_model_name")
+    print({"parameter": {"model_id": model_id, "text": text, "aesthetic_quality_beta": aesthetic_quality_beta, "aesthetic_quality_range": aesthetic_quality_range, "aesthetic_model_name": aesthetic_model_name}})
+    result = usecase.search_text(model_id, UploadText(text), aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
     return from_result_to_json(result)
 
 
@@ -128,10 +129,12 @@ def search_image():
 
     aesthetic_quality_range = json_obj["aesthetic_quality_range"]
 
+    aesthetic_model_name = json_obj["aesthetic_model_name"]
+
     # IDのリストを取得する。
     id_text_list: list[str] = json_obj["id"]
     id_list: list[ImageId] = list(map(ImageId, id_text_list))
-    result = usecase.search_image(model_id, id_list, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
+    result = usecase.search_image(model_id, id_list, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
     return from_result_to_json(result)
 
 
@@ -147,8 +150,9 @@ def search_name():
     # 美感スコアの重要度を取得する。
     aesthetic_quality_beta: float = args.get("aesthetic_quality_beta")
     aesthetic_quality_range = args.get("aesthetic_quality_range")
+    aesthetic_model_name = args.get("aesthetic_model_name")
     print({"parameter": {"text": text}})
-    result = usecase.search_name(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
+    result = usecase.search_name(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
     return from_result_to_json(result)
 
 
@@ -186,8 +190,10 @@ def search_random():
 
     aesthetic_quality_range = json_obj["aesthetic_quality_range"]
 
+    aesthetic_model_name = json_obj["aesthetic_model_name"]
+
     # IDのリストを取得する。
-    result = usecase.search_random(model_id, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
+    result = usecase.search_random(model_id, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
     return from_result_to_json(result)
 
 
@@ -208,9 +214,12 @@ def search_query():
 
     aesthetic_quality_range = json_obj["aesthetic_quality_range"]
 
+    aesthetic_model_name = json_obj["aesthetic_model_name"]
+
     # IDのリストを取得する。
-    result = usecase.search_query(model_id, search_query, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
+    result = usecase.search_query(model_id, search_query, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
     return from_result_to_json(result)
+
 
 @app.route("/search/queryaddtext", methods=["POST"])
 def add_text_features():
@@ -233,21 +242,49 @@ def add_text_features():
 
     aesthetic_quality_range = json_obj["aesthetic_quality_range"]
 
+    aesthetic_model_name = json_obj["aesthetic_model_name"]
+
     # IDのリストを取得する。
-    result = usecase.add_text_features(model_id, UploadText(text), search_query, strength, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1])
+    result = usecase.add_text_features(model_id, UploadText(text), search_query, strength, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
     return from_result_to_json(result)
+
+
+@app.route("/search/tags", methods=["POST"])
+def search_tags():
+    """タグから検索して、結果を返す"""
+
+    # jsonを解釈
+    json_obj = json.loads(request.data).get("params")
+
+    # 検索モデルのIDを取得する。
+    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+
+    text: str = json_obj.get("text")
+    is_regexp: bool = (json_obj.get("is_regexp") == "true")
+
+    # 美感スコアの重要度を取得する。
+    aesthetic_quality_beta: float = json_obj["aesthetic_quality_beta"]
+
+    aesthetic_quality_range = json_obj["aesthetic_quality_range"]
+
+    aesthetic_model_name = json_obj["aesthetic_model_name"]
+
+    # IDのリストを取得する。
+    result = usecase.search_tags(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
+    return from_result_to_json(result)
+
 # ============================================================
 
 
 def from_image_item_to_json(value: ImageItem) -> str:
 
-    obj = {"id": value.id.id, "name": value.display_name.name}
+    obj = {"id": value.id.id, "name": value.display_name.name, "tags": value.tags.tags}
     return json.dumps(obj)
 
 
 def from_image_item_list_to_json(value: list[ImageItem]) -> str:
 
-    objs = map(lambda r: {"id": r.id.id, "name": r.display_name.name}, value)
+    objs = map(lambda r: {"id": r.id.id, "name": r.display_name.name, "tags": r.tags.tags}, value)
     objs = list(objs)
     return json.dumps(objs)
 
@@ -257,7 +294,8 @@ def from_result_to_json(value: ResultImageItemList) -> str:
     objs = map(lambda r: {
         "item": {
             "id": str(r.item.id.id),
-            "name": str(r.item.display_name.name)
+            "name": str(r.item.display_name.name),
+            "tags": str(r.item.tags.tags)
         },
         "score": float(r.score.score)
     },
@@ -275,7 +313,8 @@ def from_result_list_to_json(value: list[ResultImageItem]) -> str:
     objs = map(lambda r: {
         "item": {
             "id": str(r.item.id.id),
-            "name": str(r.item.display_name.name)
+            "name": str(r.item.display_name.name),
+            "tags": str(r.item.tags.tags)
         },
         "score": float(r.score.score)
     },

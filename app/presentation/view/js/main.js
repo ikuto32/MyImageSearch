@@ -30,6 +30,7 @@ const app = Vue.createApp({
             aesthetic_quality_beta: 0.00,
             aesthetic_quality_range: [0, 10],
             features_strength: 1.00,
+            aesthetic_model_name: "original",
             padding_top: 0,
             padding_bottom: 500,
             item_height:258,
@@ -176,6 +177,7 @@ const app = Vue.createApp({
                 this.displayItems.push({
                     id: result.item.id,
                     score: result.score,
+                    tags: result.item.tags,
                     img_name: result.item.name,
                     img: repository.getImageUrl(result.item.id),
                     selected: false
@@ -216,7 +218,7 @@ const app = Vue.createApp({
         //テキストから検索するボタンの動作
         textSearchButton() {
 
-            this.setBuffer(repository.searchText(this.model_name, this.pretrained, this.text, this.aesthetic_quality_beta, this.aesthetic_quality_range))
+            this.setBuffer(repository.searchText(this.model_name, this.pretrained, this.text, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
             .then(this.initImage);
         },
 
@@ -225,14 +227,14 @@ const app = Vue.createApp({
 
             let selectedId = Object.keys(this.selectedItemId)
 
-            this.setBuffer(repository.searchImage(this.model_name, this.pretrained, selectedId, this.aesthetic_quality_beta, this.aesthetic_quality_range))
+            this.setBuffer(repository.searchImage(this.model_name, this.pretrained, selectedId, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
             .then(this.initImage);
         },
 
         //画像名前から検索するボタンの動作
         nameSearchButton() {
 
-            this.setBuffer(repository.searchName(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range))
+            this.setBuffer(repository.searchName(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
             .then(this.initImage);
         },
 
@@ -252,21 +254,28 @@ const app = Vue.createApp({
         //乱数から検索するボタンの動作
         randomSearchButton() {
 
-            this.setBuffer(repository.searchRandom(this.model_name, this.pretrained, this.aesthetic_quality_beta, this.aesthetic_quality_range))
+            this.setBuffer(repository.searchRandom(this.model_name, this.pretrained, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
             .then(this.initImage);
         },
 
         //クエリから検索するボタンの動作
         querySearchButton() {
 
-            this.setBuffer(repository.searchQuery(this.model_name, this.pretrained, this.search_query, this.aesthetic_quality_beta, this.aesthetic_quality_range))
+            this.setBuffer(repository.searchQuery(this.model_name, this.pretrained, this.search_query, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
             .then(this.initImage);
         },
 
         //クエリにテキストの特徴を足して検索するボタンの動作
         addTextFeaturesButton() {
 
-            this.setBuffer(repository.addTextFeatures(this.model_name, this.pretrained, this.text, this.search_query, this.features_strength, this.aesthetic_quality_beta, this.aesthetic_quality_range))
+            this.setBuffer(repository.addTextFeatures(this.model_name, this.pretrained, this.text, this.search_query, this.features_strength, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
+            .then(this.initImage);
+        },
+
+        //テキストからタグを検索するボタンの動作
+        tagSearchButton() {
+
+            this.setBuffer(repository.searchTags(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
             .then(this.initImage);
         },
 
