@@ -23,6 +23,12 @@ class ImageName:
 
 
 @dataclass(frozen=True)
+class ImageTags:
+
+    tags: str
+
+
+@dataclass(frozen=True)
 class Image:
 
     binary: bytes
@@ -37,6 +43,7 @@ class ImageItem:
 
     id: ImageId
     display_name: ImageName
+    tags: ImageTags
 
 
 # =====================================================

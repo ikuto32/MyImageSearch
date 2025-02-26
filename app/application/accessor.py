@@ -37,6 +37,6 @@ class Accessor():
         pass
 
     @abstractmethod
-    def load_aesthetic_quality_list(self, model_id: ModelId) -> dict[ImageId, float]:
+    def load_aesthetic_quality_list(self, model_id: ModelId, aesthetic_model_name) -> dict[ImageId, float]:
 
         pass

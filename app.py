@@ -15,12 +15,9 @@ def main():
     image_dir_path: pathlib.Path = pathlib.Path('./images')
     meta_dir_path: pathlib.Path = pathlib.Path('./clip_meta')
 
-    # TODO 使用するパッケージをインストールすることが手間であるため、ダミーを使用している。
     accessor: LocalAccessor = LocalAccessor(meta_dir_path)
-    # accessor = DummyAccessor()
 
     repository: LocalRepository = LocalRepository(image_dir_path)
-    # repository = DummyRepository()
 
     in_usecase: usecase.Usecase = usecase.Usecase(repository, accessor)
     start_app(in_usecase)

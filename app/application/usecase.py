@@ -10,6 +10,7 @@ from app.domain.domain_object import (
     ImageId,
     Image,
     ImageName,
+    ImageTags,
     Model,
     ResultImageItemList,
     Score,
@@ -126,6 +127,7 @@ class Usecase:
         aesthetic_quality_beta,
         aesthetic_quality_range_min,
         aesthetic_quality_range_max,
+        aesthetic_model_name,
     ) -> list[ResultImageItem]:
         if (
             aesthetic_quality_beta == 0
@@ -134,7 +136,7 @@ class Usecase:
         ):
             return scores
         aesthetic_quality_item: dict[ImageId, float] = (
-            self._accessor.load_aesthetic_quality_list(model_id)
+            self._accessor.load_aesthetic_quality_list(model_id, aesthetic_model_name)
         )
         new_scores = []
         for i in scores:
@@ -164,6 +166,7 @@ class Usecase:
         aesthetic_quality_beta: float,
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
+        aesthetic_model_name: str,
     ) -> ResultImageItemList:
         """文字列から検索する"""
 
@@ -196,6 +199,7 @@ class Usecase:
             aesthetic_quality_beta,
             aesthetic_quality_range_min,
             aesthetic_quality_range_max,
+            aesthetic_model_name,
         )
         return ResultImageItemList(scores, self.format_search_query(features.copy()))
 
@@ -206,6 +210,7 @@ class Usecase:
         aesthetic_quality_beta: float,
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
+        aesthetic_model_name: str,
     ) -> ResultImageItemList:
         """画像から検索する"""
 
@@ -245,6 +250,7 @@ class Usecase:
             aesthetic_quality_beta,
             aesthetic_quality_range_min,
             aesthetic_quality_range_max,
+            aesthetic_model_name,
         )
         return ResultImageItemList(scores, self.format_search_query(features))
 
@@ -256,12 +262,13 @@ class Usecase:
         aesthetic_quality_beta: float,
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
+        aesthetic_model_name: str,
     ) -> ResultImageItemList:
         """文字列から名前検索する"""
 
         scores: list[ResultImageItem] = []
         # 類似度を計算する
-        for image_item in tqdm.tqdm(self._repository.load_all_image_item()):
+        for image_item in tqdm.tqdm(self._accessor.load_index_item_list(model_id)):
             name: str = image_item.display_name.name
             # print(args.get("trueRegexp"))
             if is_regexp:
@@ -278,6 +285,7 @@ class Usecase:
             aesthetic_quality_beta,
             aesthetic_quality_range_min,
             aesthetic_quality_range_max,
+            aesthetic_model_name,
         )
         return ResultImageItemList(scores, "")
 
@@ -289,7 +297,7 @@ class Usecase:
         return ResultImageItemList(
             [
                 ResultImageItem(
-                    item=ImageItem(id=ImageId(id=""), display_name=ImageName(name="")),
+                    item=ImageItem(id=ImageId(id=""), display_name=ImageName(name=""), tags=ImageTags(tags="")),
                     score=Score(score=0.0),
                 )
             ],
@@ -302,6 +310,7 @@ class Usecase:
         aesthetic_quality_beta: float,
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
+        aesthetic_model_name: str,
     ) -> ResultImageItemList:
         """乱数から検索する"""
 
@@ -325,6 +334,7 @@ class Usecase:
         aesthetic_quality_beta: float,
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
+        aesthetic_model_name: str,
     ) -> ResultImageItemList:
         """クエリから検索する"""
 
@@ -346,6 +356,7 @@ class Usecase:
             aesthetic_quality_beta,
             aesthetic_quality_range_min,
             aesthetic_quality_range_max,
+            aesthetic_model_name,
         )
         return ResultImageItemList(scores, self.format_search_query(features))
 
@@ -358,6 +369,7 @@ class Usecase:
         aesthetic_quality_beta: float,
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
+        aesthetic_model_name: str,
     ) -> ResultImageItemList:
         """クエリにstrengthの強さ分テキストの特徴を足してから検索する"""
 
@@ -397,8 +409,45 @@ class Usecase:
             aesthetic_quality_beta,
             aesthetic_quality_range_min,
             aesthetic_quality_range_max,
+            aesthetic_model_name
         )
         return ResultImageItemList(scores, self.format_search_query(features))
+
+
+    def search_tags(
+        self,
+        model_id: ModelId,
+        text: UploadText,
+        is_regexp: bool,
+        aesthetic_quality_beta: float,
+        aesthetic_quality_range_min: float,
+        aesthetic_quality_range_max: float,
+        aesthetic_model_name: str,
+    ) -> ResultImageItemList:
+        """文字列からタグ検索する"""
+
+        scores: list[ResultImageItem] = []
+        # 類似度を計算する
+        for image_item in tqdm.tqdm(self._accessor.load_index_item_list(model_id)):
+            tags: str = image_item.tags.tags
+            # print(args.get("trueRegexp"))
+            if is_regexp:
+                has_match: bool = re.search(text.text, tags) is not None
+            else:
+                has_match = text.text in tags
+
+            if has_match:
+                scores.append(ResultImageItem(image_item, Score(1.0)))
+
+        scores = self.aesthetic_quality_eval(
+            model_id,
+            scores,
+            aesthetic_quality_beta,
+            aesthetic_quality_range_min,
+            aesthetic_quality_range_max,
+            aesthetic_model_name,
+        )
+        return ResultImageItemList(scores, "")
 
 
 # ===================================================================
