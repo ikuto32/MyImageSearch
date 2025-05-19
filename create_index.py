@@ -1,3 +1,4 @@
+from __future__ import annotations
 import argparse
 import asyncio
 import datetime
@@ -7,6 +8,7 @@ import os
 import pathlib
 import sqlite3
 import traceback
+import typing
 
 import huggingface_hub
 from torchvision import transforms
@@ -23,7 +25,7 @@ from PIL import Image, ImageFile
 from torch.utils.data import DataLoader, Dataset, get_worker_info
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-
+Image.MAX_IMAGE_PIXELS = 268_435_456
 
 class DirImageDataset(Dataset):
     """Custom Dataset for loading images from a directory."""
@@ -45,7 +47,7 @@ class DirImageDataset(Dataset):
         for _ in self.img_list:
             try:
                 image_path = f"{self.images_dir}/{self.img_list[self.i]}"
-                image = Image.open(image_path).convert("RGB")
+                image = Image.open(image_path).convert("RGBA").convert("RGB")
                 break
             except Exception as e:
                 print(f"An error occurred while opening image: {image_path}")
@@ -199,13 +201,13 @@ def parse_arguments():
         "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_ranking100.pth"
     )
     parser.add_argument(
-        "--search_model_name", help="model_name", default="ViT-L-14-336"
+        "--search_model_name", help="model_name", default="ViT-SO400M-16-SigLIP-i18n-256"
     )
     parser.add_argument(
-        "--search_model_pretrained", help="pretrained", default="openai"
+        "--search_model_pretrained", help="pretrained", default="webli"
     )
     parser.add_argument(
-        "--search_model_out_dim", help="search_model_out_dim", default=768
+        "--search_model_out_dim", help="search_model_out_dim", default=1152
     )
 
     HF_TOKEN = "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"
@@ -227,7 +229,7 @@ def parse_arguments():
     )
     parser.add_argument("--batch_size", help="batch size", default=256)
     parser.add_argument("--nlist", help="centroid size", default=64)
-    parser.add_argument("--M", help="M", default=768)
+    parser.add_argument("--M", help="M", default=1152)
     parser.add_argument("--bits_per_code", help="bits_per_code", default=8)
     parser.add_argument(
         "--metas_faiss_index_file_name",
@@ -238,89 +240,65 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def get_image_list_from_dir(dir_path: str, ext: list[str]) -> list[str]:
-    # 非同期イベントループを取得
-    loop = asyncio.get_event_loop()
-    # 非同期関数を実行
-    file_list = loop.run_until_complete(_get_image_list_async(dir_path, ext))
-    return file_list
+_PARALLEL = 64
+
+def get_image_list_from_dir(dir_path: str | os.PathLike, exts: typing.Sequence[str]) -> list[str]:
+    """
+    dir_path 以下を走査して、指定拡張子のファイルリスト（dir_path からの相対パス）を返す。
+    SMB のレイテンシを考慮して並列数を抑えつつ、ディレクトリ単位でまとめてスレッドプールに流す。
+    """
+    return asyncio.run(_collect_images(pathlib.Path(dir_path), exts))
 
 
-async def _get_image_list_async(dir_path: str, ext: list[str]) -> list[str]:
-    files = []
-    ext_set = set(e.lower() if e.startswith('.') else f'.{e.lower()}' for e in ext)
+async def _collect_images(root: pathlib.Path, exts: typing.Sequence[str]) -> list[str]:
+    loop = asyncio.get_running_loop()
 
-    # スレッドプールエグゼキューターを作成
-    with concurrent.futures.ThreadPoolExecutor(max_workers=320) as executor:
-        # ディレクトリ探索を非同期に実行
-        await _scan_dir_async(dir_path, ext_set, files, executor)
-    # ファイルリストをソート
-    files.sort()
-    return files
+    # .xyz と xyz の両方を許容
+    ext_set = {("."+e if not e.startswith(".") else e).lower() for e in exts}
 
+    files: list[str] = []
+    bar = tqdm.tqdm(unit="file", dynamic_ncols=True)
 
-async def _scan_dir_async(dir_path: str, ext_set: set, files: list[str], executor):
-    loop = asyncio.get_event_loop()
-    queue = asyncio.Queue()
-    await queue.put(dir_path)
+    # 同時実行制限
+    sem = asyncio.Semaphore(_PARALLEL)
 
-    progress = tqdm.tqdm(total=0, unit="file", dynamic_ncols=True)
-    update_interval = 1  # 進捗バーの更新間隔
-    counter = 0  # ファイル数カウンタ
-
-    async def worker():
-        nonlocal counter  # カウンタを共有
-        while True:
-            current_dir = await queue.get()
-            try:
-                # ディレクトリエントリを非同期に取得
-                def list_dir(path):
-                    with os.scandir(path) as it:
-                        return [entry for entry in it]
-                entries = await loop.run_in_executor(executor, list_dir, current_dir)
-
-                for entry in entries:
+    def _scan_dir_sync(path: pathlib.Path) -> tuple[list[pathlib.Path], list[str]]:
+        """同期関数。path 配下を走査し、サブディレクトリとヒットしたファイルを返す。"""
+        dirs, hits = [], []
+        try:
+            with os.scandir(path) as it:
+                for entry in it:
+                    # SMB では d_type がないことがあるので try/except
                     try:
-                        # d_typeを使用してエントリのタイプを判定
                         if entry.is_dir(follow_symlinks=False):
-                            await queue.put(entry.path)
-                        elif entry.is_file(follow_symlinks=False):
-                            # ファイルの拡張子をチェック
-                            name_lower = entry.name.lower()
-                            if any(name_lower.endswith(ext) for ext in ext_set):
-                                relative_path = os.path.relpath(entry.path, dir_path)
-                                files.append(relative_path)
-                                counter += 1
-                                if counter >= update_interval:
-                                    progress.update(counter)
-                                    counter = 0
+                            dirs.append(pathlib.Path(entry.path))
+                        else:
+                            name_lc = entry.name.lower()
+                            if any(name_lc.endswith(ext) for ext in ext_set):
+                                hits.append(os.path.relpath(entry.path, root))
                     except OSError:
-                        # エントリへのアクセスに失敗した場合
-                        continue
-            except PermissionError:
-                pass
-            finally:
-                queue.task_done()
+                        # アクセス不可は無視
+                        pass
+        except (PermissionError, FileNotFoundError):
+            pass
+        return dirs, hits
 
-    # ワーカータスクを起動
-    tasks = []
-    for _ in range(640):  # ワーカー数は環境に合わせて調整
-        task = asyncio.create_task(worker())
-        tasks.append(task)
+    async def _walk(path: pathlib.Path):
+        async with sem:
+            # thread pool で同期スキャン
+            dirs, hits = await loop.run_in_executor(pool, _scan_dir_sync, path)
+            files.extend(hits)
+            bar.update(len(hits))
 
-    # キューが空になるまで待機
-    await queue.join()
+        # サブディレクトリを並列にたどる
+        await asyncio.gather(*(_walk(d) for d in dirs))
 
-    # 残ったカウンタを更新
-    if counter > 0:
-        progress.update(counter)
+    # プールは with で自動クローズ
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_PARALLEL) as pool:
+        await _walk(root)
 
-    # ワーカータスクをキャンセル
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-
-    progress.close()
+    bar.close()
+    return sorted(files)
 
 
 def connect_db(current_dir: str) -> sqlite3.Connection:
@@ -506,18 +484,21 @@ def extract_image_features(args, device, search_model, aesthetic_model, con, cur
                 except Exception:
                     traceback.print_exc()
 
-            try:
-                new_search_meta_tensor = torch.from_numpy(new_search_meta).to(device).unsqueeze(0)
-                pony_aesthetic_quality = pony_scorer.score(new_search_meta_tensor)
-            except Exception:
-                traceback.print_exc()
-                pony_aesthetic_quality = 0.0
+                try:
+                    new_search_meta_tensor = torch.from_numpy(new_search_meta).to(device).unsqueeze(0)
+                    pony_aesthetic_quality = pony_scorer.score(new_search_meta_tensor)
+                except Exception:
+                    traceback.print_exc()
+                    pony_aesthetic_quality = 0.0
 
-            try:
-                style_cluster_number = style_cluster.get_cluster(new_search_meta_tensor)
-                image_tags = f'style_cluster_{style_cluster_number}'
-            except Exception:
-                traceback.print_exc()
+                try:
+                    style_cluster_number = style_cluster.get_cluster(new_search_meta_tensor)
+                    image_tags = f'style_cluster_{style_cluster_number}'
+                except Exception:
+                    traceback.print_exc()
+                    image_tags = ''
+            else:
+                pony_aesthetic_quality = 0.0
                 image_tags = ''
 
             image_path = uncreated_image_paths[image_index]
@@ -568,7 +549,7 @@ def main():
     dir_path: pathlib.Path = pathlib.Path(args.image_dir)
     print(dir_path)
 
-    index_item_list = get_image_list_from_dir(dir_path, ext=["png", "jpg", "gif", "webp"])
+    index_item_list = get_image_list_from_dir(dir_path, exts=["png", "jpg", "gif", "jpeg", "webp", "bmp", "avif", "svg"])
     print(len(index_item_list))
 
     # データベースの準備
@@ -606,7 +587,7 @@ def main():
         ),
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=2,
+        num_workers=32,
         pin_memory=True,
         worker_init_fn=worker_init_fn
     )

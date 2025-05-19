@@ -23,8 +23,8 @@ const app = Vue.createApp({
             isRegexp: false,
             numCols: 6,
             numRows: 10,
-            model_name: "ViT-L-14-336",
-            pretrained: "openai",
+            model_name: "ViT-SO400M-16-SigLIP-i18n-256",
+            pretrained: "webli",
             search_query: "",
             showedItemIndex: 0,
             aesthetic_quality_beta: 0.00,
@@ -33,7 +33,7 @@ const app = Vue.createApp({
             aesthetic_model_name: "original",
             padding_top: 0,
             padding_bottom: 500,
-            item_height:258,
+            item_height:282,
 
             /**
              * @type {ResultItem[]}
@@ -238,17 +238,26 @@ const app = Vue.createApp({
             .then(this.initImage);
         },
 
-        //画像をダウンロードするボタンの動作
         allDownloadImagesButton() {
-            const images = this.resultBuffer.slice(0, 1000).map(result => {
-                const ImageUrl = repository.getImageUrl(result.item.id)
+            const selectedIds = this.resultBuffer.map(result => result.item.id);
 
-                return fetch(ImageUrl).then((response) => ({
-                    data: response.arrayBuffer(),
-                    fileName: result.item.name.split('\\').pop()
-                }))
+            fetch('/download_images_zip', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ params: { ids: selectedIds } })
             })
-            Promise.all(images).then((response) => this.generateImagesZip(response))
+            .then(response => response.blob())
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'images.zip';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            })
+            .catch(err => console.error('ZIPダウンロードエラー:', err));
         },
 
         //乱数から検索するボタンの動作
@@ -277,42 +286,6 @@ const app = Vue.createApp({
 
             this.setBuffer(repository.searchTags(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
             .then(this.initImage);
-        },
-
-        generateImagesZip(images) {
-            let zip = new jszip();
-
-          // フォルダ作成
-            const folderName = "images";
-            let folder = zip.folder(folderName);
-
-            // フォルダ下に画像を格納
-            images.forEach(image => {
-                if (image.data && image.fileName) {
-                    folder.file(image.fileName, image.data)
-                }
-            });
-
-            // zip を生成
-            zip.generateAsync({ type: "blob" }).then(blob => {
-              // ダウンロードリンクを 生成
-                let dlLink = document.createElement("a");
-
-              // blob から URL を生成
-                const dataUrl = URL.createObjectURL(blob);
-                dlLink.href = dataUrl;
-                dlLink.download = `${folderName}.zip`;
-
-              // 設置/クリック/削除
-                document.body.insertAdjacentElement("beforeEnd", dlLink);
-                dlLink.click();
-                dlLink.remove();
-
-              // オブジェクト URL の開放
-                setTimeout(function() {
-                window.URL.revokeObjectURL(dataUrl);
-                }, 1000);
-            });
         },
 
         onSelectItem(event) {

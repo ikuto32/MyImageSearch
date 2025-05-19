@@ -1,7 +1,7 @@
 
 import ast
 import logging
-from flask import Flask, request, make_response
+from flask import Flask, request, make_response, send_file
 
 import pathlib
 import json
@@ -273,6 +273,19 @@ def search_tags():
     result = usecase.search_tags(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
     return from_result_to_json(result)
 
+@app.route("/download_images_zip", methods=["POST"])
+def download_images_zip():
+    json_obj = request.get_json().get("params")
+    id_list = json_obj.get("ids", [])
+
+    zip_buffer = usecase.get_images_zip(id_list)
+
+    return send_file(
+        zip_buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name='images.zip'
+    )
 # ============================================================
 
 

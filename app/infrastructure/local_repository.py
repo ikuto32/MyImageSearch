@@ -1,12 +1,14 @@
 import asyncio
 from functools import cache
 import hashlib
+import io
 import itertools
 import os
 import pathlib
 import mimetypes
 from typing import List
 import concurrent.futures
+import zipfile
 
 import tqdm
 
@@ -139,14 +141,37 @@ class LocalRepository(Repository):
         return items
 
     @cache
-    def load_image(self, id: ImageId) -> Image:
+    def load_image(self, image_id: ImageId) -> Image:
+        relative_path = self._id_to_path.get(image_id)
 
-        path: pathlib.Path = pathlib.Path(
-            f"{self._image_dir_path}/{self._id_to_path.get(id)}"
-        )
+        if relative_path is None:
+            print(f"指定されたImageIdが存在しません: {image_id}")
+            return None
+
+        path: pathlib.Path = self._image_dir_path / relative_path
         binary: bytes = path.read_bytes()
 
-        # tuple[<Content-Type>, <Encoding>]
-        content_type = mimetypes.guess_type(path)[0]
+        content_type = mimetypes.guess_type(path)[0] or 'application/octet-stream'
 
-        return Image(binary, content_type)  # type: ignore
+        return Image(binary, content_type)
+
+    def create_zip_from_images(self, images_with_names: list[tuple[Image, ImageName]]):
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for image, image_name in images_with_names:
+                extension = image.content_type.split('/')[-1]
+                filename = f"{image_name.name}"
+                zip_file.writestr(filename, image.binary)
+        zip_buffer.seek(0)
+        return zip_buffer
+
+    @cache
+    def get_image_name(self, image_id: ImageId) -> ImageName:
+        relative_path = self._id_to_path.get(image_id)
+        if relative_path is None:
+            raise ValueError(f"指定されたImageIdが存在しません: {image_id}")
+
+        # パスからファイル名だけを取得
+        image_name = pathlib.Path(relative_path).name
+
+        return ImageName(name=image_name)

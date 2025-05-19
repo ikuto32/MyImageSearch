@@ -25,7 +25,7 @@ body{
 }
 
 
-#itemArea .meta, #itemArea .score{
+#itemArea .meta, #itemArea .score, #itemArea .tags{
 	display: inline-block;
 	white-space: nowrap;
 	overflow: hidden;
