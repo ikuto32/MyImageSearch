@@ -449,5 +449,17 @@ class Usecase:
         )
         return ResultImageItemList(scores, "")
 
+    def get_images_zip(self, id_list):
+        print("strat:get_images_zip")
+        images_with_names = []
+        for image_id_str in tqdm.tqdm(id_list):
+            image_id = ImageId(image_id_str)  # ImageId型に変換
+            try:
+                image_with_name: tuple[Image, ImageName] = self._repository.load_image(image_id), self._repository.get_image_name(image_id)
+                images_with_names.append(image_with_name)
+            except (ValueError, FileNotFoundError) as e:
+                print(f"画像IDが無効のためスキップ: {e}")
 
+        zip_buffer = self._repository.create_zip_from_images(images_with_names)
+        return zip_buffer
 # ===================================================================
