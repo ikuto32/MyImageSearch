@@ -60,7 +60,11 @@ def resource(target: str):
 
     # ビューの指定をしている。
     pwd = pathlib.Path(__file__).parent
-    with open(f'{pwd}/view/{target}', encoding="UTF-8") as f:
+    base_path = pwd / 'view'
+    full_path = pathlib.Path(base_path / target).resolve()
+    if not str(full_path).startswith(str(base_path.resolve())):
+        raise Exception("Access to the specified file is not allowed.")
+    with open(full_path, encoding="UTF-8") as f:
         text = f.read()
 
     response = make_response(text)
