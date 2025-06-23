@@ -325,6 +325,14 @@ class Usecase:
             index=index,
             query_features=features,
         )
+        scores = self.aesthetic_quality_eval(
+            model_id,
+            scores,
+            aesthetic_quality_beta,
+            aesthetic_quality_range_min,
+            aesthetic_quality_range_max,
+            aesthetic_model_name,
+        )
         return ResultImageItemList(scores, self.format_search_query(features))
 
     def search_query(
