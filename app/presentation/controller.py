@@ -54,17 +54,17 @@ def index():
     return text
 
 
-@app.route("/<path:terget>")
-def resource(terget: str):
+@app.route("/<path:target>")
+def resource(target: str):
     """ファイルを返す"""
 
     # ビューの指定をしている。
     pwd = pathlib.Path(__file__).parent
-    with open(f'{pwd}/view/{terget}', encoding="UTF-8") as f:
+    with open(f'{pwd}/view/{target}', encoding="UTF-8") as f:
         text = f.read()
 
     response = make_response(text)
-    response.headers.set('Content-Type', mimetypes.guess_type(terget)[0])
+    response.headers.set('Content-Type', mimetypes.guess_type(target)[0])
     return response
 
 
