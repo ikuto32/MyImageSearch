@@ -1,6 +1,5 @@
 import pathlib
 
-import numpy as np
 # from app.infrastructure.dummy_repository import DummyRepository
 # from app.infrastructure.dummy_accessor import DummyAccessor
 
@@ -16,8 +15,6 @@ def main():
     # コンフィグ
     image_dir_path: pathlib.Path = pathlib.Path('./images')
     meta_dir_path: pathlib.Path = pathlib.Path('./clip_meta')
-
-    np.set_printoptions(threshold=4096)
 
     accessor: LocalAccessor = LocalAccessor(meta_dir_path)
 
