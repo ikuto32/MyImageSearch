@@ -14,23 +14,22 @@ MyImageSearch は、OpenAI の [CLIP](https://openai.com/index/clip/) (Contrasti
 このプロジェクトで使用される主な言語は、Python、JavaScript、HTML です。
 
 # Setup
-次の手順に従って、winマシンで MyImageSearch をセットアップして実行します。
-## Create a new Conda environment:
+次の手順に従って、win マシンで MyImageSearch をセットアップして実行します。
+## 仮想環境を作成:
 ```
-conda create -n MyImageSearch python=3.9
+python -m venv venv
 ```
-## Activate the environment:
+## 仮想環境を有効化:
 ```
-conda activate MyImageSearch
+venv\Scripts\activate      # Windows の場合
+# または
+source venv/bin/activate   # Linux/macOS の場合
 ```
 
-## Install environments:
+## 依存ライブラリをインストール:
 ```
-conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia
-conda install -c pytorch faiss-cpu
-conda install -c anaconda pandas
-pip install Flask
-pip install open_clip_torch
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu117
+pip install faiss-cpu pandas Flask open_clip_torch
 ```
 ## Run the application:
 ```
