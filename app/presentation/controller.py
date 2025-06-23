@@ -8,6 +8,8 @@ import json
 import base64
 import mimetypes
 
+import numpy as np
+
 from app.application.usecase import Usecase
 from app.domain.domain_object import ImageItem, ImageId, ModelId, ModelItem, ResultImageItemList, UploadImage, ResultImageItem, UploadText
 
@@ -29,6 +31,8 @@ def start_app(in_usecase: Usecase):
     # text/javascript が text/plain になる問題の対策
     # https://bugs.python.org/issue43975
     mimetypes.add_type("text/javascript", ".js", True)
+
+    np.set_printoptions(threshold=4096)
 
     # ログレベルをWARNING以上に設定することで、INFOレベルのログを非表示にします
     log = logging.getLogger('werkzeug')
