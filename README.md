@@ -5,7 +5,7 @@ MyImageSearch は、OpenAI の [CLIP](https://openai.com/index/clip/) (Contrasti
 ![アプリケーションの見た目](./figs/fig1.png)
 
 ## Backend
-画像を[openCLIP](https://github.com/mlfoundations/open_clip)を用いてembeddingsに変換し、SQliteデータベースで管理している。検索には[faiss](https://github.com/facebookresearch/faiss)を使用して"index"を作成し、高速なベクトル検索を行っている。ウェブアプリケーションの実装には [Flask](https://flask.palletsprojects.com/en/3.0.x/)フレームワークを使用した。
+画像を[openCLIP](https://github.com/mlfoundations/open_clip)を用いてembeddingsに変換し、SQLiteデータベースで管理している。検索には[faiss](https://github.com/facebookresearch/faiss)を使用して"index"を作成し、高速なベクトル検索を行っている。ウェブアプリケーションの実装には [Flask](https://flask.palletsprojects.com/en/3.0.x/)フレームワークを使用した。
 
 ## Frontend
 アプリケーションのフロントエンドは、人気のマテリアルデザインコンポーネントフレームワークである[Vue.js](https://vuejs.org/)と[Vuetify](https://vuetifyjs.com/en/)を使用して開発した。
