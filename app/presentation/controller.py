@@ -168,19 +168,20 @@ def search_name():
 def search_upload_image():
     """アップロードされた画像から検索して、結果を返す。"""
 
-    payload: str = request.args.get("payload")
+    json_obj = json.loads(request.data).get("params")
 
-    # jsonを解釈し、値を取り出す。
-    json_obj = json.loads(payload)
-    model_id: ModelId = ModelId(json_obj["model"], json_obj["pretrained"])
+    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
     base64_text: str = json_obj["base64"]
-    content_type: str = json_obj(["content_type"])
+    content_type: str = json_obj.get("content_type", "image/png")
 
-    # base64を画像に変換
+    if "," in base64_text:
+        base64_text = base64_text.split(",", 1)[1]
+
     binary = base64.b64decode(base64_text)
     image: UploadImage = UploadImage(binary, content_type)
 
-    return from_result_to_json(usecase.search_upload_image(model_id, image))
+    result = usecase.search_upload_image(model_id, image)
+    return from_result_to_json(result)
 
 
 @app.route("/search/random", methods=["POST"])
