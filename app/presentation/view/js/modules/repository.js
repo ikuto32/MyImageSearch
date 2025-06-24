@@ -1,6 +1,7 @@
 
 
 import axios from "https://cdn.jsdelivr.net/npm/axios@1.3.1/+esm"
+import { fileToBase64 } from "./util.js"
 
 /**
  * 画像項目
@@ -235,3 +236,25 @@ export async function searchTags(modelName, pretrained, itemId_list, is_regexp, 
 
     return axios.post("/search/tags", payload).then(res => res.data)
 }
+
+/**
+ * アップロードされた画像で検索する
+ *
+ * @param {string} modelName
+ * @param {string} pretrained
+ * @param {File} file
+ * @returns {Promise<ResultItem[]>}
+ */
+export async function searchUploadImage(modelName, pretrained, file) {
+    const dataUrl = await fileToBase64(file)
+    let payload = {
+        params:{
+            model_name: modelName,
+            pretrained: pretrained,
+            base64: dataUrl.split(',')[1],
+            content_type: file.type
+        }
+    }
+    return axios.post("/search/uploadimage", payload).then(res => res.data)
+}
+

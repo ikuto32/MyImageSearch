@@ -294,15 +294,30 @@ class Usecase:
     ) -> ResultImageItemList:
         """アップロードされた画像から検索する"""
 
-        return ResultImageItemList(
-            [
-                ResultImageItem(
-                    item=ImageItem(id=ImageId(id=""), display_name=ImageName(name=""), tags=ImageTags(tags="")),
-                    score=Score(score=0.0),
-                )
-            ],
-            "",
+        # モデルの読み込み
+        model_obj: Model = self._accessor.load_model(model_id)
+        model, _, preprocess = (
+            model_obj.model_obj[0],
+            model_obj.model_obj[1],
+            model_obj.model_obj[2],
         )
+
+        # アップロードされた画像を前処理
+        load_image = Image(binary=image.binary, content_type=image.content_type).to_ptl_image()
+        image_tensor = preprocess(load_image).unsqueeze(0).to("cpu")
+        features = model.encode_image(image_tensor).to("cpu").detach().numpy().copy()
+
+        # indexを読み込み
+        index = self._accessor.load_index_file(model_id)
+
+        # 類似度を計算する
+        scores: list[ResultImageItem] = self.similarity_eval(
+            item_list=self._accessor.load_index_item_list(model_id),
+            index=index,
+            query_features=features,
+        )
+
+        return ResultImageItemList(scores, self.format_search_query(features))
 
     def search_random(
         self,

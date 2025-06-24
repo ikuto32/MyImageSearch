@@ -31,6 +31,7 @@ const app = Vue.createApp({
             aesthetic_quality_range: [0, 10],
             features_strength: 1.00,
             aesthetic_model_name: "original",
+            uploadFile: null,
             padding_top: 0,
             padding_bottom: 500,
             item_height:282,
@@ -228,6 +229,16 @@ const app = Vue.createApp({
             let selectedId = Object.keys(this.selectedItemId)
 
             this.setBuffer(repository.searchImage(this.model_name, this.pretrained, selectedId, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
+            .then(this.initImage);
+        },
+
+        //アップロード画像から検索するボタンの動作
+        uploadImageSearchButton() {
+            if(!this.uploadFile) {
+                return;
+            }
+            this.setBuffer(repository.searchUploadImage(this.model_name, this.pretrained, this.uploadFile))
+            .then(() => { this.uploadFile = null })
             .then(this.initImage);
         },
 
