@@ -20,6 +20,11 @@ class Repository(metaclass=ABCMeta):
         pass
 
     @abstractmethod
+    def load_small_image(self, image_id: ImageId) -> Image:
+
+        pass
+
+    @abstractmethod
     def load_all_model_item(self) -> list[ModelItem]:
 
         pass
