@@ -108,7 +108,7 @@
                             :data-index="index"
                             :data-selected="selectedItemId[item.id]"
                             >
-                                <v-img :src="item.img" :title="item.img_name" height="200" transition="false" v-show="true">
+                                <v-img :src="item.img_small" :title="item.img_name" height="200" transition="false" v-show="true">
                                     <v-btn icon>
                                         <v-icon icon="mdi-arrow-expand-all" color="info"></v-icon>
                                         <v-dialog
@@ -116,10 +116,10 @@
                                             width="auto"
                                         >
                                             <v-card>
-                                                <v-img :src="item.img" :title="item.img_name" width="90vw" height="85vh"></v-img>
+                                                <v-img :src="item.img_original" :title="item.img_name" width="90vw" height="85vh"></v-img>
                                                 <v-card-title>
                                                     <span class="meta">{{ item.img_name }}</span>
-                                                    <a :href="item.img" :download="item.img_name.split('\\').pop()">
+                                                    <a :href="item.img_original" :download="item.img_name.split('\\').pop()">
                                                         <v-icon icon="mdi-download" color="info"></v-icon>
                                                     </a>
                                                 </v-card-title>

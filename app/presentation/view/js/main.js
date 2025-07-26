@@ -7,7 +7,7 @@ import * as util from "./util.js"
 
 
 /**
- * @typedef {{id: string, score: number, img_name: string, img: string, selected: boolean}} DisplayItem
+ * @typedef {{id: string, score: number, img_name: string, img_small: string, img_original: string, selected: boolean}} DisplayItem
  */
 
 const vuetify = Vuetify.createVuetify()
@@ -180,7 +180,8 @@ const app = Vue.createApp({
                     score: result.score,
                     tags: result.item.tags,
                     img_name: result.item.name,
-                    img: repository.getImageUrl(result.item.id),
+                    img_small: repository.getImageSmallUrl(result.item.id),
+                    img_original: repository.getImageOriginalUrl(result.item.id),
                     selected: false
                 });
             });
