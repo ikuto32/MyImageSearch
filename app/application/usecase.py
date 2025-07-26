@@ -55,6 +55,11 @@ class Usecase:
 
         return self._repository.load_image(id)
 
+    def get_small_image(self, id: ImageId) -> Image:
+        """画像IDから縮小画像を取得する"""
+
+        return self._repository.load_small_image(id)
+
     # ===================================================================
 
     def get_all_model(self) -> list[ModelItem]:

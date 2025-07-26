@@ -93,11 +93,20 @@ def get_image_item(id: str):
     return from_image_item_to_json(usecase.get_image_item(ImageId(id)))
 
 
-@app.route("/image_item/<id>/image")
-def get_image(id: str):
-    """画像IDから画像を返す"""
+@app.route("/image/<id>/small")
+def get_small_image(id: str):
+    """画像IDから縮小画像を返す"""
 
-    # 画像を取得して、レスポンスに詰め替えて返す。
+    img = usecase.get_small_image(ImageId(id))
+    response = make_response(img.binary)
+    response.headers.set('Content-Type', img.content_type)
+    return response
+
+
+@app.route("/image/<id>/original")
+def get_original_image(id: str):
+    """画像IDからオリジナル画像を返す"""
+
     img = usecase.get_image(ImageId(id))
     response = make_response(img.binary)
     response.headers.set('Content-Type', img.content_type)
