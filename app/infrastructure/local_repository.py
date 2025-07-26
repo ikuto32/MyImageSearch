@@ -24,6 +24,8 @@ from app.domain.domain_object import (
 )
 from app.domain.repository import Repository
 
+from PIL import Image as PILImage
+
 import open_clip
 
 
@@ -150,6 +152,28 @@ class LocalRepository(Repository):
 
         path: pathlib.Path = self._image_dir_path / relative_path
         binary: bytes = path.read_bytes()
+
+        content_type = mimetypes.guess_type(path)[0] or 'application/octet-stream'
+
+        return Image(binary, content_type)
+
+    @cache
+    def load_small_image(self, image_id: ImageId) -> Image:
+        relative_path = self._id_to_path.get(image_id)
+
+        if relative_path is None:
+            print(f"指定されたImageIdが存在しません: {image_id}")
+            return None
+
+        path: pathlib.Path = self._image_dir_path / relative_path
+
+        # open image with PIL and resize to long side 400 px
+        with PILImage.open(path) as img:
+            img.thumbnail((400, 400))
+            buffer = io.BytesIO()
+            format = img.format if img.format else 'PNG'
+            img.save(buffer, format=format)
+            binary = buffer.getvalue()
 
         content_type = mimetypes.guess_type(path)[0] or 'application/octet-stream'
 

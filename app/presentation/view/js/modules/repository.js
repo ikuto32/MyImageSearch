@@ -19,9 +19,12 @@ import { fileToBase64 } from "./util.js"
  * 
  * @return {string}
  */
-export function getImageUrl(itemId) {
+export function getImageSmallUrl(itemId) {
+    return `/image/${itemId}/small`
+}
 
-    return `/image_item/${itemId}/image`
+export function getImageOriginalUrl(itemId) {
+    return `/image/${itemId}/original`
 }
 
 
