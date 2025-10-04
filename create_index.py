@@ -1,20 +1,19 @@
 from __future__ import annotations
+
 import argparse
 import asyncio
+import concurrent.futures
 import datetime
 import hashlib
-import concurrent.futures
 import os
 import pathlib
+import pickle
 import sqlite3
 import traceback
 import typing
 
-import huggingface_hub
-from torchvision import transforms
-import pickle
-
 import faiss
+import huggingface_hub
 import numpy as np
 import open_clip
 import pandas as pd
@@ -23,6 +22,8 @@ import torch.nn as nn
 import tqdm
 from PIL import Image, ImageFile
 from torch.utils.data import DataLoader, Dataset, get_worker_info
+from torchvision import transforms
+from torch.utils.data._utils.collate import default_collate
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 Image.MAX_IMAGE_PIXELS = 268_435_456
@@ -549,7 +550,11 @@ def main():
     dir_path: pathlib.Path = pathlib.Path(args.image_dir)
     print(dir_path)
 
-    index_item_list = get_image_list_from_dir(dir_path, exts=["png", "jpg", "gif", "jpeg", "webp", "bmp", "avif", "svg"])
+    ext_list = list(Image.registered_extensions().keys())
+
+    print(ext_list)
+
+    index_item_list = get_image_list_from_dir(dir_path, exts=ext_list)
     print(len(index_item_list))
 
     # データベースの準備
@@ -587,7 +592,7 @@ def main():
         ),
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=32,
+        num_workers=0,
         pin_memory=True,
         worker_init_fn=worker_init_fn
     )

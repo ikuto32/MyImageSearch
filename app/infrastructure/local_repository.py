@@ -41,7 +41,7 @@ class LocalRepository(Repository):
     def load_all_image_item(self) -> List[ImageItem]:
         async def _load_all_image_item_async():
             files = []
-            extensions = ["png", "jpg", "gif", "webp"]
+            extensions = list(PILImage.registered_extensions().keys())
             ext_set = set(e.lower() if e.startswith('.') else f'.{e.lower()}' for e in extensions)
             loop = asyncio.get_event_loop()
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=320)
