@@ -11,6 +11,7 @@ import pickle
 import sqlite3
 import traceback
 import typing
+from typing import Optional, Tuple, Union
 
 import faiss
 import huggingface_hub
@@ -21,62 +22,73 @@ import torch
 import torch.nn as nn
 import tqdm
 from PIL import Image, ImageFile
-from torch.utils.data import DataLoader, Dataset, get_worker_info
+from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torch.utils.data._utils.collate import default_collate
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 Image.MAX_IMAGE_PIXELS = 268_435_456
 
+
+def safe_collate(batch):
+    batch = [b for b in batch if b is not None]
+    if not batch:
+        return None
+    return default_collate(batch)
+
+
 class DirImageDataset(Dataset):
-    """Custom Dataset for loading images from a directory."""
+    """Mapping-style dataset that safely loads images from a directory."""
 
-    def __init__(self, images_dir, img_list, transform):
+    def __init__(
+        self,
+        images_dir: str,
+        img_list: typing.Sequence[str],
+        transform=None,
+        return_path: bool = False,
+        skip_broken: bool = True,
+    ) -> None:
         self.images_dir = images_dir
-        self.img_list = img_list
+        self.img_list = list(img_list)
         self.transform = transform
-        self.i = 0
+        self.return_path = return_path
+        self.skip_broken = skip_broken
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.img_list)
 
-    def __getitem__(self, _):
+    def _open_rgb(self, path: str) -> Optional[Image.Image]:
+        try:
+            with Image.open(path) as im:
+                return im.convert("RGB").copy()
+        except Exception as e:
+            print(f"[DirImageDataset] open failed: {path} -> {e}")
+            return None
 
-        image_path = None
-        image = None
+    def __getitem__(self, idx: int) -> Union[Tuple[typing.Any, int], Tuple[typing.Any, int, str], None]:
+        if not self.img_list:
+            raise IndexError("DirImageDataset is empty")
 
-        for _ in self.img_list:
-            try:
-                image_path = f"{self.images_dir}/{self.img_list[self.i]}"
-                image = Image.open(image_path).convert("RGBA").convert("RGB")
-                break
-            except Exception as e:
-                print(f"An error occurred while opening image: {image_path}")
-                print(e)
-                self.i += 1
-                self.i %= len(self.img_list)
+        idx = idx % len(self.img_list)
+        rel_path = self.img_list[idx]
+        path = os.path.join(self.images_dir, rel_path)
 
-        assert image_path is not None or image is not None, "An error occurred while opening image"
+        image = self._open_rgb(path)
+        if image is None:
+            if self.skip_broken:
+                return None
+            raise FileNotFoundError(f"Failed to open image: {path}")
 
-        image_index = self.i
         if self.transform is not None:
-            image = self.transform(image)
+            try:
+                image = self.transform(image)
+            except Exception as e:
+                print(f"[DirImageDataset] transform failed: {path} -> {e}")
+                return None
 
-        self.i += 1
-        self.i %= len(self.img_list)
-        return image, image_index
-
-
-def worker_init_fn(worker_id):
-    """Initializes dataset workers for DataLoader."""
-
-    worker_info = get_worker_info()
-    dataset = worker_info.dataset  # type: ignore the dataset copy in this worker process
-    print(worker_info)
-    sub_dataset_size = (len(dataset.img_list) // worker_info.num_workers)  # type: ignore
-    dataset.i = sub_dataset_size * worker_id  # type: ignore
-    print(f"sub dataset size:{sub_dataset_size}")
-    print(f"dataset index:{dataset.i}")  # type: ignore
+        if self.return_path:
+            return image, idx, path
+        return image, idx
 
 
 class Aesthetic_model(nn.Module):
@@ -129,7 +141,7 @@ class PonyAestheticScorer:
     def score(self, features):
         """指定されたfeaturesから美的評価スコアを算出して返す"""
         # L2正規化
-        norm = features.norm(dim=-1, keepdim=True)
+        norm = features.norm(dim=-1, keepdim=True).clamp_min(1e-12)
         features = features / norm
         with torch.no_grad():
             score = self.aesthetic_model(features).item()
@@ -208,7 +220,7 @@ def parse_arguments():
         "--search_model_pretrained", help="pretrained", default="webli"
     )
     parser.add_argument(
-        "--search_model_out_dim", help="search_model_out_dim", default=1152
+        "--search_model_out_dim", help="search_model_out_dim", type=int, default=1152
     )
 
     HF_TOKEN = "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"
@@ -228,10 +240,11 @@ def parse_arguments():
     parser.add_argument(
         "--style_checkpoint_centers", help="style_checkpoint_centers", default=huggingface_hub.hf_hub_download(model_repo, CENTERS_FILENAME, use_auth_token=HF_TOKEN)
     )
-    parser.add_argument("--batch_size", help="batch size", default=256)
-    parser.add_argument("--nlist", help="centroid size", default=64)
-    parser.add_argument("--M", help="M", default=1152)
-    parser.add_argument("--bits_per_code", help="bits_per_code", default=8)
+    parser.add_argument("--batch_size", help="batch size", type=int, default=256)
+    parser.add_argument("--num_workers", help="data loader workers", type=int, default=0)
+    parser.add_argument("--nlist", help="centroid size", type=int, default=64)
+    parser.add_argument("--M", help="M", type=int, default=1152)
+    parser.add_argument("--bits_per_code", help="bits_per_code", type=int, default=8)
     parser.add_argument(
         "--metas_faiss_index_file_name",
         help="metas_faiss_index_file_name",
@@ -435,7 +448,17 @@ def print_image_meta_stats(search_meta_list, uncreated_image_paths, max_len):
     )
 
 
-def extract_image_features(args, device, search_model, aesthetic_model, con, cur, loader, search_meta_list, uncreated_image_paths):
+def extract_image_features(
+    args,
+    device,
+    search_model,
+    aesthetic_model,
+    con,
+    cur,
+    loader,
+    search_meta_list,
+    uncreated_image_paths,
+):
     # 事前学習済みチェックポイントのパスは args から取得（各自適宜設定してください）
     aesthetic_checkpoint = getattr(args, "aesthetic_checkpoint", None)
     style_checkpoint_model = getattr(args, "style_checkpoint_model", None)
@@ -444,11 +467,19 @@ def extract_image_features(args, device, search_model, aesthetic_model, con, cur
     # 美的評価（PonyAestheticScorer）とスタイルクラスタリング（StyleCluster）のグローバルインスタンスを生成
     pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
     style_cluster = StyleCluster(device=device, checkpoint_model=style_checkpoint_model, checkpoint_centers=style_checkpoint_centers)
+    processed_count = 0
+    commits_completed = 0
 
-    for i, (batched_image_input, batched_image_index) in enumerate(
-        tqdm.tqdm(loader)
-    ):
-        batched_image_input = batched_image_input.to(device)
+    for batch in tqdm.tqdm(loader):
+        if batch is None:
+            continue
+
+        if len(batch) == 3:
+            batched_image_input, batched_image_index, _ = batch
+        else:
+            batched_image_input, batched_image_index = batch
+
+        batched_image_input = batched_image_input.to(device, non_blocking=True)
         try:
             batched_new_search_meta = (
                 search_model.encode_image(batched_image_input)
@@ -462,9 +493,7 @@ def extract_image_features(args, device, search_model, aesthetic_model, con, cur
             traceback.print_exc()
             continue
 
-        for new_search_meta, image_index in zip(
-            batched_new_search_meta, batched_image_index
-        ):
+        for new_search_meta, image_index in zip(batched_new_search_meta, batched_image_index):
             if type(new_search_meta).__module__ != "numpy":
                 print(f"{type(new_search_meta).__module__} != numpy")
                 continue
@@ -477,14 +506,21 @@ def extract_image_features(args, device, search_model, aesthetic_model, con, cur
             new_search_meta_bytes = new_search_meta.tobytes()
 
             aesthetic_quality: float = 0.0
+            pony_aesthetic_quality: float = 0.0
+            image_tags: str = ''
+
             if new_search_meta.shape[0] == 768:
                 try:
                     image_features = torch.from_numpy(new_search_meta)
-                    image_features /= image_features.norm(dim=-1, keepdim=True)
-                    aesthetic_quality = torch.sigmoid(aesthetic_model(image_features.unsqueeze(dim=0))).item()
+                    denom = image_features.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+                    image_features = (image_features / denom).contiguous()
+                    aesthetic_quality = torch.sigmoid(
+                        aesthetic_model(image_features.unsqueeze(0))
+                    ).item()
                 except Exception:
                     traceback.print_exc()
 
+                new_search_meta_tensor: Optional[torch.Tensor] = None
                 try:
                     new_search_meta_tensor = torch.from_numpy(new_search_meta).to(device).unsqueeze(0)
                     pony_aesthetic_quality = pony_scorer.score(new_search_meta_tensor)
@@ -492,17 +528,16 @@ def extract_image_features(args, device, search_model, aesthetic_model, con, cur
                     traceback.print_exc()
                     pony_aesthetic_quality = 0.0
 
-                try:
-                    style_cluster_number = style_cluster.get_cluster(new_search_meta_tensor)
-                    image_tags = f'style_cluster_{style_cluster_number}'
-                except Exception:
-                    traceback.print_exc()
-                    image_tags = ''
-            else:
-                pony_aesthetic_quality = 0.0
-                image_tags = ''
+                if new_search_meta_tensor is not None:
+                    try:
+                        style_cluster_number = style_cluster.get_cluster(new_search_meta_tensor)
+                        image_tags = f"style_cluster_{style_cluster_number}"
+                    except Exception:
+                        traceback.print_exc()
+                        image_tags = ''
 
-            image_path = uncreated_image_paths[image_index]
+            image_index_int = int(image_index)
+            image_path = uncreated_image_paths[image_index_int]
             image_id: str = hashlib.sha256(str(image_path).encode()).hexdigest()
 
             # UTC time
@@ -516,24 +551,26 @@ def extract_image_features(args, device, search_model, aesthetic_model, con, cur
                 pony_aesthetic_quality,
                 image_tags,
                 time_stamp_ISO,
-
                 new_search_meta_bytes,
                 aesthetic_quality,
                 pony_aesthetic_quality,
                 image_tags,
-                time_stamp_ISO
+                time_stamp_ISO,
             )
             try:
                 cur.execute(
                     "insert into image_meta values(?, ?, ?, ?, ?, ?, ?) on conflict(image_id) do update set meta=?, aesthetic_quality=?, pony_aesthetic_quality=?, image_tags=?, time_stamp_ISO=?",
                     param,
                 )
+                processed_count += 1
             except Exception:
                 traceback.print_exc()
 
-        if (i * args.batch_size) % 10000 < args.batch_size:
-            print("commit")
-            con.commit()
+            target = (commits_completed + 1) * 10000
+            if processed_count >= target:
+                print("commit")
+                con.commit()
+                commits_completed += 1
 
 
 @torch.no_grad()
@@ -584,17 +621,28 @@ def main():
 
     del result, index_item_list
 
-    loader = DataLoader(
-        DirImageDataset(
-            args.image_dir,
-            uncreated_image_paths,
-            transform=eval_transform,
-        ),
+    dataset = DirImageDataset(
+        args.image_dir,
+        uncreated_image_paths,
+        transform=eval_transform,
+    )
+
+    num_workers = max(0, args.num_workers)
+    dataloader_kwargs = dict(
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=0,
+        num_workers=num_workers,
         pin_memory=True,
-        worker_init_fn=worker_init_fn
+        persistent_workers=False,
+        timeout=0,
+        collate_fn=safe_collate,
+    )
+    if num_workers > 0:
+        dataloader_kwargs["prefetch_factor"] = 2
+
+    loader = DataLoader(
+        dataset,
+        **dataloader_kwargs,
     )
 
     extract_image_features(args, device, search_model, aesthetic_model, con, cur, loader, search_meta_list, uncreated_image_paths)
