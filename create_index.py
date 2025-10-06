@@ -627,25 +627,39 @@ def main():
         transform=eval_transform,
     )
 
-    num_workers = max(0, args.num_workers)
-    dataloader_kwargs = dict(
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=False,
-        timeout=0,
-        collate_fn=safe_collate,
-    )
-    if num_workers > 0:
-        dataloader_kwargs["prefetch_factor"] = 2
+    loader = None
+    if len(dataset) == 0:
+        print("No new images to process. Skipping feature extraction.")
+    else:
+        num_workers = max(0, args.num_workers)
+        dataloader_kwargs = dict(
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=False,
+            timeout=0,
+            collate_fn=safe_collate,
+        )
+        if num_workers > 0:
+            dataloader_kwargs["prefetch_factor"] = 2
 
-    loader = DataLoader(
-        dataset,
-        **dataloader_kwargs,
-    )
+        loader = DataLoader(
+            dataset,
+            **dataloader_kwargs,
+        )
 
-    extract_image_features(args, device, search_model, aesthetic_model, con, cur, loader, search_meta_list, uncreated_image_paths)
+        extract_image_features(
+            args,
+            device,
+            search_model,
+            aesthetic_model,
+            con,
+            cur,
+            loader,
+            search_meta_list,
+            uncreated_image_paths,
+        )
 
     con.commit()
     print(
@@ -662,7 +676,10 @@ def main():
     print("close")
     con.close()
 
-    del uncreated_image_paths, aesthetic_model, search_model, loader, con, cur
+    del uncreated_image_paths, aesthetic_model, search_model
+    if loader is not None:
+        del loader
+    del con, cur
     # データベースに問い合わせる。
     con: sqlite3.Connection = connect_db(search_model_meta_dir)
     result = pd.read_sql_query(
