@@ -41,7 +41,8 @@ class LocalRepository(Repository):
     def load_all_image_item(self) -> List[ImageItem]:
         async def _load_all_image_item_async():
             files = []
-            extensions = list(PILImage.registered_extensions().keys())
+            # extensions = list(PILImage.registered_extensions().keys())
+            extensions = ['.avif', '.avifs', '.blp', '.bmp', '.dib', '.bufr', '.cur', '.pcx', '.dcx', '.dds', '.ps', '.eps', '.fit', '.fits', '.fli', '.flc', '.ftc', '.ftu', '.gbr', '.gif', '.grib', '.h5', '.hdf', '.png', '.apng', '.jp2', '.j2k', '.jpc', '.jpf', '.jpx', '.j2c', '.icns', '.ico', '.im', '.iim', '.jfif', '.jpe', '.jpg', '.jpeg', '.mpg', '.mpeg', '.tif', '.tiff', '.mpo', '.msp', '.palm', '.pcd', '.pxr', '.pbm', '.pgm', '.ppm', '.pnm', '.pfm', '.psd', '.qoi', '.bw', '.rgb', '.rgba', '.sgi', '.ras', '.tga', '.icb', '.vda', '.vst', '.webp', '.wmf', '.emf', '.xbm', '.xpm']
             ext_set = set(e.lower() if e.startswith('.') else f'.{e.lower()}' for e in extensions)
             loop = asyncio.get_event_loop()
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=320)
