@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 import tqdm
 from PIL import Image, ImageFile
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, IterableDataset, get_worker_info
 from torchvision import transforms
 from torch.utils.data._utils.collate import default_collate
 
@@ -31,9 +31,10 @@ Image.MAX_IMAGE_PIXELS = 268_435_456
 
 
 def safe_collate(batch):
+    # None（壊れ/変換失敗）を除外
     batch = [b for b in batch if b is not None]
     if not batch:
-        return None
+        return None  # 上位ループでcontinue
     return default_collate(batch)
 
 
@@ -45,13 +46,11 @@ class DirImageDataset(Dataset):
         images_dir: str,
         img_list: typing.Sequence[str],
         transform=None,
-        return_path: bool = False,
         skip_broken: bool = True,
     ) -> None:
         self.images_dir = images_dir
         self.img_list = list(img_list)
         self.transform = transform
-        self.return_path = return_path
         self.skip_broken = skip_broken
 
     def __len__(self) -> int:
@@ -60,7 +59,7 @@ class DirImageDataset(Dataset):
     def _open_rgb(self, path: str) -> Optional[Image.Image]:
         try:
             with Image.open(path) as im:
-                return im.convert("RGB").copy()
+                return im.convert("RGBA").convert("RGB").copy()
         except Exception as e:
             print(f"[DirImageDataset] open failed: {path} -> {e}")
             return None
@@ -72,23 +71,69 @@ class DirImageDataset(Dataset):
         idx = idx % len(self.img_list)
         rel_path = self.img_list[idx]
         path = os.path.join(self.images_dir, rel_path)
+        try:
 
-        image = self._open_rgb(path)
-        if image is None:
+            image = self._open_rgb(path)
+            if image is None:
+                if self.skip_broken:
+                    return None
+                raise FileNotFoundError(f"Failed to open image: {path}")
+
+            if self.transform is not None:
+                try:
+                    image = self.transform(image)
+                except Exception as e:
+                    print(f"[DirImageDataset] transform failed: {path} -> {e}")
+                    print(traceback.format_exc())
+                    return None
+
+            if self.return_path:
+                return image, idx, path
+            return image, idx
+        except Exception as e:
+            print(f"[DirImageDataset] unexpected failure: {path if 'path' in locals() else 'unknown'} -> {e}")
             if self.skip_broken:
                 return None
-            raise FileNotFoundError(f"Failed to open image: {path}")
 
-        if self.transform is not None:
-            try:
-                image = self.transform(image)
-            except Exception as e:
-                print(f"[DirImageDataset] transform failed: {path} -> {e}")
-                return None
 
-        if self.return_path:
-            return image, idx, path
-        return image, idx
+class DirImageIterable(IterableDataset):
+    def __init__(self, images_dir: str, img_list, transform=None):
+        self.images_dir = images_dir
+        self.img_list = list(img_list)
+        self.transform = transform
+
+    def _open_rgb(self, path: str):
+        try:
+            with Image.open(path) as im:
+                return im.convert("RGBA").convert("RGB").copy()
+        except Exception as e:
+            print(f"[DirImageIterable] open failed: {path} -> {e}")
+            return None
+
+    def __iter__(self):
+        info = get_worker_info()
+        if info is None:
+            it = range(len(self.img_list))
+        else:
+            # 各ワーカーに均等分割
+            per_worker = (len(self.img_list) + info.num_workers - 1) // info.num_workers
+            start = info.id * per_worker
+            end = min(start + per_worker, len(self.img_list))
+            it = range(start, end)
+
+        for idx in it:
+            rel = self.img_list[idx]
+            path = os.path.join(self.images_dir, rel)
+            img = self._open_rgb(path)
+            if img is None:
+                continue
+            if self.transform is not None:
+                try:
+                    img = self.transform(img)
+                except Exception as e:
+                    print(f"[DirImageIterable] transform failed: {path} -> {e}")
+                    continue
+            yield img, idx
 
 
 class Aesthetic_model(nn.Module):
@@ -241,7 +286,7 @@ def parse_arguments():
         "--style_checkpoint_centers", help="style_checkpoint_centers", default=huggingface_hub.hf_hub_download(model_repo, CENTERS_FILENAME, use_auth_token=HF_TOKEN)
     )
     parser.add_argument("--batch_size", help="batch size", type=int, default=256)
-    parser.add_argument("--num_workers", help="data loader workers", type=int, default=0)
+    parser.add_argument("--num_workers", help="data loader workers", type=int, default=32)
     parser.add_argument("--nlist", help="centroid size", type=int, default=64)
     parser.add_argument("--M", help="M", type=int, default=1152)
     parser.add_argument("--bits_per_code", help="bits_per_code", type=int, default=8)
@@ -468,16 +513,12 @@ def extract_image_features(
     pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
     style_cluster = StyleCluster(device=device, checkpoint_model=style_checkpoint_model, checkpoint_centers=style_checkpoint_centers)
     processed_count = 0
-    commits_completed = 0
 
-    for batch in tqdm.tqdm(loader):
+    for i, batch in enumerate(tqdm.tqdm(loader, total=len(uncreated_image_paths) // args.batch_size + 1)):
         if batch is None:
             continue
 
-        if len(batch) == 3:
-            batched_image_input, batched_image_index, _ = batch
-        else:
-            batched_image_input, batched_image_index = batch
+        batched_image_input, batched_image_index = batch
 
         batched_image_input = batched_image_input.to(device, non_blocking=True)
         try:
@@ -566,11 +607,9 @@ def extract_image_features(
             except Exception:
                 traceback.print_exc()
 
-            target = (commits_completed + 1) * 10000
-            if processed_count >= target:
-                print("commit")
-                con.commit()
-                commits_completed += 1
+        if (processed_count) % 10000 < args.batch_size:
+            print("commit")
+            con.commit()
 
 
 @torch.no_grad()
@@ -587,7 +626,8 @@ def main():
     dir_path: pathlib.Path = pathlib.Path(args.image_dir)
     print(dir_path)
 
-    ext_list = list(Image.registered_extensions().keys())
+    # ext_list = list(Image.registered_extensions().keys())
+    ext_list = ['.avif', '.avifs', '.blp', '.bmp', '.dib', '.bufr', '.cur', '.pcx', '.dcx', '.dds', '.ps', '.eps', '.fit', '.fits', '.fli', '.flc', '.ftc', '.ftu', '.gbr', '.gif', '.grib', '.h5', '.hdf', '.png', '.apng', '.jp2', '.j2k', '.jpc', '.jpf', '.jpx', '.j2c', '.icns', '.ico', '.im', '.iim', '.jfif', '.jpe', '.jpg', '.jpeg', '.mpg', '.mpeg', '.tif', '.tiff', '.mpo', '.msp', '.palm', '.pcd', '.pxr', '.pbm', '.pgm', '.ppm', '.pnm', '.pfm', '.psd', '.qoi', '.bw', '.rgb', '.rgba', '.sgi', '.ras', '.tga', '.icb', '.vda', '.vst', '.webp', '.wmf', '.emf', '.xbm', '.xpm']
 
     print(ext_list)
 
@@ -621,15 +661,15 @@ def main():
 
     del result, index_item_list
 
-    dataset = DirImageDataset(
+    dataset = DirImageIterable(
         args.image_dir,
         uncreated_image_paths,
         transform=eval_transform,
     )
 
     loader = None
-    if len(dataset) == 0:
-        print("No new images to process. Skipping feature extraction.")
+    if not uncreated_image_paths:
+        print("No new images to process.")
     else:
         num_workers = max(0, args.num_workers)
         dataloader_kwargs = dict(
@@ -637,12 +677,10 @@ def main():
             shuffle=False,
             num_workers=num_workers,
             pin_memory=True,
-            persistent_workers=False,
-            timeout=0,
             collate_fn=safe_collate,
         )
         if num_workers > 0:
-            dataloader_kwargs["prefetch_factor"] = 2
+            dataloader_kwargs["prefetch_factor"] = 128
 
         loader = DataLoader(
             dataset,
