@@ -64,7 +64,7 @@ class DirImageDataset(Dataset):
             print(f"[DirImageDataset] open failed: {path} -> {e}")
             return None
 
-    def __getitem__(self, idx: int) -> Union[Tuple[typing.Any, int], Tuple[typing.Any, int, str], None]:
+    def __getitem__(self, idx: int) -> Union[Tuple[typing.Any, int], None]:
         if not self.img_list:
             raise IndexError("DirImageDataset is empty")
 
@@ -87,8 +87,6 @@ class DirImageDataset(Dataset):
                     print(traceback.format_exc())
                     return None
 
-            if self.return_path:
-                return image, idx, path
             return image, idx
         except Exception as e:
             print(f"[DirImageDataset] unexpected failure: {path if 'path' in locals() else 'unknown'} -> {e}")
@@ -427,7 +425,12 @@ def load_image_meta_from_db(con: sqlite3.Connection, id_list: list[str], loop_si
             params=sub_list  # type: ignore
         ))
 
-    return pd.concat(temp)
+    if not temp:
+        return pd.DataFrame(
+            columns=["valid_id", "image_path", "meta", "aesthetic_quality"]
+        )
+
+    return pd.concat(temp, ignore_index=True)
 
 
 def createIndex(n_centroids, M, bits_per_code, dim) -> faiss.IndexIVFPQ:
