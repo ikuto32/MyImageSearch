@@ -38,64 +38,6 @@ def safe_collate(batch):
     return default_collate(batch)
 
 
-class DirImageDataset(Dataset):
-    """Mapping-style dataset that safely loads images from a directory."""
-
-    def __init__(
-        self,
-        images_dir: str,
-        img_list: typing.Sequence[str],
-        transform=None,
-        skip_broken: bool = True,
-    ) -> None:
-        self.images_dir = images_dir
-        self.img_list = list(img_list)
-        self.transform = transform
-        self.skip_broken = skip_broken
-
-    def __len__(self) -> int:
-        return len(self.img_list)
-
-    def _open_rgb(self, path: str) -> Optional[Image.Image]:
-        try:
-            with Image.open(path) as im:
-                return im.convert("RGBA").convert("RGB").copy()
-        except Exception as e:
-            print(f"[DirImageDataset] open failed: {path} -> {e}")
-            return None
-
-    def __getitem__(self, idx: int) -> Union[Tuple[typing.Any, int], Tuple[typing.Any, int, str], None]:
-        if not self.img_list:
-            raise IndexError("DirImageDataset is empty")
-
-        idx = idx % len(self.img_list)
-        rel_path = self.img_list[idx]
-        path = os.path.join(self.images_dir, rel_path)
-        try:
-
-            image = self._open_rgb(path)
-            if image is None:
-                if self.skip_broken:
-                    return None
-                raise FileNotFoundError(f"Failed to open image: {path}")
-
-            if self.transform is not None:
-                try:
-                    image = self.transform(image)
-                except Exception as e:
-                    print(f"[DirImageDataset] transform failed: {path} -> {e}")
-                    print(traceback.format_exc())
-                    return None
-
-            if self.return_path:
-                return image, idx, path
-            return image, idx
-        except Exception as e:
-            print(f"[DirImageDataset] unexpected failure: {path if 'path' in locals() else 'unknown'} -> {e}")
-            if self.skip_broken:
-                return None
-
-
 class DirImageIterable(IterableDataset):
     def __init__(self, images_dir: str, img_list, transform=None):
         self.images_dir = images_dir
@@ -110,30 +52,61 @@ class DirImageIterable(IterableDataset):
             print(f"[DirImageIterable] open failed: {path} -> {e}")
             return None
 
-    def __iter__(self):
-        info = get_worker_info()
-        if info is None:
-            it = range(len(self.img_list))
-        else:
-            # 各ワーカーに均等分割
-            per_worker = (len(self.img_list) + info.num_workers - 1) // info.num_workers
-            start = info.id * per_worker
-            end = min(start + per_worker, len(self.img_list))
-            it = range(start, end)
+    def __getitem__(self, index: int):
+        """Iterable datasets do not support random access."""
+        raise TypeError(f"{self.__class__.__name__} does not support indexing")
 
-        for idx in it:
-            rel = self.img_list[idx]
-            path = os.path.join(self.images_dir, rel)
-            img = self._open_rgb(path)
-            if img is None:
-                continue
-            if self.transform is not None:
+    def __iter__(self):
+        try:
+            info = get_worker_info()
+            if info is None:
+                it = range(len(self.img_list))
+                worker_id = None
+            else:
+                # 各ワーカーに均等分割
+                per_worker = (len(self.img_list) + info.num_workers - 1) // info.num_workers
+                start = info.id * per_worker
+                end = min(start + per_worker, len(self.img_list))
+                it = range(start, end)
+                print(f"[DirImageIterable] worker {info.id} processing {start} to {end} of {len(self.img_list)}")
+                worker_id = info.id
+
+                
+            for idx in it:
                 try:
-                    img = self.transform(img)
+                    rel = self.img_list[idx]
                 except Exception as e:
-                    print(f"[DirImageIterable] transform failed: {path} -> {e}")
+                    print(f"[DirImageIterable] index failure: {idx} in {worker_id} -> {e}")
                     continue
-            yield img, idx
+                path: str = os.path.join(self.images_dir, rel)
+                # print(f"[DirImageIterable] path: {path} ({idx}/{len(self.img_list)})")
+                try:
+                    img = self._open_rgb(path)
+                except Exception as e:
+                    # _open_rgb already prints details for known issues, but
+                    # this extra guard keeps unexpected errors from crashing
+                    # the worker process.
+                    print(f"[DirImageIterable] unexpected open failure: {path} in {worker_id} -> {e}")
+                    continue
+
+                if img is None:
+                    continue
+
+                if self.transform is not None:
+                    try:
+                        img = self.transform(img)
+                    except Exception as e:
+                        print(f"[DirImageIterable] transform failed: {path} in {worker_id} -> {e}")
+                        continue
+                try:
+                    yield img, idx
+                except Exception as e:
+                    print(f"[DirImageIterable] yield failed: {path} in {worker_id} -> {e}")
+                    continue
+        except Exception as e:
+            traceback.print_exc()
+            print(f"[DirImageIterable] unexpected iteration failure: {e} in {worker_id}")
+            raise
 
 
 class Aesthetic_model(nn.Module):
@@ -268,24 +241,22 @@ def parse_arguments():
         "--search_model_out_dim", help="search_model_out_dim", type=int, default=1152
     )
 
-    HF_TOKEN = "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"
-
     model_repo = "purplesmartai/aesthetic-classifier"
     MODEL_FILENAME = "v2.ckpt"
     parser.add_argument(
-        "--aesthetic_checkpoint", help="aesthetic_checkpoint", default=huggingface_hub.hf_hub_download(model_repo, MODEL_FILENAME, use_auth_token=HF_TOKEN)
+        "--aesthetic_checkpoint", help="aesthetic_checkpoint", default=huggingface_hub.hf_hub_download(model_repo, MODEL_FILENAME)
     )
 
     model_repo = "purplesmartai/style-classifier"
     MODEL_FILENAME = "v3_checkpoint00120000.pth"
-    CENTERS_FILENAME = "centers_n1024.pkl"
+    CENTERS_FILENAME = "clustering_results_n2048_gpu.npz"
     parser.add_argument(
-        "--style_checkpoint_model", help="style_checkpoint_model", default=huggingface_hub.hf_hub_download(model_repo, MODEL_FILENAME, use_auth_token=HF_TOKEN)
+        "--style_checkpoint_model", help="style_checkpoint_model", default=huggingface_hub.hf_hub_download(model_repo, MODEL_FILENAME)
     )
     parser.add_argument(
-        "--style_checkpoint_centers", help="style_checkpoint_centers", default=huggingface_hub.hf_hub_download(model_repo, CENTERS_FILENAME, use_auth_token=HF_TOKEN)
+        "--style_checkpoint_centers", help="style_checkpoint_centers", default=huggingface_hub.hf_hub_download(model_repo, CENTERS_FILENAME)
     )
-    parser.add_argument("--batch_size", help="batch size", type=int, default=256)
+    parser.add_argument("--batch_size", help="batch size", type=int, default=64)
     parser.add_argument("--num_workers", help="data loader workers", type=int, default=32)
     parser.add_argument("--nlist", help="centroid size", type=int, default=64)
     parser.add_argument("--M", help="M", type=int, default=1152)
@@ -501,7 +472,6 @@ def extract_image_features(
     con,
     cur,
     loader,
-    search_meta_list,
     uncreated_image_paths,
 ):
     # 事前学習済みチェックポイントのパスは args から取得（各自適宜設定してください）
@@ -514,7 +484,7 @@ def extract_image_features(
     style_cluster = StyleCluster(device=device, checkpoint_model=style_checkpoint_model, checkpoint_centers=style_checkpoint_centers)
     processed_count = 0
 
-    for i, batch in enumerate(tqdm.tqdm(loader, total=len(uncreated_image_paths) // args.batch_size + 1)):
+    for batch in tqdm.tqdm(loader, total=len(uncreated_image_paths) // args.batch_size + 1):
         if batch is None:
             continue
 
@@ -543,7 +513,6 @@ def extract_image_features(
                 print(f"{new_search_meta.shape[0]} != {args.search_model_out_dim}")
                 continue
 
-            search_meta_list.append(new_search_meta)
             new_search_meta_bytes = new_search_meta.tobytes()
 
             aesthetic_quality: float = 0.0
@@ -612,6 +581,170 @@ def extract_image_features(
             con.commit()
 
 
+def collect_train_samples_algL(con: sqlite3.Connection, d: int, train_samples: int, batch_size: int):
+    """
+    Algorithm L (Vitter 1985) による reservoir sampling（読み飛ばし式）。
+    image_meta(meta BLOB, image_path TEXT) を image_path ORDER BY で走査し、
+    次元 d の float32 ベクトルを k=train_samples 件だけ均一サンプルする。
+    """
+    k = train_samples
+    # 1) リザーバを確保
+    reservoir = np.empty((k, d), dtype=np.float32)
+    filled = 0
+
+    # ORDER BY は前回答と同じ
+    cur = con.execute("""
+        SELECT meta
+          FROM image_meta
+         WHERE meta IS NOT NULL
+         ORDER BY image_path
+    """)
+
+    # --- フェーズA: 先頭 k 件でリザーバを満たす ---
+    while filled < k:
+        rows = cur.fetchmany(batch_size)
+        if not rows:
+            # 総件数 < k の場合はここで打ち切り（そのまま返す）
+            return reservoir[:filled]
+        for (meta_blob,) in rows:
+            a = np.frombuffer(meta_blob, dtype=np.float32)
+            if a.size != d:
+                continue
+            reservoir[filled] = a
+            filled += 1
+            if filled >= k:
+                break
+
+    # --- フェーズB: Algorithm L で読み飛ばし ---
+    # W の初期化（U in (0,1)）
+    rng = np.random.default_rng(42)
+    W = np.exp(np.log(rng.random()) / k)  # 0 < W < 1
+
+    # 現在位置 i（1始まりとみなす）。すでに k 件消費済みなので i = k
+    i = k
+
+    # rows バッファを使い回す
+    rows = cur.fetchmany(batch_size)
+    row_idx = 0
+    # rows を使い切ったら次を fetchmany するヘルパ
+    def next_row():
+        nonlocal rows, row_idx
+        if row_idx >= len(rows):
+            rows = cur.fetchmany(batch_size)
+            row_idx = 0
+            if not rows:
+                return None
+        item = rows[row_idx]
+        row_idx += 1
+        return item
+
+    while True:
+        # (1) スキップ長 g を生成
+        #    g = floor( ln(U) / ln(1 - W) )
+        U = rng.random()
+        # ln(1 - W) は負、ln(U) も負なので商は正
+        g = int(np.floor(np.log(U) / np.log(1.0 - W)))
+        # g 件を読み飛ばす
+        skipped = 0
+        while skipped < g:
+            rec = next_row()
+            if rec is None:
+                # データ終端
+                return reservoir
+            # meta の長さチェックなどは不要（読み飛ばし）
+            i += 1
+            skipped += 1
+
+        # (2) 読み飛ばし後の1件を取り出し、これを候補にする
+        rec = next_row()
+        if rec is None:
+            return reservoir
+        (meta_blob,) = rec
+        a = np.frombuffer(meta_blob, dtype=np.float32)
+        i += 1  # この1件を消費
+        if a.size == d:
+            # リザーバのランダム位置を置換
+            j = rng.integers(0, k)
+            reservoir[j, :] = a
+
+        # (3) W を更新： W <- W * exp( ln(U') / k )
+        U_prime = rng.random()
+        W = W * np.exp(np.log(U_prime) / k)
+
+    # 到達しない
+
+
+def stream_build_faiss(
+    db_path: str,
+    nlist: int, M: int, bits_per_code: int,
+    d: int,                       # args.search_model_out_dim
+    out_index_path: str,
+    batch_size: int = 50_000,     # メモリに合わせて調整
+    train_samples: int = 2_000_000, # 訓練に使う最大サンプル数（d次元×この件数だけ常駐）
+):
+    con = connect_db(db_path)
+    try:
+        con.execute("PRAGMA case_sensitive_like=OFF")
+        con.execute("PRAGMA temp_store=MEMORY")  # ソートの一部をメモリに。ただし無理はしない
+        # image_pathでのORDER BYを効かせるために、可能なら事前にINDEXを作っておく:
+        # CREATE INDEX IF NOT EXISTS idx_image_meta_path ON image_meta(image_path);
+
+        # 件数
+        total = con.execute("SELECT COUNT(*) FROM image_meta").fetchone()[0]
+        print(f"total rows: {total}")
+
+        # 正規化して訓練
+        train_buf = collect_train_samples_algL(con, d, train_samples, batch_size)
+        faiss.normalize_L2(train_buf)
+        index = createIndex(nlist, M, bits_per_code, d)  # 既存関数を利用
+        print(f"train {train_buf.shape}")
+        index.train(train_buf)
+        del train_buf  # 訓練後は解放
+
+        # -------- パス2: 逐次add（バッチ正規化→add） --------
+        print("add")
+        cur = con.execute("""
+            SELECT image_path, meta
+              FROM image_meta
+             WHERE meta IS NOT NULL
+             ORDER BY image_path
+        """)
+
+        pbar = tqdm.tqdm(total=total, unit="row")
+        buf = np.empty((batch_size, d), dtype=np.float32)
+        k = 0
+
+        while True:
+            rows = cur.fetchmany(batch_size)
+            if not rows:
+                # 端数のflush
+                if k > 0:
+                    faiss.normalize_L2(buf[:k])
+                    index.add(buf[:k])
+                break
+
+            k = 0
+            for (_, meta_blob) in rows:
+                a = np.frombuffer(meta_blob, dtype=np.float32)
+                if a.size != d:
+                    pbar.update(1)
+                    continue
+                buf[k, :] = a
+                k += 1
+                pbar.update(1)
+
+            if k > 0:
+                faiss.normalize_L2(buf[:k])
+                index.add(buf[:k])
+
+        pbar.close()
+
+        print("write")
+        faiss.write_index(index, out_index_path)
+    finally:
+        con.close()
+
+
 @torch.no_grad()
 def main():
 
@@ -659,14 +792,15 @@ def main():
 
     print_image_meta_stats(search_meta_list, uncreated_image_paths, len(index_item_list))
 
-    del result, index_item_list
+    del result, index_item_list, search_meta_list
 
     dataset = DirImageIterable(
         args.image_dir,
         uncreated_image_paths,
         transform=eval_transform,
     )
-
+    T = True
+    i = 0
     loader = None
     if not uncreated_image_paths:
         print("No new images to process.")
@@ -680,31 +814,53 @@ def main():
             collate_fn=safe_collate,
         )
         if num_workers > 0:
-            dataloader_kwargs["prefetch_factor"] = 128
+            dataloader_kwargs["prefetch_factor"] = 16  # default=2
 
+    while T:
         loader = DataLoader(
             dataset,
             **dataloader_kwargs,
         )
-
-        extract_image_features(
-            args,
-            device,
-            search_model,
-            aesthetic_model,
-            con,
-            cur,
-            loader,
-            search_meta_list,
-            uncreated_image_paths,
-        )
+        print(f"try {i}")
+        try:
+            extract_image_features(
+                args,
+                device,
+                search_model,
+                aesthetic_model,
+                con,
+                cur,
+                loader,
+                uncreated_image_paths[i * args.batch_size:],
+            )
+            T = False
+        except Exception:
+            traceback.print_exc()
+            dataset = DirImageIterable(
+                args.image_dir,
+                uncreated_image_paths[i * args.batch_size:],
+                transform=eval_transform,
+            )
+            i += 1
+            continue
 
     con.commit()
+
+    del uncreated_image_paths, aesthetic_model, search_model, dataset, loader
+    torch.cuda.empty_cache()
+
     print(
         "CREATE INDEX IF NOT EXISTS idx_image_meta_image_id ON image_meta(image_id)"
     )
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_image_meta_image_id ON image_meta(image_id)"
+    )
+    con.commit()
+    print(
+        "CREATE INDEX IF NOT EXISTS idx_image_meta_path ON image_meta(image_path)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_image_meta_path ON image_meta(image_path)"
     )
     con.commit()
     print("pragma vacuum")
@@ -714,55 +870,10 @@ def main():
     print("close")
     con.close()
 
-    del uncreated_image_paths, aesthetic_model, search_model
-    if loader is not None:
-        del loader
     del con, cur
-    # データベースに問い合わせる。
-    con: sqlite3.Connection = connect_db(search_model_meta_dir)
-    result = pd.read_sql_query(
-        """
-        SELECT image_id, image_path, meta FROM image_meta
-        """, con)
-    sorted_result = result.sort_values('image_path').reset_index()
 
-    del result
-
-    con.close()
-
-    pbar = tqdm.tqdm(
-        zip(sorted_result["image_path"], sorted_result["meta"]), total=len(sorted_result["image_path"])
-    )
-
-    del sorted_result
-
-    search_meta_list = []
-    for (_, meta) in pbar:
-        if meta is not None:
-            meta = np.squeeze(meta)
-            a = np.frombuffer(meta, dtype=np.float32)
-            if a.shape[0] == args.search_model_out_dim:
-                search_meta_list.append(a)
-
-    del pbar
-    # faissの入力形式に変換する。
-    a = np.squeeze(np.array(search_meta_list, dtype=np.float32))
-
-    del search_meta_list
-
-    # 正規化する。
-    faiss.normalize_L2(a)
-
-    # indexの作成
-    index = createIndex(args.nlist, args.M, args.bits_per_code, a.shape[1])
-
-    print("train")
-    index.train(a)
-    print("add")
-    index.add(a)
-    print("write")
-    faiss.write_index(
-        index, f"{search_model_meta_dir}/{args.metas_faiss_index_file_name}"
+    stream_build_faiss(search_model_meta_dir, args.nlist, args.M, args.bits_per_code, args.search_model_out_dim,
+        f"{search_model_meta_dir}/{args.metas_faiss_index_file_name}", batch_size=100_000, train_samples=2_000_000
     )
 
 
