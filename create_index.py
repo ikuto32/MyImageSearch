@@ -38,6 +38,65 @@ def safe_collate(batch):
     return default_collate(batch)
 
 
+<<<<<<< HEAD
+=======
+class DirImageDataset(Dataset):
+    """Mapping-style dataset that safely loads images from a directory."""
+
+    def __init__(
+        self,
+        images_dir: str,
+        img_list: typing.Sequence[str],
+        transform=None,
+        skip_broken: bool = True,
+    ) -> None:
+        self.images_dir = images_dir
+        self.img_list = list(img_list)
+        self.transform = transform
+        self.skip_broken = skip_broken
+
+    def __len__(self) -> int:
+        return len(self.img_list)
+
+    def _open_rgb(self, path: str) -> Optional[Image.Image]:
+        try:
+            with Image.open(path) as im:
+                return im.convert("RGBA").convert("RGB").copy()
+        except Exception as e:
+            print(f"[DirImageDataset] open failed: {path} -> {e}")
+            return None
+
+    def __getitem__(self, idx: int) -> Union[Tuple[typing.Any, int], None]:
+        if not self.img_list:
+            raise IndexError("DirImageDataset is empty")
+
+        idx = idx % len(self.img_list)
+        rel_path = self.img_list[idx]
+        path = os.path.join(self.images_dir, rel_path)
+        try:
+
+            image = self._open_rgb(path)
+            if image is None:
+                if self.skip_broken:
+                    return None
+                raise FileNotFoundError(f"Failed to open image: {path}")
+
+            if self.transform is not None:
+                try:
+                    image = self.transform(image)
+                except Exception as e:
+                    print(f"[DirImageDataset] transform failed: {path} -> {e}")
+                    print(traceback.format_exc())
+                    return None
+
+            return image, idx
+        except Exception as e:
+            print(f"[DirImageDataset] unexpected failure: {path if 'path' in locals() else 'unknown'} -> {e}")
+            if self.skip_broken:
+                return None
+
+
+>>>>>>> 4c9829168a2739b923d7a82c00d1cd04d389800e
 class DirImageIterable(IterableDataset):
     def __init__(self, images_dir: str, img_list, transform=None):
         self.images_dir = images_dir
@@ -398,7 +457,12 @@ def load_image_meta_from_db(con: sqlite3.Connection, id_list: list[str], loop_si
             params=sub_list  # type: ignore
         ))
 
-    return pd.concat(temp)
+    if not temp:
+        return pd.DataFrame(
+            columns=["valid_id", "image_path", "meta", "aesthetic_quality"]
+        )
+
+    return pd.concat(temp, ignore_index=True)
 
 
 def createIndex(n_centroids, M, bits_per_code, dim) -> faiss.IndexIVFPQ:
