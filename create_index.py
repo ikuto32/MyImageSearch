@@ -982,6 +982,18 @@ def parse_arguments():
 
 _PARALLEL = 64
 
+
+def get_default_image_extensions() -> list[str]:
+    """Return a list of image file extensions supported by Pillow.
+
+    Using :func:`Image.registered_extensions` avoids maintaining a hard-coded
+    extension list and keeps us aligned with the formats Pillow can open.
+    """
+
+    # Keep the ordering stable for deterministic behavior when printing or
+    # iterating the extensions list.
+    return sorted(Image.registered_extensions().keys())
+
 def get_image_list_from_dir(dir_path: str | os.PathLike, exts: typing.Sequence[str]) -> list[str]:
     """
     dir_path 以下を走査して、指定拡張子のファイルリスト（dir_path からの相対パス）を返す。
@@ -1520,8 +1532,7 @@ def main():
     dir_path: pathlib.Path = pathlib.Path(args.image_dir)
     print(dir_path)
 
-    # ext_list = list(Image.registered_extensions().keys())
-    ext_list = ['.avif', '.avifs', '.blp', '.bmp', '.dib', '.bufr', '.cur', '.pcx', '.dcx', '.dds', '.ps', '.eps', '.fit', '.fits', '.fli', '.flc', '.ftc', '.ftu', '.gbr', '.gif', '.grib', '.h5', '.hdf', '.png', '.apng', '.jp2', '.j2k', '.jpc', '.jpf', '.jpx', '.j2c', '.icns', '.ico', '.im', '.iim', '.jfif', '.jpe', '.jpg', '.jpeg', '.mpg', '.mpeg', '.tif', '.tiff', '.mpo', '.msp', '.palm', '.pcd', '.pxr', '.pbm', '.pgm', '.ppm', '.pnm', '.pfm', '.psd', '.qoi', '.bw', '.rgb', '.rgba', '.sgi', '.ras', '.tga', '.icb', '.vda', '.vst', '.webp', '.wmf', '.emf', '.xbm', '.xpm']
+    ext_list = get_default_image_extensions()
 
     print(ext_list)
 
