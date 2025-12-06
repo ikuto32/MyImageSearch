@@ -45,6 +45,33 @@ def safe_collate(batch):
     return default_collate(batch)
 
 
+AESTHETIC_REPO = "purplesmartai/aesthetic-classifier"
+AESTHETIC_CHECKPOINT_FILENAME = "v2.ckpt"
+STYLE_REPO = "purplesmartai/style-classifier"
+STYLE_MODEL_FILENAME = "v3_checkpoint00120000.pth"
+STYLE_CENTERS_FILENAME = "clustering_results_n2048_gpu.npz"
+
+
+def ensure_asset_path(asset_arg: str | None, filename: str, description: str) -> str:
+    """Return a local path for an asset, downloading from HF if needed."""
+
+    if asset_arg is None:
+        raise FileNotFoundError(
+            f"No {description} provided. Supply a local path or a Hugging Face repo ID."
+        )
+
+    if os.path.exists(asset_arg):
+        return asset_arg
+
+    try:
+        return huggingface_hub.hf_hub_download(asset_arg, filename)
+    except Exception as exc:  # pragma: no cover - user input/dependency failure
+        raise FileNotFoundError(
+            f"Could not resolve {description} from '{asset_arg}'. "
+            "Provide an existing file path or a valid Hugging Face repo ID."
+        ) from exc
+
+
 kaomojis = [
     "0_0", "(o)_(o)", "+_+", "+_-", "._.", "<o>_<o>", "<|>_<|>", "=_=", ">_<",
     "3_3", "6_9", ">_o", "@_@", "^_^", "o_o", "u_u", "x_x", "|_|", "||_||"
@@ -1007,20 +1034,15 @@ def parse_arguments():
         "--search_model_out_dim", help="search_model_out_dim", type=int, default=768
     )
 
-    model_repo = "purplesmartai/aesthetic-classifier"
-    MODEL_FILENAME = "v2.ckpt"
     parser.add_argument(
-        "--aesthetic_checkpoint", help="aesthetic_checkpoint", default=huggingface_hub.hf_hub_download(model_repo, MODEL_FILENAME)
+        "--aesthetic_checkpoint", help="aesthetic_checkpoint", default=AESTHETIC_REPO
     )
 
-    model_repo = "purplesmartai/style-classifier"
-    MODEL_FILENAME = "v3_checkpoint00120000.pth"
-    CENTERS_FILENAME = "clustering_results_n2048_gpu.npz"
     parser.add_argument(
-        "--style_checkpoint_model", help="style_checkpoint_model", default=huggingface_hub.hf_hub_download(model_repo, MODEL_FILENAME)
+        "--style_checkpoint_model", help="style_checkpoint_model", default=STYLE_REPO
     )
     parser.add_argument(
-        "--style_checkpoint_centers", help="style_checkpoint_centers", default=huggingface_hub.hf_hub_download(model_repo, CENTERS_FILENAME)
+        "--style_checkpoint_centers", help="style_checkpoint_centers", default=STYLE_REPO
     )
     parser.add_argument("--batch_size", help="batch size", type=int, default=64)
     parser.add_argument("--num_workers", help="data loader workers", type=int, default=2)
@@ -1246,9 +1268,25 @@ def extract_image_features(
     uncreated_image_paths,
 ):
     # 事前学習済みチェックポイントのパスは args から取得（各自適宜設定してください）
-    aesthetic_checkpoint = getattr(args, "aesthetic_checkpoint", None)
-    style_checkpoint_model = getattr(args, "style_checkpoint_model", None)
-    style_checkpoint_centers = getattr(args, "style_checkpoint_centers", None)
+    aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
+    style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
+    style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
+
+    aesthetic_checkpoint = ensure_asset_path(
+        aesthetic_checkpoint_arg,
+        AESTHETIC_CHECKPOINT_FILENAME,
+        "aesthetic checkpoint",
+    )
+    style_checkpoint_model = ensure_asset_path(
+        style_checkpoint_model_arg,
+        STYLE_MODEL_FILENAME,
+        "style classifier checkpoint",
+    )
+    style_checkpoint_centers = ensure_asset_path(
+        style_checkpoint_centers_arg,
+        STYLE_CENTERS_FILENAME,
+        "style cluster centers",
+    )
 
     aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
     aesthetic_model = aesthetic_model.to(device)
