@@ -481,31 +481,9 @@ class Tagger:
         if self.model_target_size is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
-        arrs = []
-        for img in images:
-            # _prepare_image の中身をほぼコピペして、axis=0 は付けない
-            target_size = self.model_target_size
-            if img.mode != "RGB":
-                img = img.convert("RGB")
+        prepared = [self._prepare_image(img)[0] for img in images]
 
-            image_shape = img.size
-            max_dim = max(image_shape)
-            scale_factor = target_size / max_dim
-            new_size = tuple(int(dim * scale_factor) for dim in image_shape)
-            resized_image = img.resize(new_size, Image.LANCZOS)
-
-            padded_image = Image.new("RGB", (target_size, target_size), (255, 255, 255))
-            paste_pos = (
-                (target_size - new_size[0]) // 2,
-                (target_size - new_size[1]) // 2,
-            )
-            padded_image.paste(resized_image, paste_pos)
-
-            image_array = np.asarray(padded_image, dtype=np.float32)
-            image_array = image_array[:, :, ::-1]  # RGB→BGR
-            arrs.append(image_array)
-
-        return np.stack(arrs, axis=0)  # (N, H, W, 3)
+        return np.stack(prepared, axis=0)  # (N, H, W, 3)
 
 
     def predict(
