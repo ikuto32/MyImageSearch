@@ -1204,6 +1204,26 @@ def load_clip_model(args, device):
     return search_model, eval_transform
 
 
+def initialize_image_processing_models(args, device):
+    aesthetic_checkpoint = getattr(args, "aesthetic_checkpoint", None)
+    style_checkpoint_model = getattr(args, "style_checkpoint_model", None)
+    style_checkpoint_centers = getattr(args, "style_checkpoint_centers", None)
+
+    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
+    aesthetic_model = aesthetic_model.to(device)
+    aesthetic_model.eval()
+
+    pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
+    style_cluster = StyleCluster(
+        device=device,
+        checkpoint_model=style_checkpoint_model,
+        checkpoint_centers=style_checkpoint_centers,
+    )
+    tagging_service = ImageTaggingService(hf_token=None)
+
+    return aesthetic_model, pony_scorer, style_cluster, tagging_service
+
+
 def create_image_id_index(file_list):
     index_item_list = {}
     for file in file_list:
@@ -1244,21 +1264,11 @@ def extract_image_features(
     cur,
     loader,
     uncreated_image_paths,
+    aesthetic_model,
+    pony_scorer,
+    style_cluster,
+    tagging_service,
 ):
-    # 事前学習済みチェックポイントのパスは args から取得（各自適宜設定してください）
-    aesthetic_checkpoint = getattr(args, "aesthetic_checkpoint", None)
-    style_checkpoint_model = getattr(args, "style_checkpoint_model", None)
-    style_checkpoint_centers = getattr(args, "style_checkpoint_centers", None)
-
-    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
-    aesthetic_model = aesthetic_model.to(device)
-    aesthetic_model.eval()
-
-    # 美的評価（PonyAestheticScorer）とスタイルクラスタリング（StyleCluster）のグローバルインスタンスを生成
-    pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
-    style_cluster = StyleCluster(device=device, checkpoint_model=style_checkpoint_model, checkpoint_centers=style_checkpoint_centers)
-    tagging_service = ImageTaggingService(hf_token=None)
-
     processed_count = 0
 
     for batch in tqdm.tqdm(loader, total=len(uncreated_image_paths) // args.batch_size + 1):
@@ -1581,6 +1591,9 @@ def main():
     print("load_model")
 
     search_model, eval_transform = load_clip_model(args, device)
+    aesthetic_model, pony_scorer, style_cluster, tagging_service = initialize_image_processing_models(
+        args, device
+    )
 
     index_item_list = create_image_id_index(index_item_list)
 
@@ -1630,6 +1643,10 @@ def main():
                 cur,
                 loader,
                 uncreated_image_paths[i * args.batch_size:],
+                aesthetic_model,
+                pony_scorer,
+                style_cluster,
+                tagging_service,
             )
             T = False
         except Exception:
