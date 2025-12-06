@@ -5,13 +5,12 @@ import asyncio
 import concurrent.futures
 import datetime
 import hashlib
+import json
 import os
 import pathlib
-import pickle
 import sqlite3
 import traceback
 import typing
-from typing import Optional, Tuple, Union
 import csv
 
 import faiss
@@ -23,7 +22,7 @@ import torch
 import torch.nn as nn
 import tqdm
 from PIL import Image, ImageFile
-from torch.utils.data import DataLoader, Dataset, IterableDataset, get_worker_info
+from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 from torchvision import transforms
 from torch.utils.data._utils.collate import default_collate
 import onnxruntime as rt
@@ -76,61 +75,6 @@ def mcut_threshold(probs: np.ndarray) -> float:
     thresh = (sorted_probs[t] + sorted_probs[t + 1]) / 2
     return float(thresh)
 
-
-class DirImageDataset(Dataset):
-    """Mapping-style dataset that safely loads images from a directory."""
-
-    def __init__(
-        self,
-        images_dir: str,
-        img_list: typing.Sequence[str],
-        transform=None,
-        skip_broken: bool = True,
-    ) -> None:
-        self.images_dir = images_dir
-        self.img_list = list(img_list)
-        self.transform = transform
-        self.skip_broken = skip_broken
-
-    def __len__(self) -> int:
-        return len(self.img_list)
-
-    def _open_rgb(self, path: str) -> Optional[Image.Image]:
-        try:
-            with Image.open(path) as im:
-                return im.convert("RGBA").convert("RGB").copy()
-        except Exception as e:
-            print(f"[DirImageDataset] open failed: {path} -> {e}")
-            return None
-
-    def __getitem__(self, idx: int) -> Union[Tuple[typing.Any, int], None]:
-        if not self.img_list:
-            raise IndexError("DirImageDataset is empty")
-
-        idx = idx % len(self.img_list)
-        rel_path = self.img_list[idx]
-        path = os.path.join(self.images_dir, rel_path)
-        try:
-
-            image = self._open_rgb(path)
-            if image is None:
-                if self.skip_broken:
-                    return None
-                raise FileNotFoundError(f"Failed to open image: {path}")
-
-            if self.transform is not None:
-                try:
-                    image = self.transform(image)
-                except Exception as e:
-                    print(f"[DirImageDataset] transform failed: {path} -> {e}")
-                    print(traceback.format_exc())
-                    return None
-
-            return image, idx
-        except Exception as e:
-            print(f"[DirImageDataset] unexpected failure: {path if 'path' in locals() else 'unknown'} -> {e}")
-            if self.skip_broken:
-                return None
 
 class DirImageIterable(IterableDataset):
     def __init__(self, images_dir: str, img_list, transform=None):
