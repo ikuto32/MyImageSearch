@@ -940,8 +940,8 @@ def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
+    parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
+    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
 
     parser.add_argument(
         "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_ranking100.pth"
@@ -966,8 +966,8 @@ def parse_arguments():
     parser.add_argument(
         "--style_checkpoint_centers", help="style_checkpoint_centers", default=STYLE_REPO
     )
-    parser.add_argument("--batch_size", help="batch size", type=int, default=64)
-    parser.add_argument("--num_workers", help="data loader workers", type=int, default=2)
+    parser.add_argument("--batch_size", help="batch size", type=int, default=32)
+    parser.add_argument("--num_workers", help="data loader workers", type=int, default=16)
     parser.add_argument("--nlist", help="centroid size", type=int, default=64)
     parser.add_argument("--M", help="M", type=int, default=768)
     parser.add_argument("--bits_per_code", help="bits_per_code", type=int, default=8)
