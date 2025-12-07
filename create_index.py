@@ -37,11 +37,18 @@ Image.MAX_IMAGE_PIXELS = 268_435_456
 # =========================
 
 def safe_collate(batch):
+    """Custom collate that also carries raw PIL images."""
+
     # None（壊れ/変換失敗）を除外
     batch = [b for b in batch if b is not None]
     if not batch:
         return None  # 上位ループでcontinue
-    return default_collate(batch)
+
+    image_tensors = [b[0] for b in batch]
+    indices = [b[1] for b in batch]
+    raw_images = [b[2] for b in batch]
+
+    return default_collate(image_tensors), default_collate(indices), raw_images
 
 
 AESTHETIC_REPO = "purplesmartai/aesthetic-classifier"
@@ -157,6 +164,8 @@ class DirImageIterable(IterableDataset):
                 if img is None:
                     continue
 
+                raw_image = img.copy()
+
                 if self.transform is not None:
                     try:
                         img = self.transform(img)
@@ -164,7 +173,7 @@ class DirImageIterable(IterableDataset):
                         print(f"[DirImageIterable] transform failed: {path} in {worker_id} -> {e}")
                         continue
                 try:
-                    yield img, idx
+                    yield img, idx, raw_image
                 except Exception as e:
                     print(f"[DirImageIterable] yield failed: {path} in {worker_id} -> {e}")
                     continue
@@ -784,9 +793,11 @@ class ImageTaggingService:
             threshold=z3d_threshold,
         )
 
-    def tag_image(self, image_path: str) -> dict:
-        """画像パス 1 個に対してタグ付けして dict を返す."""
-        image = Image.open(image_path)
+    def tag_image(self, image: Image.Image) -> dict:
+        """PIL 画像 1 枚をタグ付けして dict を返す."""
+
+        if image.mode != "RGB":
+            image = image.convert("RGB")
 
         # wd-swinv2
         general_tags, rating, character_tags, all_general_tags = \
@@ -819,69 +830,46 @@ class ImageTaggingService:
 
     def tag_image_pil(self, image: Image.Image) -> dict:
         """PIL 画像を直接受ける単体版（ヘルパー）"""
-        general_tags, rating, character_tags, all_general_tags = \
-            self.wd_tagger.predict(
-                image,
-                model_repo=self.swin_repo,
-                general_thresh=self.general_thresh,
-                general_mcut_enabled=False,
-                character_thresh=self.character_thresh,
-                character_mcut_enabled=False,
-            )
-
-        all_general_tags_z3d, character_tags_z3d = self.z3d_tagger.predict(image)
-
-        full_character_tags = set(character_tags.keys()) | set(character_tags_z3d.keys())
-        full_general_tags = set(all_general_tags.keys()) | set(all_general_tags_z3d.keys())
-
-        tags: list[str] = []
-        tags.extend(list(full_general_tags))
-        for tag in full_character_tags:
-            tags.append(f"character:{tag}")
-
-        top_rating = max(rating.items(), key=lambda x: x[1])
-        return {"rating": top_rating[0], "tags": tags}
+        return self.tag_image(image)
 
 
-    def tag_images_batch(self, image_paths: list[str]) -> list[dict]:
+    def tag_images_batch(self, images: list[Image.Image]) -> list[dict]:
         """
-        バッチ版: パスのリストを受け取り、各画像について tag_image と同じ dict を返す
+        バッチ版: PIL 画像のリストを受け取り、各画像について tag_image と同じ dict を返す
         """
-        images: list[Image.Image] = []
+
+        processed_images: list[Image.Image | None] = []
+        for im in images:
+            if im is None:
+                processed_images.append(None)
+                continue
+            processed_images.append(im.convert("RGB"))
+
+        valid_images: list[Image.Image] = []
         valid_indices: list[int] = []
-        for i, p in enumerate(image_paths):
-            try:
-                img = Image.open(p).convert("RGB")
-                images.append(img)
-                valid_indices.append(i)
-            except Exception:
-                traceback.print_exc()
-                images.append(None)  # プレースホルダ
-                valid_indices.append(i)
+        for i, im in enumerate(processed_images):
+            if im is None:
+                continue
+            valid_images.append(im)
+            valid_indices.append(i)
 
-        # None を除外して別リストにしてもOK。ここでは例として簡単のため全件とする
+        if not valid_images:
+            return [{"rating": "", "tags": []} for _ in images]
+
         wd_results = self.wd_tagger.predict_batch(
-            [im for im in images if im is not None],
+            valid_images,
             model_repo=self.swin_repo,
             general_thresh=self.general_thresh,
             general_mcut_enabled=False,
             character_thresh=self.character_thresh,
             character_mcut_enabled=False,
         )
-        z3d_results = self.z3d_tagger.predict_batch(
-            [im for im in images if im is not None]
-        )
+        z3d_results = self.z3d_tagger.predict_batch(valid_images)
 
-        out: list[dict] = []
-        j = 0  # wd_results / z3d_results のインデックス
-        for im in images:
-            if im is None:
-                out.append({"rating": "", "tags": []})
-                continue
-
-            general_tags, rating, character_tags, all_general_tags = wd_results[j]
-            all_general_tags_z3d, character_tags_z3d = z3d_results[j]
-            j += 1
+        out: list[dict | None] = [None for _ in images]
+        for local_idx, original_idx in enumerate(valid_indices):
+            general_tags, rating, character_tags, all_general_tags = wd_results[local_idx]
+            all_general_tags_z3d, character_tags_z3d = z3d_results[local_idx]
 
             full_character_tags = set(character_tags.keys()) | set(character_tags_z3d.keys())
             full_general_tags = set(all_general_tags.keys()) | set(all_general_tags_z3d.keys())
@@ -891,7 +879,12 @@ class ImageTaggingService:
                 tags.append(f"character:{tag}")
 
             top_rating = max(rating.items(), key=lambda x: x[1])
-            out.append({"rating": top_rating[0], "tags": tags})
+            out[original_idx] = {"rating": top_rating[0], "tags": tags}
+
+        # None だったものを空の結果で埋める
+        for i, res in enumerate(out):
+            if res is None:
+                out[i] = {"rating": "", "tags": []}
 
         return out
 
@@ -917,7 +910,8 @@ class ImageTaggingService:
             tags_file = os.path.join(image_folder, f"{name}.tags.json")
 
             if force_tag_regen or not os.path.exists(tags_file):
-                tags = self.tag_image(image_path)
+                with Image.open(image_path) as image:
+                    tags = self.tag_image(image.convert("RGB"))
                 with open(tags_file, "w", encoding="utf-8") as f:
                     json.dump(tags, f, ensure_ascii=False, indent=2)
                 print(f"Created tags file for: {filename}")
@@ -1237,7 +1231,7 @@ def extract_image_features(
         if batch is None:
             continue
 
-        batched_image_input, batched_image_index = batch # (B, C, H, W), (B,)
+        batched_image_input, batched_image_index, batched_raw_images = batch  # (B, C, H, W), (B,), (B,)
 
         batched_image_input = batched_image_input.to(device, non_blocking=True)
         try:
@@ -1272,11 +1266,9 @@ def extract_image_features(
             )  # cluster_ids: list[str], len=B
 
             # 3) タグ付けもバッチで
-            image_paths = [
-                f"{args.image_dir}/{uncreated_image_paths[int(idx)]}"
-                for idx in batched_image_index
-            ]
-            tagging_results = tagging_service.tag_images_batch(image_paths)  # list[dict], len=B
+            tagging_results = tagging_service.tag_images_batch(
+                list(batched_raw_images)
+            )  # list[dict], len=B
 
 
             batched_new_search_meta = (
