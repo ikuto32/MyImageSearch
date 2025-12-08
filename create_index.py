@@ -1275,11 +1275,11 @@ def extract_image_features(
 
             batched_image_input = batched_image_input.to(device, non_blocking=True)
             try:
-                (
-                    internal_features_tensor,
-                    image_features_tensor,
-                ) = search_model.encode_image_with_internal(batched_image_input)
-
+                with torch.cuda.amp.autocast(enabled=device.type == "cuda"):
+                    (
+                        internal_features_tensor,
+                        image_features_tensor,
+                    ) = search_model.encode_image_with_internal(batched_image_input)
 
                 denom = image_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
                 image_features_tensor = (image_features_tensor / denom).contiguous()
