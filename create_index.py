@@ -1194,36 +1194,11 @@ def extract_image_features(
     cur,
     loader,
     uncreated_image_paths,
+    aesthetic_model,
+    pony_scorer,
+    style_cluster,
+    tagging_service,
 ):
-    # 事前学習済みチェックポイントのパスは args から取得（各自適宜設定してください）
-    aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
-    style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
-    style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
-
-    aesthetic_checkpoint = ensure_asset_path(
-        aesthetic_checkpoint_arg,
-        AESTHETIC_CHECKPOINT_FILENAME,
-        "aesthetic checkpoint",
-    )
-    style_checkpoint_model = ensure_asset_path(
-        style_checkpoint_model_arg,
-        STYLE_MODEL_FILENAME,
-        "style classifier checkpoint",
-    )
-    style_checkpoint_centers = ensure_asset_path(
-        style_checkpoint_centers_arg,
-        STYLE_CENTERS_FILENAME,
-        "style cluster centers",
-    )
-
-    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
-    aesthetic_model = aesthetic_model.to(device)
-    aesthetic_model.eval()
-
-    # 美的評価（PonyAestheticScorer）とスタイルクラスタリング（StyleCluster）のグローバルインスタンスを生成
-    pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
-    style_cluster = StyleCluster(device=device, checkpoint_model=style_checkpoint_model, checkpoint_centers=style_checkpoint_centers)
-    tagging_service = ImageTaggingService(hf_token=None)
 
     processed_count = 0
     processed_batches = 0
@@ -1258,8 +1233,8 @@ def extract_image_features(
             denom = image_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
             image_features_tensor = (image_features_tensor / denom).contiguous()
             aesthetic_scores = torch.sigmoid(
-            aesthetic_model(image_features_tensor)
-                ).squeeze(-1).cpu().numpy()  # (B,)
+                aesthetic_model(image_features_tensor)
+            ).squeeze(-1).cpu().numpy()  # (B,)
 
             pony_scores = pony_scorer.score_batch(image_features_tensor)  # (B,)
 
@@ -1285,12 +1260,14 @@ def extract_image_features(
             params = []
 
             for i, (new_search_meta, image_index, aesthetic_score, pony_aesthetic_score, cluster_id, tag_res) in enumerate(
-            zip(batched_new_search_meta,
-                batched_image_index,
-                aesthetic_scores,
-                pony_scores,
-                cluster_ids,
-                tagging_results)
+                zip(
+                    batched_new_search_meta,
+                    batched_image_index,
+                    aesthetic_scores,
+                    pony_scores,
+                    cluster_ids,
+                    tagging_results,
+                )
             ):
                 if new_search_meta.shape[0] != args.search_model_out_dim:
                     print(f"{new_search_meta.shape[0]} != {args.search_model_out_dim}")
@@ -1549,6 +1526,38 @@ def main():
 
     search_model, eval_transform = load_clip_model(args, device)
 
+    aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
+    style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
+    style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
+
+    aesthetic_checkpoint = ensure_asset_path(
+        aesthetic_checkpoint_arg,
+        AESTHETIC_CHECKPOINT_FILENAME,
+        "aesthetic checkpoint",
+    )
+    style_checkpoint_model = ensure_asset_path(
+        style_checkpoint_model_arg,
+        STYLE_MODEL_FILENAME,
+        "style classifier checkpoint",
+    )
+    style_checkpoint_centers = ensure_asset_path(
+        style_checkpoint_centers_arg,
+        STYLE_CENTERS_FILENAME,
+        "style cluster centers",
+    )
+
+    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
+    aesthetic_model = aesthetic_model.to(device)
+    aesthetic_model.eval()
+
+    pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
+    style_cluster = StyleCluster(
+        device=device,
+        checkpoint_model=style_checkpoint_model,
+        checkpoint_centers=style_checkpoint_centers,
+    )
+    tagging_service = ImageTaggingService(hf_token=None)
+
     index_item_list = create_image_id_index(index_item_list)
 
     # データベースに問い合わせる
@@ -1597,6 +1606,10 @@ def main():
                 cur,
                 loader,
                 uncreated_image_paths[i * args.batch_size:],
+                aesthetic_model,
+                pony_scorer,
+                style_cluster,
+                tagging_service,
             )
             T = False
         except Exception:
