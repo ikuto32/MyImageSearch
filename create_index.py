@@ -1592,6 +1592,14 @@ def main():
 
         while T:
             target_paths = uncreated_image_paths[i * args.batch_size :]
+            if not target_paths:
+                break
+
+            dataset = DirImageIterable(
+                args.image_dir,
+                target_paths,
+                transform=eval_transform,
+            )
             loader = DataLoader(
                 dataset,
                 **dataloader_kwargs,
