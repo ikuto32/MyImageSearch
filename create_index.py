@@ -1154,6 +1154,7 @@ def load_clip_model(args, device):
         device=device,
         jit=False,
     )
+    search_model.eval()
     return search_model, eval_transform
 
 
@@ -1207,127 +1208,128 @@ def extract_image_features(
     processed_batches = 0
     commit_interval = max(1, 10000 // args.batch_size)
 
-    for batch in tqdm.tqdm(loader, total=len(uncreated_image_paths) // args.batch_size + 1):
-        if batch is None:
-            continue
+    with torch.inference_mode():
+        for batch in tqdm.tqdm(loader, total=len(uncreated_image_paths) // args.batch_size + 1):
+            if batch is None:
+                continue
 
-        batched_image_input, batched_image_index, batched_raw_images = batch  # (B, C, H, W), (B,), (B,)
+            batched_image_input, batched_image_index, batched_raw_images = batch  # (B, C, H, W), (B,), (B,)
 
-        batched_image_input = batched_image_input.to(device, non_blocking=True)
-        try:
-            # visual と proj を取り出す
-            visual = search_model.visual
-            proj = getattr(visual, "proj", None)
+            batched_image_input = batched_image_input.to(device, non_blocking=True)
+            try:
+                # visual と proj を取り出す
+                visual = search_model.visual
+                proj = getattr(visual, "proj", None)
 
-            if proj is not None:
-                # proj を一時的に外して「内部特徴」を取得
-                visual.proj = None
-                internal_features_tensor = visual(batched_image_input)  # (B, D_internal)
-                visual.proj = proj
+                if proj is not None:
+                    # proj を一時的に外して「内部特徴」を取得
+                    visual.proj = None
+                    internal_features_tensor = visual(batched_image_input)  # (B, D_internal)
+                    visual.proj = proj
 
-                # 内部特徴 → CLIP 埋め込み（768次元など）に射影
-                image_features_tensor = internal_features_tensor @ proj        # (B, D_clip)
-            else:
-                # proj が無い場合はそのまま
-                internal_features_tensor = visual(batched_image_input)
-                image_features_tensor = internal_features_tensor
-
-
-            denom = image_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
-            image_features_tensor = (image_features_tensor / denom).contiguous()
-            aesthetic_scores = torch.sigmoid(
-                aesthetic_model(image_features_tensor)
-            ).squeeze(-1).cpu().numpy()  # (B,)
-
-            pony_scores = pony_scorer.score_batch(image_features_tensor)  # (B,)
-
-            cluster_ids, _cluster_dists = style_cluster.get_cluster_batch(
-                internal_features_tensor
-            )  # cluster_ids: list[str], len=B
-
-            # 3) タグ付けもバッチで
-            tagging_results = tagging_service.tag_images_batch(
-                list(batched_raw_images)
-            )  # list[dict], len=B
+                    # 内部特徴 → CLIP 埋め込み（768次元など）に射影
+                    image_features_tensor = internal_features_tensor @ proj        # (B, D_clip)
+                else:
+                    # proj が無い場合はそのまま
+                    internal_features_tensor = visual(batched_image_input)
+                    image_features_tensor = internal_features_tensor
 
 
-            batched_new_search_meta = (
-                image_features_tensor
-                .to("cpu")
-                .detach()
-                .numpy()
-                .copy()
-                .astype(np.float32)
-            )
+                denom = image_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+                image_features_tensor = (image_features_tensor / denom).contiguous()
+                aesthetic_scores = torch.sigmoid(
+                    aesthetic_model(image_features_tensor)
+                ).squeeze(-1).cpu().numpy()  # (B,)
 
-            params = []
+                pony_scores = pony_scorer.score_batch(image_features_tensor)  # (B,)
 
-            for i, (new_search_meta, image_index, aesthetic_score, pony_aesthetic_score, cluster_id, tag_res) in enumerate(
-                zip(
-                    batched_new_search_meta,
-                    batched_image_index,
-                    aesthetic_scores,
-                    pony_scores,
-                    cluster_ids,
-                    tagging_results,
-                )
-            ):
-                if new_search_meta.shape[0] != args.search_model_out_dim:
-                    print(f"{new_search_meta.shape[0]} != {args.search_model_out_dim}")
-                    continue
-                new_search_meta_bytes = new_search_meta.tobytes()
-                rating = tag_res.get("rating", "")
-                image_tags = ", ".join(tag_res.get("tags", []))
-                claster = f"style_cluster_{cluster_id}" if cluster_id is not None else ""
+                cluster_ids, _cluster_dists = style_cluster.get_cluster_batch(
+                    internal_features_tensor
+                )  # cluster_ids: list[str], len=B
 
-                image_index_int = int(image_index)
-                image_path = uncreated_image_paths[image_index_int]
-                image_id = hashlib.sha256(str(image_path).encode()).hexdigest()
-                time_stamp_ISO = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                # 3) タグ付けもバッチで
+                tagging_results = tagging_service.tag_images_batch(
+                    list(batched_raw_images)
+                )  # list[dict], len=B
 
-                params.append((
-                    image_id,
-                    image_path,
-                    new_search_meta_bytes,
-                    float(aesthetic_score),
-                    float(pony_aesthetic_score),
-                    claster,
-                    rating,
-                    image_tags,
-                    time_stamp_ISO,
-                    new_search_meta_bytes,
-                    float(aesthetic_score),
-                    float(pony_aesthetic_score),
-                    claster,
-                    rating,
-                    image_tags,
-                    time_stamp_ISO,
-                ))
 
-            if params:
-                cur.executemany(
-                    """insert into image_meta values(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    on conflict(image_id) do update set
-                        meta=?,
-                        aesthetic_quality=?,
-                        pony_aesthetic_quality=?,
-                        style_cluster=?,
-                        rating=?,
-                        image_tags=?,
-                        time_stamp_ISO=?""",
-                    params,
+                batched_new_search_meta = (
+                    image_features_tensor
+                    .to("cpu")
+                    .detach()
+                    .numpy()
+                    .copy()
+                    .astype(np.float32)
                 )
 
-            processed_count += len(params)
-            if params:
-                processed_batches += 1
-                if processed_batches % commit_interval == 0:
-                    print(f"commit after batch {processed_batches} (total rows: {processed_count})")
-                    con.commit()
+                params = []
 
-        except Exception:
-            traceback.print_exc()
-            continue
+                for i, (new_search_meta, image_index, aesthetic_score, pony_aesthetic_score, cluster_id, tag_res) in enumerate(
+                    zip(
+                        batched_new_search_meta,
+                        batched_image_index,
+                        aesthetic_scores,
+                        pony_scores,
+                        cluster_ids,
+                        tagging_results,
+                    )
+                ):
+                    if new_search_meta.shape[0] != args.search_model_out_dim:
+                        print(f"{new_search_meta.shape[0]} != {args.search_model_out_dim}")
+                        continue
+                    new_search_meta_bytes = new_search_meta.tobytes()
+                    rating = tag_res.get("rating", "")
+                    image_tags = ", ".join(tag_res.get("tags", []))
+                    claster = f"style_cluster_{cluster_id}" if cluster_id is not None else ""
+
+                    image_index_int = int(image_index)
+                    image_path = uncreated_image_paths[image_index_int]
+                    image_id = hashlib.sha256(str(image_path).encode()).hexdigest()
+                    time_stamp_ISO = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+                    params.append((
+                        image_id,
+                        image_path,
+                        new_search_meta_bytes,
+                        float(aesthetic_score),
+                        float(pony_aesthetic_score),
+                        claster,
+                        rating,
+                        image_tags,
+                        time_stamp_ISO,
+                        new_search_meta_bytes,
+                        float(aesthetic_score),
+                        float(pony_aesthetic_score),
+                        claster,
+                        rating,
+                        image_tags,
+                        time_stamp_ISO,
+                    ))
+
+                if params:
+                    cur.executemany(
+                        """insert into image_meta values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        on conflict(image_id) do update set
+                            meta=?,
+                            aesthetic_quality=?,
+                            pony_aesthetic_quality=?,
+                            style_cluster=?,
+                            rating=?,
+                            image_tags=?,
+                            time_stamp_ISO=?""",
+                        params,
+                    )
+
+                processed_count += len(params)
+                if params:
+                    processed_batches += 1
+                    if processed_batches % commit_interval == 0:
+                        print(f"commit after batch {processed_batches} (total rows: {processed_count})")
+                        con.commit()
+
+            except Exception:
+                traceback.print_exc()
+                continue
 
 
 def collect_train_samples_algL(con: sqlite3.Connection, d: int, train_samples: int, batch_size: int):
