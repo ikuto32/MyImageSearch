@@ -1298,36 +1298,41 @@ def extract_image_features(
                     image_id = uncreated_image_ids[image_index_int]
                     time_stamp_ISO = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-                    params.append((
-                        image_id,
-                        image_path,
-                        new_search_meta_bytes,
-                        float(aesthetic_score),
-                        float(pony_aesthetic_score),
-                        claster,
-                        rating,
-                        image_tags,
-                        time_stamp_ISO,
-                        new_search_meta_bytes,
-                        float(aesthetic_score),
-                        float(pony_aesthetic_score),
-                        claster,
-                        rating,
-                        image_tags,
-                        time_stamp_ISO,
-                    ))
+                    params.append(
+                        (
+                            image_id,
+                            image_path,
+                            new_search_meta_bytes,
+                            float(aesthetic_score),
+                            float(pony_aesthetic_score),
+                            claster,
+                            rating,
+                            image_tags,
+                            time_stamp_ISO,
+                        )
+                    )
 
                 if params:
                     cur.executemany(
-                        """insert into image_meta values(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        on conflict(image_id) do update set
-                            meta=?,
-                            aesthetic_quality=?,
-                            pony_aesthetic_quality=?,
-                            style_cluster=?,
-                            rating=?,
-                            image_tags=?,
-                            time_stamp_ISO=?""",
+                        """insert into image_meta (
+                                image_id,
+                                image_path,
+                                meta,
+                                aesthetic_quality,
+                                pony_aesthetic_quality,
+                                style_cluster,
+                                rating,
+                                image_tags,
+                                time_stamp_ISO
+                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            on conflict(image_id) do update set
+                                meta=excluded.meta,
+                                aesthetic_quality=excluded.aesthetic_quality,
+                                pony_aesthetic_quality=excluded.pony_aesthetic_quality,
+                                style_cluster=excluded.style_cluster,
+                                rating=excluded.rating,
+                                image_tags=excluded.image_tags,
+                                time_stamp_ISO=excluded.time_stamp_ISO""",
                         params,
                     )
 
