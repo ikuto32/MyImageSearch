@@ -11,7 +11,10 @@ import pathlib
 import sqlite3
 import traceback
 import typing
+from typing import Any, Iterable
 import csv
+import uuid
+import types
 
 import faiss
 import huggingface_hub
@@ -930,6 +933,31 @@ def get_aesthetic_model(path_to_model, clip_model="vit_l_14"):
     return m
 
 
+def load_sidecar_tags(image_dir: str, relative_image_path: str) -> dict[str, typing.Any]:
+    """Load precomputed tags for an image if a sidecar file exists."""
+
+    default = {"rating": "", "tags": []}
+    stem, _ = os.path.splitext(relative_image_path)
+    sidecar_path = os.path.join(image_dir, f"{stem}.tags.json")
+
+    if not os.path.exists(sidecar_path):
+        return default
+
+    try:
+        with open(sidecar_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:  # pragma: no cover - file IO/format issues
+        print(f"Failed to load tags from {sidecar_path}: {exc}")
+        return default
+
+    rating = data.get("rating", "")
+    tags = data.get("tags", [])
+    if not isinstance(tags, list):
+        tags = []
+
+    return {"rating": rating, "tags": [str(tag) for tag in tags]}
+
+
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
@@ -969,6 +997,11 @@ def parse_arguments():
         "--metas_faiss_index_file_name",
         help="metas_faiss_index_file_name",
         default="metafiles.index",
+    )
+    parser.add_argument(
+        "--use-existing-tags",
+        action="store_true",
+        help="Skip tagging and read precomputed *.tags.json files when available",
     )
 
     return parser.parse_args()
@@ -1080,47 +1113,48 @@ def init_db(cur: sqlite3.Cursor):
     )
 
 
-def load_image_meta_from_db(con: sqlite3.Connection, id_list: list[str], loop_size: int) -> pd.DataFrame:
+def load_image_meta_from_db(
+    con: sqlite3.Connection, id_list: list[str], loop_size: int
+) -> Iterable[tuple[str, Any]]:
 
-    temp: list[pd.DataFrame] = []
+    if not id_list:
+        return []
 
-    # 指定サイズごとでループする。
+    cur = con.cursor()
+    temp_table = f"valid_id_{uuid.uuid4().hex}"
+
+    cur.execute(f"DROP TABLE IF EXISTS \"{temp_table}\"")
+    cur.execute(
+        f"CREATE TEMP TABLE \"{temp_table}\" (image_id TEXT PRIMARY KEY)"
+    )
+
     for idx in tqdm.tqdm(range(0, len(id_list), loop_size)):
-
-        # 指定サイズのリスト
         sub_list: list[str] = id_list[idx: idx + loop_size]
-
-        # データベースに問い合わせる
-        temp.append(pd.read_sql_query(
-            f"""
-
-            /* 有効なIDの導出テーブル(IDの配列) */
-            WITH valid_id_table(valid_id) AS (
-            VALUES
-                {",".join(["(?)"] * len(sub_list))}
-            )
-
-            /* 有効なIDと突合する。 不足している場合、 その値は、nullになる。 */
-            SELECT
-                valid_id_table.valid_id,
-                image_meta.image_path,
-                image_meta.meta
-            FROM
-                valid_id_table
-                LEFT OUTER JOIN image_meta
-                ON valid_id_table.valid_id = image_meta.image_id
-
-            """,
-            con,
-            params=sub_list  # type: ignore
-        ))
-
-    if not temp:
-        return pd.DataFrame(
-            columns=["valid_id", "image_path"]
+        cur.executemany(
+            f"INSERT INTO \"{temp_table}\" (image_id) VALUES (?)",
+            ((image_id,) for image_id in sub_list),
         )
 
-    return pd.concat(temp, ignore_index=True)
+    cur.execute(
+        f"""
+        SELECT
+            valid_id.image_id,
+            image_meta.meta
+        FROM
+            \"{temp_table}\" AS valid_id
+            LEFT JOIN image_meta ON valid_id.image_id = image_meta.image_id
+        """
+    )
+
+    try:
+        while True:
+            rows = cur.fetchmany(loop_size)
+            if not rows:
+                break
+            for row in rows:
+                yield row
+    finally:
+        cur.execute(f"DROP TABLE IF EXISTS \"{temp_table}\"")
 
 
 def createIndex(n_centroids, M, bits_per_code, dim) -> faiss.IndexIVFPQ:
@@ -1151,21 +1185,48 @@ def load_clip_model(args, device):
         device=device,
         jit=False,
     )
+    search_model.eval()
+    attach_visual_feature_helper(search_model)
     return search_model, eval_transform
 
 
+def attach_visual_feature_helper(search_model):
+    def encode_image_with_internal(self, pixel_values: torch.Tensor):
+        visual = self.visual
+        x = visual._embeds(pixel_values)
+        x = visual.transformer(x)
+        pooled, tokens = visual._pool(x)
+
+        internal_features = pooled
+        proj = getattr(visual, "proj", None)
+
+        if proj is not None:
+            projected_features = pooled @ proj
+        else:
+            projected_features = pooled
+
+        return internal_features, projected_features
+
+    search_model.encode_image_with_internal = types.MethodType(
+        encode_image_with_internal, search_model
+    )
+
+
+
 def create_image_id_index(file_list):
-    index_item_list = {}
+    image_id_to_path = {}
+    path_to_image_id = {}
     for file in file_list:
         image_id = hashlib.sha256(str(file).encode()).hexdigest()
-        index_item_list[image_id] = file
-    return index_item_list
+        image_id_to_path[image_id] = file
+        path_to_image_id[file] = image_id
+    return image_id_to_path, path_to_image_id
 
 
-def filter_valid_image_meta(args, result, index_item_list):
+def filter_valid_image_meta(args, result, image_id_to_path):
     search_meta_list = []
     uncreated_image_paths = []
-    for i, (image_id, meta) in enumerate(tqdm.tqdm(zip(result["valid_id"], result["meta"]), total=len(result["valid_id"]))):
+    for image_id, meta in tqdm.tqdm(result, total=len(image_id_to_path)):
         if meta is not None:
             meta = np.squeeze(meta)
             a = np.frombuffer(meta, dtype=np.float32)
@@ -1173,7 +1234,7 @@ def filter_valid_image_meta(args, result, index_item_list):
                 search_meta_list.append(a)
                 continue
 
-        uncreated_image_paths.append(index_item_list[image_id])
+        uncreated_image_paths.append(image_id_to_path[image_id])
     return search_meta_list, uncreated_image_paths
 
 
@@ -1194,165 +1255,157 @@ def extract_image_features(
     cur,
     loader,
     uncreated_image_paths,
+    uncreated_image_ids,
+    aesthetic_model,
+    pony_scorer,
+    style_cluster,
+    tagging_service,
 ):
-    # 事前学習済みチェックポイントのパスは args から取得（各自適宜設定してください）
-    aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
-    style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
-    style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
-
-    aesthetic_checkpoint = ensure_asset_path(
-        aesthetic_checkpoint_arg,
-        AESTHETIC_CHECKPOINT_FILENAME,
-        "aesthetic checkpoint",
-    )
-    style_checkpoint_model = ensure_asset_path(
-        style_checkpoint_model_arg,
-        STYLE_MODEL_FILENAME,
-        "style classifier checkpoint",
-    )
-    style_checkpoint_centers = ensure_asset_path(
-        style_checkpoint_centers_arg,
-        STYLE_CENTERS_FILENAME,
-        "style cluster centers",
-    )
-
-    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
-    aesthetic_model = aesthetic_model.to(device)
-    aesthetic_model.eval()
-
-    # 美的評価（PonyAestheticScorer）とスタイルクラスタリング（StyleCluster）のグローバルインスタンスを生成
-    pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
-    style_cluster = StyleCluster(device=device, checkpoint_model=style_checkpoint_model, checkpoint_centers=style_checkpoint_centers)
-    tagging_service = ImageTaggingService(hf_token=None)
 
     processed_count = 0
+    processed_batches = 0
+    commit_interval = max(1, 10000 // args.batch_size)
 
-    for batch in tqdm.tqdm(loader, total=len(uncreated_image_paths) // args.batch_size + 1):
-        if batch is None:
-            continue
+    with torch.inference_mode():
+        for batch in tqdm.tqdm(loader, total=len(uncreated_image_paths) // args.batch_size + 1):
+            if batch is None:
+                continue
 
-        batched_image_input, batched_image_index, batched_raw_images = batch  # (B, C, H, W), (B,), (B,)
+            batched_image_input, batched_image_index, batched_raw_images = batch  # (B, C, H, W), (B,), (B,)
 
-        batched_image_input = batched_image_input.to(device, non_blocking=True)
-        try:
-            # visual と proj を取り出す
-            visual = search_model.visual
-            proj = getattr(visual, "proj", None)
+            batched_image_input = batched_image_input.to(device, non_blocking=True)
+            try:
+                with torch.cuda.amp.autocast(enabled=device.type == "cuda"):
+                    (
+                        internal_features_tensor,
+                        image_features_tensor,
+                    ) = search_model.encode_image_with_internal(batched_image_input)
 
-            if proj is not None:
-                # proj を一時的に外して「内部特徴」を取得
-                visual.proj = None
-                internal_features_tensor = visual(batched_image_input)  # (B, D_internal)
-                visual.proj = proj
-
-                # 内部特徴 → CLIP 埋め込み（768次元など）に射影
-                image_features_tensor = internal_features_tensor @ proj        # (B, D_clip)
-            else:
-                # proj が無い場合はそのまま
-                internal_features_tensor = visual(batched_image_input)
-                image_features_tensor = internal_features_tensor
-
-
-            denom = image_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
-            image_features_tensor = (image_features_tensor / denom).contiguous()
-            aesthetic_scores = torch.sigmoid(
-            aesthetic_model(image_features_tensor)
+                denom = image_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+                image_features_tensor = (image_features_tensor / denom).contiguous()
+                aesthetic_scores = torch.sigmoid(
+                    aesthetic_model(image_features_tensor)
                 ).squeeze(-1).cpu().numpy()  # (B,)
 
-            pony_scores = pony_scorer.score_batch(image_features_tensor)  # (B,)
+                pony_scores = pony_scorer.score_batch(image_features_tensor)  # (B,)
 
-            cluster_ids, _cluster_dists = style_cluster.get_cluster_batch(
-                internal_features_tensor
-            )  # cluster_ids: list[str], len=B
+                cluster_ids, _cluster_dists = style_cluster.get_cluster_batch(
+                    internal_features_tensor
+                )  # cluster_ids: list[str], len=B
 
-            # 3) タグ付けもバッチで
-            tagging_results = tagging_service.tag_images_batch(
-                list(batched_raw_images)
-            )  # list[dict], len=B
+                # 3) タグ付けもバッチで
+                if args.use_existing_tags:
+                    tagging_results = [
+                        load_sidecar_tags(
+                            args.image_dir,
+                            uncreated_image_paths[int(idx)],
+                        )
+                        for idx in batched_image_index
+                    ]
+                else:
+                    assert tagging_service is not None
+                    tagging_results = tagging_service.tag_images_batch(
+                        list(batched_raw_images)
+                    )  # list[dict], len=B
 
 
-            batched_new_search_meta = (
-                image_features_tensor
-                .to("cpu")
-                .detach()
-                .numpy()
-                .copy()
-                .astype(np.float32)
-            )
+                batched_new_search_meta = (
+                    image_features_tensor.detach().cpu().float().numpy()
+                )
 
-            params = []
+                params = []
 
-            for i, (new_search_meta, image_index, aesthetic_score, pony_aesthetic_score, cluster_id, tag_res) in enumerate(
-            zip(batched_new_search_meta,
-                batched_image_index,
-                aesthetic_scores,
-                pony_scores,
-                cluster_ids,
-                tagging_results)
-            ):
-                if new_search_meta.shape[0] != args.search_model_out_dim:
-                    print(f"{new_search_meta.shape[0]} != {args.search_model_out_dim}")
-                    continue
-                new_search_meta_bytes = new_search_meta.tobytes()
-                rating = tag_res.get("rating", "")
-                image_tags = ", ".join(tag_res.get("tags", []))
-                claster = f"style_cluster_{cluster_id}" if cluster_id is not None else ""
+                for i, (new_search_meta, image_index, aesthetic_score, pony_aesthetic_score, cluster_id, tag_res) in enumerate(
+                    zip(
+                        batched_new_search_meta,
+                        batched_image_index,
+                        aesthetic_scores,
+                        pony_scores,
+                        cluster_ids,
+                        tagging_results,
+                    )
+                ):
+                    if new_search_meta.shape[0] != args.search_model_out_dim:
+                        print(f"{new_search_meta.shape[0]} != {args.search_model_out_dim}")
+                        continue
+                    new_search_meta_bytes = new_search_meta.tobytes()
+                    rating = tag_res.get("rating", "")
+                    image_tags = ", ".join(tag_res.get("tags", []))
+                    claster = f"style_cluster_{cluster_id}" if cluster_id is not None else ""
 
-                image_index_int = int(image_index)
-                image_path = uncreated_image_paths[image_index_int]
-                image_id = hashlib.sha256(str(image_path).encode()).hexdigest()
-                time_stamp_ISO = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    image_index_int = int(image_index)
+                    image_path = uncreated_image_paths[image_index_int]
+                    image_id = uncreated_image_ids[image_index_int]
+                    time_stamp_ISO = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-                params.append((
-                    image_id,
-                    image_path,
-                    new_search_meta_bytes,
-                    float(aesthetic_score),
-                    float(pony_aesthetic_score),
-                    claster,
-                    rating,
-                    image_tags,
-                    time_stamp_ISO,
-                    new_search_meta_bytes,
-                    float(aesthetic_score),
-                    float(pony_aesthetic_score),
-                    claster,
-                    rating,
-                    image_tags,
-                    time_stamp_ISO,
-                ))
+                    params.append(
+                        (
+                            image_id,
+                            image_path,
+                            new_search_meta_bytes,
+                            float(aesthetic_score),
+                            float(pony_aesthetic_score),
+                            claster,
+                            rating,
+                            image_tags,
+                            time_stamp_ISO,
+                        )
+                    )
 
                 if params:
                     cur.executemany(
-                        """insert into image_meta values(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        on conflict(image_id) do update set
-                            meta=?,
-                            aesthetic_quality=?,
-                            pony_aesthetic_quality=?,
-                            style_cluster=?,
-                            rating=?,
-                            image_tags=?,
-                            time_stamp_ISO=?""",
+                        """insert into image_meta (
+                                image_id,
+                                image_path,
+                                meta,
+                                aesthetic_quality,
+                                pony_aesthetic_quality,
+                                style_cluster,
+                                rating,
+                                image_tags,
+                                time_stamp_ISO
+                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            on conflict(image_id) do update set
+                                meta=excluded.meta,
+                                aesthetic_quality=excluded.aesthetic_quality,
+                                pony_aesthetic_quality=excluded.pony_aesthetic_quality,
+                                style_cluster=excluded.style_cluster,
+                                rating=excluded.rating,
+                                image_tags=excluded.image_tags,
+                                time_stamp_ISO=excluded.time_stamp_ISO""",
                         params,
                     )
 
-            processed_count += len(params)
-            if (processed_count) % 10000 < args.batch_size:
-                print("commit")
-                con.commit()
+                processed_count += len(params)
+                if params:
+                    processed_batches += 1
+                    if processed_batches % commit_interval == 0:
+                        print(f"commit after batch {processed_batches} (total rows: {processed_count})")
+                        con.commit()
 
-        except Exception:
-            traceback.print_exc()
-            continue
+            except Exception:
+                traceback.print_exc()
+                continue
 
 
-def collect_train_samples_algL(con: sqlite3.Connection, d: int, train_samples: int, batch_size: int):
+def collect_train_samples_algL(
+    con: sqlite3.Connection,
+    d: int,
+    train_samples: int,
+    batch_size: int,
+    total: int | None = None,
+):
     """
     Algorithm L (Vitter 1985) による reservoir sampling（読み飛ばし式）。
     image_meta(meta BLOB, image_path TEXT) を image_path ORDER BY で走査し、
-    次元 d の float32 ベクトルを k=train_samples 件だけ均一サンプルする。
+    次元 d の float32 ベクトルを k=min(train_samples, total) 件だけ均一サンプルする。
     """
-    k = train_samples
+    if total is None:
+        total = con.execute("SELECT COUNT(*) FROM image_meta").fetchone()[0]
+
+    k = min(train_samples, total)
+    if k <= 0:
+        return np.empty((0, d), dtype=np.float32)
     # 1) リザーバを確保
     reservoir = np.empty((k, d), dtype=np.float32)
     filled = 0
@@ -1459,7 +1512,7 @@ def stream_build_faiss(
         print(f"total rows: {total}")
 
         # 正規化して訓練
-        train_buf = collect_train_samples_algL(con, d, train_samples, batch_size)
+        train_buf = collect_train_samples_algL(con, d, train_samples, batch_size, total=total)
         faiss.normalize_L2(train_buf)
         index = createIndex(nlist, M, bits_per_code, d)  # 既存関数を利用
         print(f"train {train_buf.shape}")
@@ -1545,22 +1598,51 @@ def main():
 
     search_model, eval_transform = load_clip_model(args, device)
 
-    index_item_list = create_image_id_index(index_item_list)
+    aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
+    style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
+    style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
+
+    aesthetic_checkpoint = ensure_asset_path(
+        aesthetic_checkpoint_arg,
+        AESTHETIC_CHECKPOINT_FILENAME,
+        "aesthetic checkpoint",
+    )
+    style_checkpoint_model = ensure_asset_path(
+        style_checkpoint_model_arg,
+        STYLE_MODEL_FILENAME,
+        "style classifier checkpoint",
+    )
+    style_checkpoint_centers = ensure_asset_path(
+        style_checkpoint_centers_arg,
+        STYLE_CENTERS_FILENAME,
+        "style cluster centers",
+    )
+
+    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
+    aesthetic_model = aesthetic_model.to(device)
+    aesthetic_model.eval()
+
+    pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
+    style_cluster = StyleCluster(
+        device=device,
+        checkpoint_model=style_checkpoint_model,
+        checkpoint_centers=style_checkpoint_centers,
+    )
+    tagging_service = None if args.use_existing_tags else ImageTaggingService(hf_token=None)
+
+    index_item_list, path_to_image_id = create_image_id_index(index_item_list)
 
     # データベースに問い合わせる
     result = load_image_meta_from_db(con, id_list=list(index_item_list.keys()), loop_size=10000)
 
     search_meta_list, uncreated_image_paths = filter_valid_image_meta(args, result, index_item_list)
+    uncreated_image_ids = [path_to_image_id[path] for path in uncreated_image_paths]
 
     print_image_meta_stats(search_meta_list, uncreated_image_paths, len(index_item_list))
 
     del result, index_item_list, search_meta_list
 
-    dataset = DirImageIterable(
-        args.image_dir,
-        uncreated_image_paths,
-        transform=eval_transform,
-    )
+    dataset = None
     T = True
     i = 0
     loader = None
@@ -1578,36 +1660,46 @@ def main():
         if num_workers > 0:
             dataloader_kwargs["prefetch_factor"] = 16  # default=2
 
-    while T:
-        loader = DataLoader(
-            dataset,
-            **dataloader_kwargs,
-        )
-        print(f"try {i}")
-        try:
-            extract_image_features(
-                args,
-                device,
-                search_model,
-                con,
-                cur,
-                loader,
-                uncreated_image_paths[i * args.batch_size:],
-            )
-            T = False
-        except Exception:
-            traceback.print_exc()
+        while T:
+            target_paths = uncreated_image_paths[i * args.batch_size :]
+            target_ids = uncreated_image_ids[i * args.batch_size :]
+            if not target_paths:
+                break
+
             dataset = DirImageIterable(
                 args.image_dir,
-                uncreated_image_paths[i * args.batch_size:],
+                target_paths,
                 transform=eval_transform,
             )
-            i += 1
-            continue
+            loader = DataLoader(
+                dataset,
+                **dataloader_kwargs,
+            )
+            print(f"try {i}")
+            try:
+                extract_image_features(
+                    args,
+                    device,
+                    search_model,
+                    con,
+                    cur,
+                    loader,
+                    target_paths,
+                    target_ids,
+                    aesthetic_model,
+                    pony_scorer,
+                    style_cluster,
+                    tagging_service,
+                )
+                T = False
+            except Exception:
+                traceback.print_exc()
+                i += 1
+                continue
 
     con.commit()
 
-    del uncreated_image_paths, search_model, dataset, loader
+    del uncreated_image_paths, uncreated_image_ids, search_model, dataset, loader
     torch.cuda.empty_cache()
 
     print(
