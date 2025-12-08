@@ -1158,17 +1158,21 @@ def load_clip_model(args, device):
 
 
 def create_image_id_index(file_list):
-    index_item_list = {}
+    id_to_path: dict[str, str] = {}
+    path_to_id: dict[str, str] = {}
+
     for file in file_list:
         image_id = hashlib.sha256(str(file).encode()).hexdigest()
-        index_item_list[image_id] = file
-    return index_item_list
+        id_to_path[image_id] = file
+        path_to_id[file] = image_id
+
+    return id_to_path, path_to_id
 
 
-def filter_valid_image_meta(args, result, index_item_list):
+def filter_valid_image_meta(args, result, id_to_path):
     search_meta_list = []
     uncreated_image_paths = []
-    for image_id, meta in tqdm.tqdm(result, total=len(index_item_list)):
+    for image_id, meta in tqdm.tqdm(result, total=len(id_to_path)):
         if meta is not None:
             meta = np.squeeze(meta)
             a = np.frombuffer(meta, dtype=np.float32)
@@ -1176,7 +1180,7 @@ def filter_valid_image_meta(args, result, index_item_list):
                 search_meta_list.append(a)
                 continue
 
-        uncreated_image_paths.append(index_item_list[image_id])
+        uncreated_image_paths.append(id_to_path[image_id])
     return search_meta_list, uncreated_image_paths
 
 
@@ -1197,6 +1201,7 @@ def extract_image_features(
     cur,
     loader,
     uncreated_image_paths,
+    path_to_id,
     aesthetic_model,
     pony_scorer,
     style_cluster,
@@ -1282,7 +1287,10 @@ def extract_image_features(
 
                 image_index_int = int(image_index)
                 image_path = uncreated_image_paths[image_index_int]
-                image_id = hashlib.sha256(str(image_path).encode()).hexdigest()
+                image_id = path_to_id.get(image_path)
+                if image_id is None:
+                    print(f"[extract_image_features] image_id not found for {image_path}")
+                    continue
                 time_stamp_ISO = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
                 params.append((
@@ -1561,16 +1569,16 @@ def main():
     )
     tagging_service = ImageTaggingService(hf_token=None)
 
-    index_item_list = create_image_id_index(index_item_list)
+    id_to_path, path_to_id = create_image_id_index(index_item_list)
 
     # データベースに問い合わせる
-    result = load_image_meta_from_db(con, id_list=list(index_item_list.keys()), loop_size=10000)
+    result = load_image_meta_from_db(con, id_list=list(id_to_path.keys()), loop_size=10000)
 
-    search_meta_list, uncreated_image_paths = filter_valid_image_meta(args, result, index_item_list)
+    search_meta_list, uncreated_image_paths = filter_valid_image_meta(args, result, id_to_path)
 
-    print_image_meta_stats(search_meta_list, uncreated_image_paths, len(index_item_list))
+    print_image_meta_stats(search_meta_list, uncreated_image_paths, len(id_to_path))
 
-    del result, index_item_list, search_meta_list
+    del result, id_to_path, search_meta_list
 
     dataset = None
     T = True
@@ -1614,6 +1622,7 @@ def main():
                     cur,
                     loader,
                     target_paths,
+                    path_to_id,
                     aesthetic_model,
                     pony_scorer,
                     style_cluster,
