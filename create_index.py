@@ -11,7 +11,9 @@ import pathlib
 import sqlite3
 import traceback
 import typing
+from typing import Any, Iterable
 import csv
+import uuid
 
 import faiss
 import huggingface_hub
@@ -1080,47 +1082,48 @@ def init_db(cur: sqlite3.Cursor):
     )
 
 
-def load_image_meta_from_db(con: sqlite3.Connection, id_list: list[str], loop_size: int) -> pd.DataFrame:
+def load_image_meta_from_db(
+    con: sqlite3.Connection, id_list: list[str], loop_size: int
+) -> Iterable[tuple[str, Any]]:
 
-    temp: list[pd.DataFrame] = []
+    if not id_list:
+        return []
 
-    # 指定サイズごとでループする。
+    cur = con.cursor()
+    temp_table = f"valid_id_{uuid.uuid4().hex}"
+
+    cur.execute(f"DROP TABLE IF EXISTS \"{temp_table}\"")
+    cur.execute(
+        f"CREATE TEMP TABLE \"{temp_table}\" (image_id TEXT PRIMARY KEY)"
+    )
+
     for idx in tqdm.tqdm(range(0, len(id_list), loop_size)):
-
-        # 指定サイズのリスト
         sub_list: list[str] = id_list[idx: idx + loop_size]
-
-        # データベースに問い合わせる
-        temp.append(pd.read_sql_query(
-            f"""
-
-            /* 有効なIDの導出テーブル(IDの配列) */
-            WITH valid_id_table(valid_id) AS (
-            VALUES
-                {",".join(["(?)"] * len(sub_list))}
-            )
-
-            /* 有効なIDと突合する。 不足している場合、 その値は、nullになる。 */
-            SELECT
-                valid_id_table.valid_id,
-                image_meta.image_path,
-                image_meta.meta
-            FROM
-                valid_id_table
-                LEFT OUTER JOIN image_meta
-                ON valid_id_table.valid_id = image_meta.image_id
-
-            """,
-            con,
-            params=sub_list  # type: ignore
-        ))
-
-    if not temp:
-        return pd.DataFrame(
-            columns=["valid_id", "image_path"]
+        cur.executemany(
+            f"INSERT INTO \"{temp_table}\" (image_id) VALUES (?)",
+            ((image_id,) for image_id in sub_list),
         )
 
-    return pd.concat(temp, ignore_index=True)
+    cur.execute(
+        f"""
+        SELECT
+            valid_id.image_id,
+            image_meta.meta
+        FROM
+            \"{temp_table}\" AS valid_id
+            LEFT JOIN image_meta ON valid_id.image_id = image_meta.image_id
+        """
+    )
+
+    try:
+        while True:
+            rows = cur.fetchmany(loop_size)
+            if not rows:
+                break
+            for row in rows:
+                yield row
+    finally:
+        cur.execute(f"DROP TABLE IF EXISTS \"{temp_table}\"")
 
 
 def createIndex(n_centroids, M, bits_per_code, dim) -> faiss.IndexIVFPQ:
@@ -1165,7 +1168,7 @@ def create_image_id_index(file_list):
 def filter_valid_image_meta(args, result, index_item_list):
     search_meta_list = []
     uncreated_image_paths = []
-    for i, (image_id, meta) in enumerate(tqdm.tqdm(zip(result["valid_id"], result["meta"]), total=len(result["valid_id"]))):
+    for image_id, meta in tqdm.tqdm(result, total=len(index_item_list)):
         if meta is not None:
             meta = np.squeeze(meta)
             a = np.frombuffer(meta, dtype=np.float32)
@@ -1194,36 +1197,11 @@ def extract_image_features(
     cur,
     loader,
     uncreated_image_paths,
+    aesthetic_model,
+    pony_scorer,
+    style_cluster,
+    tagging_service,
 ):
-    # 事前学習済みチェックポイントのパスは args から取得（各自適宜設定してください）
-    aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
-    style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
-    style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
-
-    aesthetic_checkpoint = ensure_asset_path(
-        aesthetic_checkpoint_arg,
-        AESTHETIC_CHECKPOINT_FILENAME,
-        "aesthetic checkpoint",
-    )
-    style_checkpoint_model = ensure_asset_path(
-        style_checkpoint_model_arg,
-        STYLE_MODEL_FILENAME,
-        "style classifier checkpoint",
-    )
-    style_checkpoint_centers = ensure_asset_path(
-        style_checkpoint_centers_arg,
-        STYLE_CENTERS_FILENAME,
-        "style cluster centers",
-    )
-
-    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
-    aesthetic_model = aesthetic_model.to(device)
-    aesthetic_model.eval()
-
-    # 美的評価（PonyAestheticScorer）とスタイルクラスタリング（StyleCluster）のグローバルインスタンスを生成
-    pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
-    style_cluster = StyleCluster(device=device, checkpoint_model=style_checkpoint_model, checkpoint_centers=style_checkpoint_centers)
-    tagging_service = ImageTaggingService(hf_token=None)
 
     processed_count = 0
     processed_batches = 0
@@ -1258,8 +1236,8 @@ def extract_image_features(
             denom = image_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
             image_features_tensor = (image_features_tensor / denom).contiguous()
             aesthetic_scores = torch.sigmoid(
-            aesthetic_model(image_features_tensor)
-                ).squeeze(-1).cpu().numpy()  # (B,)
+                aesthetic_model(image_features_tensor)
+            ).squeeze(-1).cpu().numpy()  # (B,)
 
             pony_scores = pony_scorer.score_batch(image_features_tensor)  # (B,)
 
@@ -1285,12 +1263,14 @@ def extract_image_features(
             params = []
 
             for i, (new_search_meta, image_index, aesthetic_score, pony_aesthetic_score, cluster_id, tag_res) in enumerate(
-            zip(batched_new_search_meta,
-                batched_image_index,
-                aesthetic_scores,
-                pony_scores,
-                cluster_ids,
-                tagging_results)
+                zip(
+                    batched_new_search_meta,
+                    batched_image_index,
+                    aesthetic_scores,
+                    pony_scores,
+                    cluster_ids,
+                    tagging_results,
+                )
             ):
                 if new_search_meta.shape[0] != args.search_model_out_dim:
                     print(f"{new_search_meta.shape[0]} != {args.search_model_out_dim}")
@@ -1549,6 +1529,38 @@ def main():
 
     search_model, eval_transform = load_clip_model(args, device)
 
+    aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
+    style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
+    style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
+
+    aesthetic_checkpoint = ensure_asset_path(
+        aesthetic_checkpoint_arg,
+        AESTHETIC_CHECKPOINT_FILENAME,
+        "aesthetic checkpoint",
+    )
+    style_checkpoint_model = ensure_asset_path(
+        style_checkpoint_model_arg,
+        STYLE_MODEL_FILENAME,
+        "style classifier checkpoint",
+    )
+    style_checkpoint_centers = ensure_asset_path(
+        style_checkpoint_centers_arg,
+        STYLE_CENTERS_FILENAME,
+        "style cluster centers",
+    )
+
+    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
+    aesthetic_model = aesthetic_model.to(device)
+    aesthetic_model.eval()
+
+    pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
+    style_cluster = StyleCluster(
+        device=device,
+        checkpoint_model=style_checkpoint_model,
+        checkpoint_centers=style_checkpoint_centers,
+    )
+    tagging_service = ImageTaggingService(hf_token=None)
+
     index_item_list = create_image_id_index(index_item_list)
 
     # データベースに問い合わせる
@@ -1580,11 +1592,6 @@ def main():
 
         while T:
             target_paths = uncreated_image_paths[i * args.batch_size :]
-            dataset = DirImageIterable(
-                args.image_dir,
-                target_paths,
-                transform=eval_transform,
-            )
             loader = DataLoader(
                 dataset,
                 **dataloader_kwargs,
@@ -1599,6 +1606,10 @@ def main():
                     cur,
                     loader,
                     target_paths,
+                    aesthetic_model,
+                    pony_scorer,
+                    style_cluster,
+                    tagging_service,
                 )
                 T = False
             except Exception:
