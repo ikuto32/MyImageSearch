@@ -933,6 +933,31 @@ def get_aesthetic_model(path_to_model, clip_model="vit_l_14"):
     return m
 
 
+def load_sidecar_tags(image_dir: str, relative_image_path: str) -> dict[str, typing.Any]:
+    """Load precomputed tags for an image if a sidecar file exists."""
+
+    default = {"rating": "", "tags": []}
+    stem, _ = os.path.splitext(relative_image_path)
+    sidecar_path = os.path.join(image_dir, f"{stem}.tags.json")
+
+    if not os.path.exists(sidecar_path):
+        return default
+
+    try:
+        with open(sidecar_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:  # pragma: no cover - file IO/format issues
+        print(f"Failed to load tags from {sidecar_path}: {exc}")
+        return default
+
+    rating = data.get("rating", "")
+    tags = data.get("tags", [])
+    if not isinstance(tags, list):
+        tags = []
+
+    return {"rating": rating, "tags": [str(tag) for tag in tags]}
+
+
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
@@ -972,6 +997,11 @@ def parse_arguments():
         "--metas_faiss_index_file_name",
         help="metas_faiss_index_file_name",
         default="metafiles.index",
+    )
+    parser.add_argument(
+        "--use-existing-tags",
+        action="store_true",
+        help="Skip tagging and read precomputed *.tags.json files when available",
     )
 
     return parser.parse_args()
@@ -1264,9 +1294,19 @@ def extract_image_features(
                 )  # cluster_ids: list[str], len=B
 
                 # 3) タグ付けもバッチで
-                tagging_results = tagging_service.tag_images_batch(
-                    list(batched_raw_images)
-                )  # list[dict], len=B
+                if args.use_existing_tags:
+                    tagging_results = [
+                        load_sidecar_tags(
+                            args.image_dir,
+                            uncreated_image_paths[int(idx)],
+                        )
+                        for idx in batched_image_index
+                    ]
+                else:
+                    assert tagging_service is not None
+                    tagging_results = tagging_service.tag_images_batch(
+                        list(batched_raw_images)
+                    )  # list[dict], len=B
 
 
                 batched_new_search_meta = (
@@ -1588,7 +1628,7 @@ def main():
         checkpoint_model=style_checkpoint_model,
         checkpoint_centers=style_checkpoint_centers,
     )
-    tagging_service = ImageTaggingService(hf_token=None)
+    tagging_service = None if args.use_existing_tags else ImageTaggingService(hf_token=None)
 
     index_item_list, path_to_image_id = create_image_id_index(index_item_list)
 
