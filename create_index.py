@@ -1560,11 +1560,7 @@ def main():
 
     del result, index_item_list, search_meta_list
 
-    dataset = DirImageIterable(
-        args.image_dir,
-        uncreated_image_paths,
-        transform=eval_transform,
-    )
+    dataset = None
     T = True
     i = 0
     loader = None
@@ -1582,32 +1578,33 @@ def main():
         if num_workers > 0:
             dataloader_kwargs["prefetch_factor"] = 16  # default=2
 
-    while T:
-        loader = DataLoader(
-            dataset,
-            **dataloader_kwargs,
-        )
-        print(f"try {i}")
-        try:
-            extract_image_features(
-                args,
-                device,
-                search_model,
-                con,
-                cur,
-                loader,
-                uncreated_image_paths[i * args.batch_size:],
-            )
-            T = False
-        except Exception:
-            traceback.print_exc()
+        while T:
+            target_paths = uncreated_image_paths[i * args.batch_size :]
             dataset = DirImageIterable(
                 args.image_dir,
-                uncreated_image_paths[i * args.batch_size:],
+                target_paths,
                 transform=eval_transform,
             )
-            i += 1
-            continue
+            loader = DataLoader(
+                dataset,
+                **dataloader_kwargs,
+            )
+            print(f"try {i}")
+            try:
+                extract_image_features(
+                    args,
+                    device,
+                    search_model,
+                    con,
+                    cur,
+                    loader,
+                    target_paths,
+                )
+                T = False
+            except Exception:
+                traceback.print_exc()
+                i += 1
+                continue
 
     con.commit()
 
