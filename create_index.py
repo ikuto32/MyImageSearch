@@ -1257,12 +1257,7 @@ def extract_image_features(
 
 
                 batched_new_search_meta = (
-                    image_features_tensor
-                    .to("cpu")
-                    .detach()
-                    .numpy()
-                    .copy()
-                    .astype(np.float32)
+                    image_features_tensor.detach().cpu().float().numpy()
                 )
 
                 params = []
