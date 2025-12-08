@@ -1572,11 +1572,7 @@ def main():
 
     del result, index_item_list, search_meta_list
 
-    dataset = DirImageIterable(
-        args.image_dir,
-        uncreated_image_paths,
-        transform=eval_transform,
-    )
+    dataset = None
     T = True
     i = 0
     loader = None
@@ -1594,36 +1590,32 @@ def main():
         if num_workers > 0:
             dataloader_kwargs["prefetch_factor"] = 16  # default=2
 
-    while T:
-        loader = DataLoader(
-            dataset,
-            **dataloader_kwargs,
-        )
-        print(f"try {i}")
-        try:
-            extract_image_features(
-                args,
-                device,
-                search_model,
-                con,
-                cur,
-                loader,
-                uncreated_image_paths[i * args.batch_size:],
-                aesthetic_model,
-                pony_scorer,
-                style_cluster,
-                tagging_service,
+        while T:
+            target_paths = uncreated_image_paths[i * args.batch_size :]
+            loader = DataLoader(
+                dataset,
+                **dataloader_kwargs,
             )
-            T = False
-        except Exception:
-            traceback.print_exc()
-            dataset = DirImageIterable(
-                args.image_dir,
-                uncreated_image_paths[i * args.batch_size:],
-                transform=eval_transform,
-            )
-            i += 1
-            continue
+            print(f"try {i}")
+            try:
+                extract_image_features(
+                    args,
+                    device,
+                    search_model,
+                    con,
+                    cur,
+                    loader,
+                    target_paths,
+                    aesthetic_model,
+                    pony_scorer,
+                    style_cluster,
+                    tagging_service,
+                )
+                T = False
+            except Exception:
+                traceback.print_exc()
+                i += 1
+                continue
 
     con.commit()
 
