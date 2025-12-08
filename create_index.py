@@ -11,7 +11,9 @@ import pathlib
 import sqlite3
 import traceback
 import typing
+from typing import Any, Iterable
 import csv
+import uuid
 
 import faiss
 import huggingface_hub
@@ -1080,47 +1082,48 @@ def init_db(cur: sqlite3.Cursor):
     )
 
 
-def load_image_meta_from_db(con: sqlite3.Connection, id_list: list[str], loop_size: int) -> pd.DataFrame:
+def load_image_meta_from_db(
+    con: sqlite3.Connection, id_list: list[str], loop_size: int
+) -> Iterable[tuple[str, Any]]:
 
-    temp: list[pd.DataFrame] = []
+    if not id_list:
+        return []
 
-    # 指定サイズごとでループする。
+    cur = con.cursor()
+    temp_table = f"valid_id_{uuid.uuid4().hex}"
+
+    cur.execute(f"DROP TABLE IF EXISTS \"{temp_table}\"")
+    cur.execute(
+        f"CREATE TEMP TABLE \"{temp_table}\" (image_id TEXT PRIMARY KEY)"
+    )
+
     for idx in tqdm.tqdm(range(0, len(id_list), loop_size)):
-
-        # 指定サイズのリスト
         sub_list: list[str] = id_list[idx: idx + loop_size]
-
-        # データベースに問い合わせる
-        temp.append(pd.read_sql_query(
-            f"""
-
-            /* 有効なIDの導出テーブル(IDの配列) */
-            WITH valid_id_table(valid_id) AS (
-            VALUES
-                {",".join(["(?)"] * len(sub_list))}
-            )
-
-            /* 有効なIDと突合する。 不足している場合、 その値は、nullになる。 */
-            SELECT
-                valid_id_table.valid_id,
-                image_meta.image_path,
-                image_meta.meta
-            FROM
-                valid_id_table
-                LEFT OUTER JOIN image_meta
-                ON valid_id_table.valid_id = image_meta.image_id
-
-            """,
-            con,
-            params=sub_list  # type: ignore
-        ))
-
-    if not temp:
-        return pd.DataFrame(
-            columns=["valid_id", "image_path"]
+        cur.executemany(
+            f"INSERT INTO \"{temp_table}\" (image_id) VALUES (?)",
+            ((image_id,) for image_id in sub_list),
         )
 
-    return pd.concat(temp, ignore_index=True)
+    cur.execute(
+        f"""
+        SELECT
+            valid_id.image_id,
+            image_meta.meta
+        FROM
+            \"{temp_table}\" AS valid_id
+            LEFT JOIN image_meta ON valid_id.image_id = image_meta.image_id
+        """
+    )
+
+    try:
+        while True:
+            rows = cur.fetchmany(loop_size)
+            if not rows:
+                break
+            for row in rows:
+                yield row
+    finally:
+        cur.execute(f"DROP TABLE IF EXISTS \"{temp_table}\"")
 
 
 def createIndex(n_centroids, M, bits_per_code, dim) -> faiss.IndexIVFPQ:
@@ -1165,7 +1168,7 @@ def create_image_id_index(file_list):
 def filter_valid_image_meta(args, result, index_item_list):
     search_meta_list = []
     uncreated_image_paths = []
-    for i, (image_id, meta) in enumerate(tqdm.tqdm(zip(result["valid_id"], result["meta"]), total=len(result["valid_id"]))):
+    for image_id, meta in tqdm.tqdm(result, total=len(index_item_list)):
         if meta is not None:
             meta = np.squeeze(meta)
             a = np.frombuffer(meta, dtype=np.float32)
