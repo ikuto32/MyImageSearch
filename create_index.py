@@ -1200,7 +1200,7 @@ def extract_image_features(
     con,
     cur,
     loader,
-    uncreated_image_paths,
+    image_paths,
     path_to_id,
     aesthetic_model,
     pony_scorer,
@@ -1212,7 +1212,7 @@ def extract_image_features(
     processed_batches = 0
     commit_interval = max(1, 10000 // args.batch_size)
 
-    for batch in tqdm.tqdm(loader, total=len(uncreated_image_paths) // args.batch_size + 1):
+    for batch in tqdm.tqdm(loader, total=len(image_paths) // args.batch_size + 1):
         if batch is None:
             continue
 
@@ -1286,7 +1286,7 @@ def extract_image_features(
                 claster = f"style_cluster_{cluster_id}" if cluster_id is not None else ""
 
                 image_index_int = int(image_index)
-                image_path = uncreated_image_paths[image_index_int]
+                image_path = image_paths[image_index_int]
                 image_id = path_to_id.get(image_path)
                 if image_id is None:
                     print(f"[extract_image_features] image_id not found for {image_path}")
@@ -1621,7 +1621,7 @@ def main():
                     con,
                     cur,
                     loader,
-                    target_paths,
+                    image_paths=target_paths,
                     path_to_id,
                     aesthetic_model,
                     pony_scorer,
