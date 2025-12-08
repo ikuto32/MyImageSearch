@@ -1348,13 +1348,24 @@ def extract_image_features(
                 continue
 
 
-def collect_train_samples_algL(con: sqlite3.Connection, d: int, train_samples: int, batch_size: int):
+def collect_train_samples_algL(
+    con: sqlite3.Connection,
+    d: int,
+    train_samples: int,
+    batch_size: int,
+    total: int | None = None,
+):
     """
     Algorithm L (Vitter 1985) による reservoir sampling（読み飛ばし式）。
     image_meta(meta BLOB, image_path TEXT) を image_path ORDER BY で走査し、
-    次元 d の float32 ベクトルを k=train_samples 件だけ均一サンプルする。
+    次元 d の float32 ベクトルを k=min(train_samples, total) 件だけ均一サンプルする。
     """
-    k = train_samples
+    if total is None:
+        total = con.execute("SELECT COUNT(*) FROM image_meta").fetchone()[0]
+
+    k = min(train_samples, total)
+    if k <= 0:
+        return np.empty((0, d), dtype=np.float32)
     # 1) リザーバを確保
     reservoir = np.empty((k, d), dtype=np.float32)
     filled = 0
@@ -1461,7 +1472,7 @@ def stream_build_faiss(
         print(f"total rows: {total}")
 
         # 正規化して訓練
-        train_buf = collect_train_samples_algL(con, d, train_samples, batch_size)
+        train_buf = collect_train_samples_algL(con, d, train_samples, batch_size, total=total)
         faiss.normalize_L2(train_buf)
         index = createIndex(nlist, M, bits_per_code, d)  # 既存関数を利用
         print(f"train {train_buf.shape}")
