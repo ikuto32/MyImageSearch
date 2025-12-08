@@ -1226,6 +1226,8 @@ def extract_image_features(
     tagging_service = ImageTaggingService(hf_token=None)
 
     processed_count = 0
+    processed_batches = 0
+    commit_interval = max(1, 10000 // args.batch_size)
 
     for batch in tqdm.tqdm(loader, total=len(uncreated_image_paths) // args.batch_size + 1):
         if batch is None:
@@ -1322,24 +1324,26 @@ def extract_image_features(
                     time_stamp_ISO,
                 ))
 
-                if params:
-                    cur.executemany(
-                        """insert into image_meta values(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        on conflict(image_id) do update set
-                            meta=?,
-                            aesthetic_quality=?,
-                            pony_aesthetic_quality=?,
-                            style_cluster=?,
-                            rating=?,
-                            image_tags=?,
-                            time_stamp_ISO=?""",
-                        params,
-                    )
+            if params:
+                cur.executemany(
+                    """insert into image_meta values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    on conflict(image_id) do update set
+                        meta=?,
+                        aesthetic_quality=?,
+                        pony_aesthetic_quality=?,
+                        style_cluster=?,
+                        rating=?,
+                        image_tags=?,
+                        time_stamp_ISO=?""",
+                    params,
+                )
 
             processed_count += len(params)
-            if (processed_count) % 10000 < args.batch_size:
-                print("commit")
-                con.commit()
+            if params:
+                processed_batches += 1
+                if processed_batches % commit_interval == 0:
+                    print(f"commit after batch {processed_batches} (total rows: {processed_count})")
+                    con.commit()
 
         except Exception:
             traceback.print_exc()
