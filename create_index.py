@@ -14,6 +14,7 @@ import typing
 from typing import Any, Iterable
 import csv
 import uuid
+import types
 
 import faiss
 import huggingface_hub
@@ -1155,7 +1156,31 @@ def load_clip_model(args, device):
         jit=False,
     )
     search_model.eval()
+    attach_visual_feature_helper(search_model)
     return search_model, eval_transform
+
+
+def attach_visual_feature_helper(search_model):
+    def encode_image_with_internal(self, pixel_values: torch.Tensor):
+        visual = self.visual
+        x = visual._embeds(pixel_values)
+        x = visual.transformer(x)
+        pooled, tokens = visual._pool(x)
+
+        internal_features = pooled
+        proj = getattr(visual, "proj", None)
+
+        if proj is not None:
+            projected_features = pooled @ proj
+        else:
+            projected_features = pooled
+
+        return internal_features, projected_features
+
+    search_model.encode_image_with_internal = types.MethodType(
+        encode_image_with_internal, search_model
+    )
+
 
 
 def create_image_id_index(file_list):
@@ -1220,22 +1245,10 @@ def extract_image_features(
 
             batched_image_input = batched_image_input.to(device, non_blocking=True)
             try:
-                # visual と proj を取り出す
-                visual = search_model.visual
-                proj = getattr(visual, "proj", None)
-
-                if proj is not None:
-                    # proj を一時的に外して「内部特徴」を取得
-                    visual.proj = None
-                    internal_features_tensor = visual(batched_image_input)  # (B, D_internal)
-                    visual.proj = proj
-
-                    # 内部特徴 → CLIP 埋め込み（768次元など）に射影
-                    image_features_tensor = internal_features_tensor @ proj        # (B, D_clip)
-                else:
-                    # proj が無い場合はそのまま
-                    internal_features_tensor = visual(batched_image_input)
-                    image_features_tensor = internal_features_tensor
+                (
+                    internal_features_tensor,
+                    image_features_tensor,
+                ) = search_model.encode_image_with_internal(batched_image_input)
 
 
                 denom = image_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
