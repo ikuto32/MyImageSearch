@@ -1125,30 +1125,37 @@ def load_image_meta_from_db(
     cur = con.cursor()
     temp_table = f"valid_id_{uuid.uuid4().hex}"
 
-    cur.execute(f"DROP TABLE IF EXISTS \"{temp_table}\"")
-    cur.execute(
-        f"CREATE TEMP TABLE \"{temp_table}\" (image_id TEXT PRIMARY KEY)"
-    )
-
-    for idx in tqdm.tqdm(range(0, len(id_list), loop_size)):
-        sub_list: list[str] = id_list[idx: idx + loop_size]
-        cur.executemany(
-            f"INSERT INTO \"{temp_table}\" (image_id) VALUES (?)",
-            ((image_id,) for image_id in sub_list),
+    try:
+        cur.execute(f"DROP TABLE IF EXISTS \"{temp_table}\"")
+        cur.execute(
+            f"CREATE TEMP TABLE \"{temp_table}\" (image_id TEXT PRIMARY KEY)"
         )
 
-    cur.execute(
-        f"""
-        SELECT
-            valid_id.image_id,
-            image_meta.meta
-        FROM
-            \"{temp_table}\" AS valid_id
-            LEFT JOIN image_meta ON valid_id.image_id = image_meta.image_id
-        """
-    )
+        cur.execute("BEGIN")
+        try:
+            for idx in tqdm.tqdm(range(0, len(id_list), loop_size)):
+                sub_list: list[str] = id_list[idx: idx + loop_size]
+                cur.executemany(
+                    f"INSERT INTO \"{temp_table}\" (image_id) VALUES (?)",
+                    ((image_id,) for image_id in sub_list),
+                )
+        except Exception:
+            con.rollback()
+            raise
+        else:
+            con.commit()
 
-    try:
+        cur.execute(
+            f"""
+            SELECT
+                valid_id.image_id,
+                image_meta.meta
+            FROM
+                \"{temp_table}\" AS valid_id
+                LEFT JOIN image_meta ON valid_id.image_id = image_meta.image_id
+            """
+        )
+
         while True:
             rows = cur.fetchmany(loop_size)
             if not rows:
