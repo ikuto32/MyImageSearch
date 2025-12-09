@@ -1319,6 +1319,9 @@ def extract_image_features(
                 )
 
                 params = []
+                time_stamp_ISO = datetime.datetime.now(
+                    datetime.timezone.utc
+                ).isoformat()
 
                 for i, (new_search_meta, image_index, aesthetic_score, pony_aesthetic_score, cluster_id, tag_res) in enumerate(
                     zip(
@@ -1341,7 +1344,6 @@ def extract_image_features(
                     image_index_int = int(image_index)
                     image_path = uncreated_image_paths[image_index_int]
                     image_id = uncreated_image_ids[image_index_int]
-                    time_stamp_ISO = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
                     params.append(
                         (
