@@ -34,7 +34,6 @@ import onnxruntime as rt
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 Image.MAX_IMAGE_PIXELS = 268_435_456
 
-
 # =========================
 # 共通ヘルパー
 # =========================
@@ -411,8 +410,12 @@ class Tagger:
         self.general_indexes = sep_tags[2]
         self.character_indexes = sep_tags[3]
 
-        providers = ["CUDAExecutionProvider"]
-        model = rt.InferenceSession(model_path, providers=providers)
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        so = rt.SessionOptions()
+        so.log_severity_level = 0
+        so.log_verbosity_level = 1
+        # so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+        model = rt.InferenceSession(model_path, providers=providers, sess_options=so)
         _, height, width, _ = model.get_inputs()[0].shape
         self.model_target_size = height
 
@@ -629,10 +632,14 @@ class Z3DTagger:
                 self.tags.append(
                     (row["name"].strip().replace("_", " "), row["category"])
                 )
-
+        so = rt.SessionOptions()
+        so.log_severity_level = 0
+        so.log_verbosity_level = 1
+        # so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
         self.session = rt.InferenceSession(
             model_path,
-            providers=["CUDAExecutionProvider"],
+            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            sess_options=so,
         )
 
     def _download_model(self, model_repo: str) -> tuple[str, str]:
