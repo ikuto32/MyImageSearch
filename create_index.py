@@ -1225,27 +1225,37 @@ def create_image_id_index(file_list):
     return image_id_to_path, path_to_image_id
 
 
+class ImageMetaFilterStats(typing.NamedTuple):
+    valid_meta_count: int
+    has_existing_metas: bool
+
+
 def filter_valid_image_meta(args, result, image_id_to_path):
-    search_meta_list = []
+    valid_meta_count = 0
+    has_existing_metas = False
     uncreated_image_paths = []
+    expected_bytes = args.search_model_out_dim * np.dtype(np.float32).itemsize
+
     for image_id, meta in tqdm.tqdm(result, total=len(image_id_to_path)):
         if meta is not None:
-            meta = np.squeeze(meta)
-            a = np.frombuffer(meta, dtype=np.float32)
-            if a.shape[0] == args.search_model_out_dim:
-                search_meta_list.append(a)
+            meta_view = memoryview(meta)
+            if meta_view.nbytes == expected_bytes:
+                valid_meta_count += 1
+                has_existing_metas = True
                 continue
 
         uncreated_image_paths.append(image_id_to_path[image_id])
-    return search_meta_list, uncreated_image_paths
+
+    return ImageMetaFilterStats(valid_meta_count, has_existing_metas), uncreated_image_paths
 
 
-def print_image_meta_stats(search_meta_list, uncreated_image_paths, max_len):
+def print_image_meta_stats(meta_stats, uncreated_image_paths, max_len):
+    valid_count = meta_stats.valid_meta_count
     print(
         f"uncreated images:{len(uncreated_image_paths)}/{max_len} ({len(uncreated_image_paths)/max_len*100.:.4f}%)"
     )
     print(
-        f"existing metas:{len(search_meta_list)}/{max_len} ({len(search_meta_list)/max_len*100.:.4f}%)"
+        f"existing metas:{valid_count}/{max_len} ({valid_count/max_len*100.:.4f}%)"
     )
 
 
@@ -1640,12 +1650,12 @@ def main():
     # データベースに問い合わせる
     result = load_image_meta_from_db(con, id_list=list(index_item_list.keys()), loop_size=10000)
 
-    search_meta_list, uncreated_image_paths = filter_valid_image_meta(args, result, index_item_list)
+    meta_stats, uncreated_image_paths = filter_valid_image_meta(args, result, index_item_list)
     uncreated_image_ids = [path_to_image_id[path] for path in uncreated_image_paths]
 
-    print_image_meta_stats(search_meta_list, uncreated_image_paths, len(index_item_list))
+    print_image_meta_stats(meta_stats, uncreated_image_paths, len(index_item_list))
 
-    del result, index_item_list, search_meta_list
+    del result, index_item_list, meta_stats
 
     dataset = None
     T = True
