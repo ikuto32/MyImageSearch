@@ -962,8 +962,10 @@ def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
-    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
+    # parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
+    # parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
+    parser.add_argument("--image_dir", help="dir", default="./images")
+    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
 
     parser.add_argument(
         "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_ranking100.pth"
@@ -1275,7 +1277,7 @@ def extract_image_features(
 
             batched_image_input = batched_image_input.to(device, non_blocking=True)
             try:
-                with torch.cuda.amp.autocast(enabled=device.type == "cuda"):
+                with torch.cuda.amp.autocast(enabled=device == "cuda"):
                     (
                         internal_features_tensor,
                         image_features_tensor,
