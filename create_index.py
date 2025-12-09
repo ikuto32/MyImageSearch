@@ -1283,6 +1283,10 @@ def extract_image_features(
 
                 denom = image_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
                 image_features_tensor = (image_features_tensor / denom).contiguous()
+                # Ensure aesthetic model input dtype matches the model parameters to avoid
+                # matmul dtype mismatch when autocast generates half-precision features.
+                aesthetic_dtype = next(aesthetic_model.parameters()).dtype
+                image_features_tensor = image_features_tensor.to(dtype=aesthetic_dtype)
                 aesthetic_scores = torch.sigmoid(
                     aesthetic_model(image_features_tensor)
                 ).squeeze(-1).cpu().numpy()  # (B,)
