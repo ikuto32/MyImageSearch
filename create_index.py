@@ -144,7 +144,8 @@ def prepare_tag_input(image: Image.Image, target_size: int) -> np.ndarray:
     padded_image.paste(resized_image, paste_pos)
 
     image_array = np.asarray(padded_image, dtype=np.float32)
-    image_array = image_array[:, :, ::-1]  # RGB → BGR
+    # Channel reversal introduces negative strides; copy to keep collate happy.
+    image_array = image_array[:, :, ::-1].copy()  # RGB → BGR
 
     return image_array
 
