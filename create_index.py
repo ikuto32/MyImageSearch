@@ -871,6 +871,19 @@ def create_search_model_meta_dir(args):
     return search_model_meta_dir
 
 
+def configure_torch_backends():
+    """Optimize CUDA/cuDNN backends for faster inference."""
+
+    if torch.backends.cudnn.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.allow_tf32 = True
+
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        if hasattr(torch, "set_float32_matmul_precision"):
+            torch.set_float32_matmul_precision("high")
+
+
 def get_device():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return device
@@ -1296,6 +1309,8 @@ def main():
 
     # 起動引数
     args = parse_arguments()
+
+    configure_torch_backends()
 
     # 作業フォルダの作成
     search_model_meta_dir: str = create_search_model_meta_dir(args)
