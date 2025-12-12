@@ -701,6 +701,17 @@ class ImageTaggingService:
         return out
 
 
+def get_aesthetic_model(path_to_model, clip_model="vit_l_14"):
+    """load the aethetic model"""
+    if clip_model == "vit_l_14":
+        m = Aesthetic_model()
+    else:
+        raise ValueError()
+    m.load_state_dict(torch.load(path_to_model))
+    m.eval()
+    return m
+
+
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
