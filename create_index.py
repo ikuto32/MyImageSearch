@@ -39,18 +39,23 @@ Image.MAX_IMAGE_PIXELS = 268_435_456
 # =========================
 
 def safe_collate(batch):
-    """Custom collate that also carries raw PIL images."""
+    """Custom collate that also bundles tagger preprocessed arrays."""
 
-    # None（壊れ/変換失敗）を除外
     batch = [b for b in batch if b is not None]
     if not batch:
-        return None  # 上位ループでcontinue
+        return None
 
     image_tensors = [b[0] for b in batch]
     indices = [b[1] for b in batch]
-    raw_images = [b[2] for b in batch]
+    wd_inputs = [b[2] for b in batch]
+    z3d_inputs = [b[3] for b in batch]
 
-    return default_collate(image_tensors), default_collate(indices), raw_images
+    return (
+        default_collate(image_tensors),
+        default_collate(indices),
+        default_collate(wd_inputs),
+        default_collate(z3d_inputs),
+    )
 
 
 AESTHETIC_REPO = "purplesmartai/aesthetic-classifier"
@@ -112,11 +117,50 @@ def mcut_threshold(probs: np.ndarray) -> float:
     return float(thresh)
 
 
+def prepare_tag_input(image: Image.Image, target_size: int) -> np.ndarray:
+    """
+    Tagging 共通の前処理を行う純関数.
+
+    RGB化 → 縦横比維持のリサイズ → 白背景へのパディング → BGR/float32 へ変換.
+    バッチ次元は付与しない (H, W, 3) を返す。
+    """
+
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+
+    width, height = image.size
+    max_dim = max(width, height)
+    scale = target_size / max_dim
+    new_size = (int(width * scale), int(height * scale))
+
+    resized_image = image.resize(new_size, Image.LANCZOS)
+
+    padded_image = Image.new("RGB", (target_size, target_size), (255, 255, 255))
+    paste_pos = (
+        (target_size - new_size[0]) // 2,
+        (target_size - new_size[1]) // 2,
+    )
+    padded_image.paste(resized_image, paste_pos)
+
+    image_array = np.asarray(padded_image, dtype=np.float32)
+    image_array = image_array[:, :, ::-1]  # RGB → BGR
+
+    return image_array
+
+
 class DirImageIterable(IterableDataset):
-    def __init__(self, images_dir: str, img_list, transform=None):
+    def __init__(
+        self,
+        images_dir: str,
+        img_list,
+        transform=None,
+        *,
+        wd_target_size: int,
+    ):
         self.images_dir = images_dir
         self.img_list = list(img_list)
         self.transform = transform
+        self.wd_target_size = wd_target_size
 
     def _open_rgb(self, path: str):
         try:
@@ -166,7 +210,12 @@ class DirImageIterable(IterableDataset):
                 if img is None:
                     continue
 
-                raw_image = img.copy()
+                try:
+                    wd_arr = prepare_tag_input(img, self.wd_target_size)
+                    z3d_arr = prepare_tag_input(img, 448)
+                except Exception as e:
+                    print(f"[DirImageIterable] tag preprocessing failed: {path} in {worker_id} -> {e}")
+                    continue
 
                 if self.transform is not None:
                     try:
@@ -175,7 +224,7 @@ class DirImageIterable(IterableDataset):
                         print(f"[DirImageIterable] transform failed: {path} in {worker_id} -> {e}")
                         continue
                 try:
-                    yield img, idx, raw_image
+                    yield img, idx, wd_arr, z3d_arr
                 except Exception as e:
                     print(f"[DirImageIterable] yield failed: {path} in {worker_id} -> {e}")
                     continue
@@ -422,73 +471,24 @@ class Tagger:
         self.last_loaded_repo = model_repo
         self.model = model
 
-    def _prepare_image(self, image: Image.Image) -> np.ndarray:
-        """wd-tagger 用の前処理."""
-        if self.model_target_size is None:
-            raise RuntimeError("Model not loaded. Call load_model() first.")
-
-        target_size = self.model_target_size
-
-        # Ensure the image is in RGB mode
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
-        # Resize and pad the image
-        image_shape = image.size  # (w, h)
-        max_dim = max(image_shape)
-        scale_factor = target_size / max_dim
-
-        new_size = tuple(int(dim * scale_factor) for dim in image_shape)
-        resized_image = image.resize(new_size, Image.LANCZOS)
-
-        # Create a white background
-        padded_image = Image.new("RGB", (target_size, target_size), (255, 255, 255))
-
-        # Paste the resized image onto the white background
-        paste_pos = (
-            (target_size - new_size[0]) // 2,
-            (target_size - new_size[1]) // 2,
-        )
-        padded_image.paste(resized_image, paste_pos)
-
-        # Convert to numpy array
-        image_array = np.asarray(padded_image, dtype=np.float32)
-
-        # Convert PIL-native RGB to BGR
-        image_array = image_array[:, :, ::-1]
-
-        return np.expand_dims(image_array, axis=0)
 
 
-    def _prepare_images_batch(self, images: list[Image.Image]) -> np.ndarray:
-        """
-        バッチ版: 画像リストを受け取って (N, H, W, 3) にまとめる
-        """
-        if self.model_target_size is None:
-            raise RuntimeError("Model not loaded. Call load_model() first.")
-
-        prepared = [self._prepare_image(img)[0] for img in images]
-
-        return np.stack(prepared, axis=0)  # (N, H, W, 3)
-
-
-    def predict(
+    def predict_batch(
         self,
-        image: Image.Image,
+        image_arrs: np.ndarray,
+        *,
         model_repo: str,
         general_thresh: float = 0.35,
         general_mcut_enabled: bool = False,
         character_thresh: float = 0.85,
         character_mcut_enabled: bool = False,
     ):
-        """画像 1 枚分のタグ推論."""
-        self.load_model(model_repo)
+        """前処理済み入力を受け取ってバッチ推論する."""
 
-        try:
-            image_arr = self._prepare_image(image)
-        except OSError as e:
-            print(f"Error: {e}")
-            return None, None, None, None
+        if image_arrs.size == 0:
+            return []
+
+        self.load_model(model_repo)
 
         assert self.model is not None
         assert self.tag_names is not None
@@ -498,73 +498,7 @@ class Tagger:
 
         input_name = self.model.get_inputs()[0].name
         label_name = self.model.get_outputs()[0].name
-        preds = self.model.run([label_name], {input_name: image_arr})[0]
-
-        labels = list(zip(self.tag_names, preds[0].astype(float)))
-
-        # First 4 labels are actually ratings: pick one with argmax
-        ratings_names = [labels[i] for i in self.rating_indexes]
-        rating = dict(ratings_names)
-
-        # Then we have general tags
-        general_names = [labels[i] for i in self.general_indexes]
-
-        if general_mcut_enabled:
-            general_probs = np.array([x[1] for x in general_names])
-            general_thresh = mcut_threshold(general_probs)
-
-        general_res = [x for x in general_names if x[1] > general_thresh]
-        general_res = dict(general_res)
-
-        # Characters
-        character_names = [labels[i] for i in self.character_indexes]
-
-        if character_mcut_enabled:
-            character_probs = np.array([x[1] for x in character_names])
-            character_thresh = mcut_threshold(character_probs)
-            character_thresh = max(0.15, character_thresh)
-
-        character_res = [x for x in character_names if x[1] > character_thresh]
-        character_res = dict(character_res)
-
-        sorted_general_strings = sorted(
-            general_res.items(),
-            key=lambda x: x[1],
-            reverse=True,
-        )
-        sorted_general_strings = [x[0] for x in sorted_general_strings]
-        sorted_general_strings = ", ".join(sorted_general_strings).replace(
-            "(", "\\("
-        ).replace(")", "\\)")
-
-        return sorted_general_strings, rating, character_res, general_res
-
-
-    def predict_batch(
-        self,
-        images: list[Image.Image],
-        model_repo: str,
-        general_thresh: float = 0.35,
-        general_mcut_enabled: bool = False,
-        character_thresh: float = 0.85,
-        character_mcut_enabled: bool = False,
-    ) -> list[tuple[str, dict, dict, dict]]:
-        """
-        バッチ版:
-        return は predict と同じタプルを N 個並べたリスト
-        """
-        self.load_model(model_repo)
-        image_arr = self._prepare_images_batch(images)  # (N,H,W,3)
-
-        assert self.model is not None
-        assert self.tag_names is not None
-        assert self.rating_indexes is not None
-        assert self.general_indexes is not None
-        assert self.character_indexes is not None
-
-        input_name = self.model.get_inputs()[0].name
-        label_name = self.model.get_outputs()[0].name
-        preds = self.model.run([label_name], {input_name: image_arr})[0]  # (N, num_tags)
+        preds = self.model.run([label_name], {input_name: image_arrs})[0]
 
         results = []
         for p in preds:
@@ -597,8 +531,8 @@ class Tagger:
             )
             sorted_general_strings = [x[0] for x in sorted_general_strings]
             sorted_general_strings = ", ".join(sorted_general_strings).replace(
-                "(", "\\("
-            ).replace(")", "\\)")
+                "(", "\("
+            ).replace(")", "\)")
 
             results.append(
                 (sorted_general_strings, rating, character_res, general_res)
@@ -653,111 +587,22 @@ class Z3DTagger:
         )
         return csv_path, model_path
 
-    @staticmethod
-    def _prepare_image(image: Image.Image, target_size: int) -> np.ndarray:
-        """Z3D 用の前処理."""
-        # Pad image to square
-        image_shape = image.size  # (w, h)
-        max_dim = max(image_shape)
-        pad_left = (max_dim - image_shape[0]) // 2
-        pad_top = (max_dim - image_shape[1]) // 2
 
-        padded_image = Image.new("RGB", (max_dim, max_dim), (255, 255, 255))
-        padded_image.paste(image, (pad_left, pad_top))
+    def predict_batch(self, image_arrs: np.ndarray):
+        """前処理済み配列からタグを推論."""
 
-        # Resize
-        if max_dim != target_size:
-            padded_image = padded_image.resize((target_size, target_size), Image.BICUBIC)
-
-        # Convert to numpy array
-        image_array = np.asarray(padded_image, dtype=np.float32)
-
-        # Convert PIL-native RGB to BGR
-        image_array = image_array[:, :, ::-1]
-
-        return np.expand_dims(image_array, axis=0)
-
-
-    @staticmethod
-    def _prepare_images_batch(images: list[Image.Image], target_size: int) -> np.ndarray:
-        arrs = []
-        for image in images:
-            image_shape = image.size  # (w, h)
-            max_dim = max(image_shape)
-            pad_left = (max_dim - image_shape[0]) // 2
-            pad_top = (max_dim - image_shape[1]) // 2
-
-            padded_image = Image.new("RGB", (max_dim, max_dim), (255, 255, 255))
-            padded_image.paste(image, (pad_left, pad_top))
-
-            if max_dim != target_size:
-                padded_image = padded_image.resize((target_size, target_size), Image.BICUBIC)
-
-            image_array = np.asarray(padded_image, dtype=np.float32)
-            image_array = image_array[:, :, ::-1]  # RGB→BGR
-            arrs.append(image_array)
-
-        return np.stack(arrs, axis=0)  # (N, H, W, 3)
-
-
-    def predict(self, image: Image.Image):
-        """画像 1 枚分の Z3D 推論."""
-        image_array = self._prepare_image(image, 448)
-        input_name = "input_1:0"
-        output_name = "predictions_sigmoid"
-
-        result = self.session.run([output_name], {input_name: image_array})
-        result = result[0][0]
-
-        all_tags = {
-            self.tags[i][0]: float(result[i])
-            for i in range(len(result))
-            if float(result[i]) > self.threshold
-            and self.tags[i][1] in ["0", "3", "5"]
-        }
-
-        character_tags = {
-            self.tags[i][0]: float(result[i])
-            for i in range(len(result))
-            if float(result[i]) > self.threshold
-            and self.tags[i][1] == "4"
-        }
-        return all_tags, character_tags
-
-
-    def predict_batch(self, images: list[Image.Image]):
-        """
-        バッチ版:
-        - 画像はまとめて前処理する
-        - ただし ONNX モデルのバッチ次元が 1 固定なので、
-          実際の推論は 1 枚ずつループで session.run する
-        return: list[(all_tags_dict, character_tags_dict)]
-        """
-        if not images:
+        if image_arrs.size == 0:
             return []
 
         input_name = self.session.get_inputs()[0].name
-        input_shape = self.session.get_inputs()[0].shape  # 例: [1, 448, 448, 3] など
-        # バッチ次元（0番目）が 1 になっているはず
+        input_shape = self.session.get_inputs()[0].shape
         expected_batch = input_shape[0]
+        output_name = "predictions_sigmoid"
 
         batch_results = []
+        image_arrs = image_arrs.astype(np.float32, copy=False)
 
-        # 1枚ずつ処理（擬似バッチ）
-        for img in images:
-            # 単体前処理と同じ処理を流用
-            arr = self._prepare_image(img, 448)  # shape: (1, H, W, 3)
-
-            # 念のため shape チェック
-            if isinstance(expected_batch, int) and expected_batch != 1:
-                # もしここに来るならモデル側の仕様が想定外
-                raise RuntimeError(
-                    f"Z3D model batch dimension is {expected_batch}, expected 1."
-                )
-
-            output_name = "predictions_sigmoid"
-            res = self.session.run([output_name], {input_name: arr})[0][0]  # (num_tags,)
-
+        def _to_tags(res: np.ndarray):
             all_tags = {
                 self.tags[i][0]: float(res[i])
                 for i in range(len(res))
@@ -768,19 +613,29 @@ class Z3DTagger:
                 for i in range(len(res))
                 if float(res[i]) > self.threshold and self.tags[i][1] == "4"
             }
-            batch_results.append((all_tags, character_tags))
+            return all_tags, character_tags
+
+        if isinstance(expected_batch, int) and expected_batch == 1:
+            for arr in image_arrs:
+                arr_in = np.expand_dims(arr, axis=0)
+                res = self.session.run([output_name], {input_name: arr_in})[0][0]
+                batch_results.append(_to_tags(res))
+        else:
+            res_batch = self.session.run([output_name], {input_name: image_arrs})[0]
+            for res in res_batch:
+                batch_results.append(_to_tags(res))
 
         return batch_results
-
 
 # =========================
 # 高レベルのサービスクラス
 # =========================
 
+
 class ImageTaggingService:
     """
     ・2 つの Tagger（wd + Z3D）をまとめて扱う
-    ・1 枚の画像 or フォルダ全体を処理する
+    ・前処理済みバッチ入力を受け取ってタグ付けする
     """
 
     def __init__(
@@ -803,220 +658,46 @@ class ImageTaggingService:
             threshold=z3d_threshold,
         )
 
-    def tag_image(self, image: Image.Image) -> dict:
-        """PIL 画像 1 枚をタグ付けして dict を返す."""
+    def ensure_wd_model_loaded(self) -> int:
+        self.wd_tagger.load_model(self.swin_repo)
+        if self.wd_tagger.model_target_size is None:
+            raise RuntimeError("WD tagger model size is not available")
+        return self.wd_tagger.model_target_size
 
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
-        # wd-swinv2
-        general_tags, rating, character_tags, all_general_tags = \
-            self.wd_tagger.predict(
-                image,
-                model_repo=self.swin_repo,
-                general_thresh=self.general_thresh,
-                general_mcut_enabled=False,
-                character_thresh=self.character_thresh,
-                character_mcut_enabled=False,
-            )
-
-        # Z3D
-        all_general_tags_z3d, character_tags_z3d = self.z3d_tagger.predict(image)
-
-        # 結合
-        full_character_tags = set(character_tags.keys()) | set(character_tags_z3d.keys())
-        full_general_tags = set(all_general_tags.keys()) | set(all_general_tags_z3d.keys())
-
-        tags: list[str] = []
-        tags.extend(list(full_general_tags))
-
-        for tag in full_character_tags:
-            tags.append(f"character:{tag}")
-
-        top_rating = max(rating.items(), key=lambda x: x[1])
-
-        return {"rating": top_rating[0], "tags": tags}
-
-
-    def tag_image_pil(self, image: Image.Image) -> dict:
-        """PIL 画像を直接受ける単体版（ヘルパー）"""
-        return self.tag_image(image)
-
-
-    def tag_images_batch(self, images: list[Image.Image]) -> list[dict]:
-        """
-        バッチ版: PIL 画像のリストを受け取り、各画像について tag_image と同じ dict を返す
-        """
-
-        processed_images: list[Image.Image | None] = []
-        for im in images:
-            if im is None:
-                processed_images.append(None)
-                continue
-            processed_images.append(im.convert("RGB"))
-
-        valid_images: list[Image.Image] = []
-        valid_indices: list[int] = []
-        for i, im in enumerate(processed_images):
-            if im is None:
-                continue
-            valid_images.append(im)
-            valid_indices.append(i)
-
-        if not valid_images:
-            return [{"rating": "", "tags": []} for _ in images]
+    def tag_batch(self, wd_batch: np.ndarray, z3d_batch: np.ndarray) -> list[dict]:
+        if wd_batch.size == 0:
+            return []
 
         wd_results = self.wd_tagger.predict_batch(
-            valid_images,
+            wd_batch,
             model_repo=self.swin_repo,
             general_thresh=self.general_thresh,
             general_mcut_enabled=False,
             character_thresh=self.character_thresh,
             character_mcut_enabled=False,
         )
-        z3d_results = self.z3d_tagger.predict_batch(valid_images)
+        z3d_results = self.z3d_tagger.predict_batch(z3d_batch)
 
-        out: list[dict | None] = [None for _ in images]
-        for local_idx, original_idx in enumerate(valid_indices):
-            general_tags, rating, character_tags, all_general_tags = wd_results[local_idx]
-            all_general_tags_z3d, character_tags_z3d = z3d_results[local_idx]
+        out: list[dict] = []
+        for wd_res, z3d_res in zip(wd_results, z3d_results):
+            sorted_general_strings, rating, character_tags, all_general_tags = wd_res
+            all_general_tags_z3d, character_tags_z3d = z3d_res
 
-            full_character_tags = set(character_tags.keys()) | set(character_tags_z3d.keys())
-            full_general_tags = set(all_general_tags.keys()) | set(all_general_tags_z3d.keys())
+            full_character_tags = set(character_tags.keys()) | set(
+                character_tags_z3d.keys()
+            )
+            full_general_tags = set(all_general_tags.keys()) | set(
+                all_general_tags_z3d.keys()
+            )
 
             tags: list[str] = list(full_general_tags)
             for tag in full_character_tags:
                 tags.append(f"character:{tag}")
 
-            top_rating = max(rating.items(), key=lambda x: x[1])
-            out[original_idx] = {"rating": top_rating[0], "tags": tags}
-
-        # None だったものを空の結果で埋める
-        for i, res in enumerate(out):
-            if res is None:
-                out[i] = {"rating": "", "tags": []}
+            top_rating = max(rating.items(), key=lambda x: x[1]) if rating else ("", 0)
+            out.append({"rating": top_rating[0], "tags": tags})
 
         return out
-
-
-    def process_folder(
-        self,
-        image_folder: str,
-        image_extensions: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".webp", ".bmp"),
-        force_tag_regen: bool = False,
-    ):
-        """
-        フォルダ内の画像を一括タグ付けし、
-        `xxx.tags.json` を出力する。
-        """
-        image_folder = str(image_folder)
-
-        for filename in os.listdir(image_folder):
-            if not filename.lower().endswith(image_extensions):
-                continue
-
-            image_path = os.path.join(image_folder, filename)
-            name, _ = os.path.splitext(filename)
-            tags_file = os.path.join(image_folder, f"{name}.tags.json")
-
-            if force_tag_regen or not os.path.exists(tags_file):
-                with Image.open(image_path) as image:
-                    tags = self.tag_image(image.convert("RGB"))
-                with open(tags_file, "w", encoding="utf-8") as f:
-                    json.dump(tags, f, ensure_ascii=False, indent=2)
-                print(f"Created tags file for: {filename}")
-            else:
-                print(f"Caption tags exists for: {filename}")
-
-
-def get_aesthetic_model(path_to_model, clip_model="vit_l_14"):
-    """load the aethetic model"""
-    if clip_model == "vit_l_14":
-        m = Aesthetic_model()
-    else:
-        raise ValueError()
-    m.load_state_dict(torch.load(path_to_model))
-    m.eval()
-    return m
-
-
-def load_sidecar_tags(image_dir: str, relative_image_path: str) -> dict[str, typing.Any]:
-    """Load precomputed tags for an image if a sidecar file exists."""
-
-    default = {"rating": "", "tags": []}
-    stem, _ = os.path.splitext(relative_image_path)
-    sidecar_path = os.path.join(image_dir, f"{stem}.tags.json")
-
-    if not os.path.exists(sidecar_path):
-        return default
-
-    try:
-        with open(sidecar_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as exc:  # pragma: no cover - file IO/format issues
-        print(f"Failed to load tags from {sidecar_path}: {exc}")
-        return default
-
-    rating = data.get("rating", "")
-    tags = data.get("tags", [])
-    if not isinstance(tags, list):
-        tags = []
-
-    return {"rating": rating, "tags": [str(tag) for tag in tags]}
-
-
-def parse_arguments():
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser()
-
-    # parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
-    # parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
-    parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
-
-    parser.add_argument(
-        "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_ranking100.pth"
-    )
-    parser.add_argument(
-        "--search_model_name", help="model_name", default="ViT-L-14"
-    )
-    parser.add_argument(
-        "--search_model_pretrained", help="pretrained", default="openai"
-    )
-    parser.add_argument(
-        "--search_model_out_dim", help="search_model_out_dim", type=int, default=768
-    )
-
-    parser.add_argument(
-        "--aesthetic_checkpoint", help="aesthetic_checkpoint", default=AESTHETIC_REPO
-    )
-
-    parser.add_argument(
-        "--style_checkpoint_model", help="style_checkpoint_model", default=STYLE_REPO
-    )
-    parser.add_argument(
-        "--style_checkpoint_centers", help="style_checkpoint_centers", default=STYLE_REPO
-    )
-    parser.add_argument("--batch_size", help="batch size", type=int, default=32)
-    parser.add_argument("--num_workers", help="data loader workers", type=int, default=8)
-    parser.add_argument("--nlist", help="centroid size", type=int, default=64)
-    parser.add_argument("--M", help="M", type=int, default=768)
-    parser.add_argument("--bits_per_code", help="bits_per_code", type=int, default=8)
-    parser.add_argument(
-        "--metas_faiss_index_file_name",
-        help="metas_faiss_index_file_name",
-        default="metafiles.index",
-    )
-    parser.add_argument(
-        "--use-existing-tags",
-        action="store_true",
-        help="Skip tagging and read precomputed *.tags.json files when available",
-    )
-
-    return parser.parse_args()
-
-
-_PARALLEL = 64
 
 
 def get_default_image_extensions() -> list[str]:
@@ -1029,6 +710,7 @@ def get_default_image_extensions() -> list[str]:
     # Keep the ordering stable for deterministic behavior when printing or
     # iterating the extensions list.
     return sorted(Image.registered_extensions().keys())
+
 
 def get_image_list_from_dir(dir_path: str | os.PathLike, exts: typing.Sequence[str]) -> list[str]:
     """
@@ -1297,7 +979,12 @@ def extract_image_features(
             if batch is None:
                 continue
 
-            batched_image_input, batched_image_index, batched_raw_images = batch  # (B, C, H, W), (B,), (B,)
+            (
+                batched_image_input,
+                batched_image_index,
+                batched_wd_inputs,
+                batched_z3d_inputs,
+            ) = batch  # (B, C, H, W), (B,), (B, H, H, 3), (B, 448, 448, 3)
 
             batched_image_input = batched_image_input.to(device, non_blocking=True)
             try:
@@ -1332,8 +1019,19 @@ def extract_image_features(
                     ]
                 else:
                     assert tagging_service is not None
-                    tagging_results = tagging_service.tag_images_batch(
-                        list(batched_raw_images)
+                    wd_batch = (
+                        batched_wd_inputs.cpu().numpy()
+                        if isinstance(batched_wd_inputs, torch.Tensor)
+                        else np.asarray(batched_wd_inputs)
+                    )
+                    z3d_batch = (
+                        batched_z3d_inputs.cpu().numpy()
+                        if isinstance(batched_z3d_inputs, torch.Tensor)
+                        else np.asarray(batched_z3d_inputs)
+                    )
+                    tagging_results = tagging_service.tag_batch(
+                        wd_batch,
+                        z3d_batch,
                     )  # list[dict], len=B
 
 
@@ -1658,7 +1356,12 @@ def main():
         checkpoint_model=style_checkpoint_model,
         checkpoint_centers=style_checkpoint_centers,
     )
-    tagging_service = None if args.use_existing_tags else ImageTaggingService(hf_token=None)
+    if args.use_existing_tags:
+        tagging_service = None
+        wd_target_size = 448  # タグ付けを行わない場合でも前処理の形を維持
+    else:
+        tagging_service = ImageTaggingService(hf_token=None)
+        wd_target_size = tagging_service.ensure_wd_model_loaded()
 
     index_item_list, path_to_image_id = create_image_id_index(index_item_list)
 
@@ -1688,7 +1391,7 @@ def main():
             collate_fn=safe_collate,
         )
         if num_workers > 0:
-            dataloader_kwargs["prefetch_factor"] = 16  # default=2
+            dataloader_kwargs["prefetch_factor"] = 16  # default=2; lower if tag arrays increase RAM usage
 
         while T:
             target_paths = uncreated_image_paths[i * args.batch_size :]
@@ -1700,6 +1403,7 @@ def main():
                 args.image_dir,
                 target_paths,
                 transform=eval_transform,
+                wd_target_size=wd_target_size,
             )
             loader = DataLoader(
                 dataset,
