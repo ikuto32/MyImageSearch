@@ -532,8 +532,8 @@ class Tagger:
             )
             sorted_general_strings = [x[0] for x in sorted_general_strings]
             sorted_general_strings = ", ".join(sorted_general_strings).replace(
-                "(", "\("
-            ).replace(")", "\)")
+                "(", r"\("
+            ).replace(")", r"\)")
 
             results.append(
                 (sorted_general_strings, rating, character_res, general_res)
