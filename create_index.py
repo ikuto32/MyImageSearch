@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import concurrent.futures
 import datetime
+import gc
 import hashlib
 import json
 import os
@@ -412,8 +413,8 @@ class Tagger:
 
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
         so = rt.SessionOptions()
-        so.log_severity_level = 0
-        so.log_verbosity_level = 1
+        so.log_severity_level = 2
+        so.log_verbosity_level = 0
         # so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
         model = rt.InferenceSession(model_path, providers=providers, sess_options=so)
         _, height, width, _ = model.get_inputs()[0].shape
@@ -633,8 +634,8 @@ class Z3DTagger:
                     (row["name"].strip().replace("_", " "), row["category"])
                 )
         so = rt.SessionOptions()
-        so.log_severity_level = 0
-        so.log_verbosity_level = 1
+        so.log_severity_level = 2
+        so.log_verbosity_level = 0
         # so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
         self.session = rt.InferenceSession(
             model_path,
@@ -969,10 +970,10 @@ def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
 
-    # parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
-    # parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
-    parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
+    parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
+    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
+    # parser.add_argument("--image_dir", help="dir", default="./images")
+    # parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
 
     parser.add_argument(
         "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_ranking100.pth"
@@ -1679,20 +1680,30 @@ def main():
     if not uncreated_image_paths:
         print("No new images to process.")
     else:
-        num_workers = max(0, args.num_workers)
-        dataloader_kwargs = dict(
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True,
-            collate_fn=safe_collate,
-        )
-        if num_workers > 0:
-            dataloader_kwargs["prefetch_factor"] = 16  # default=2
-
         while T:
-            target_paths = uncreated_image_paths[i * args.batch_size :]
-            target_ids = uncreated_image_ids[i * args.batch_size :]
+            if i < 1:
+                num_workers = max(0, args.num_workers)
+                dataloader_kwargs = dict(
+                    batch_size=args.batch_size,
+                    shuffle=False,
+                    num_workers=num_workers,
+                    pin_memory=True,
+                    collate_fn=safe_collate,
+                )
+                if num_workers > 0:
+                    dataloader_kwargs["prefetch_factor"] = 16  # default=2
+            else:
+                num_workers = max(0, args.num_workers-2*i)
+                dataloader_kwargs = dict(
+                    batch_size=args.batch_size,
+                    shuffle=False,
+                    num_workers=num_workers,
+                    pin_memory=False,
+                    collate_fn=safe_collate,
+                )
+
+            target_paths = uncreated_image_paths[i * args.batch_size: ]
+            target_ids = uncreated_image_ids[i * args.batch_size: ]
             if not target_paths:
                 break
 
@@ -1725,6 +1736,8 @@ def main():
             except Exception:
                 traceback.print_exc()
                 i += 1
+                torch.cuda.empty_cache()
+                gc.collect()
                 continue
 
     con.commit()
