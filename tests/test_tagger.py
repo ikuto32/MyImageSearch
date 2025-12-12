@@ -150,34 +150,43 @@ def _install_dummy_modules():
 
 _install_dummy_modules()
 
-from create_index import Tagger
+from create_index import prepare_tag_input
 
 
-class TaggerPreprocessingTests(unittest.TestCase):
-    def test_batch_preparation_matches_single_images(self):
-        tagger = Tagger(hf_token=None)
-        tagger.model_target_size = 16
-
+class TagPreprocessingTests(unittest.TestCase):
+    def test_prepare_tag_input_consistency(self):
+        target_size = 16
         images = [
             Image.new("RGB", (8, 12), color="red"),
             Image.new("RGB", (20, 10), color="blue"),
         ]
 
-        single_prepared = [tagger._prepare_image(img)[0] for img in images]
-        batch_prepared = tagger._prepare_images_batch(images)
+        prepared = [prepare_tag_input(img, target_size) for img in images]
+        stacked = np.stack(prepared)
 
         self.assertEqual(
-            batch_prepared.shape,
+            stacked.shape,
             (
                 len(images),
-                tagger.model_target_size,
-                tagger.model_target_size,
+                target_size,
+                target_size,
                 3,
             ),
         )
-
-        for single, batch in zip(single_prepared, batch_prepared):
+        for single, batch in zip(prepared, stacked):
             np.testing.assert_array_equal(single, batch)
+
+    def test_prepare_tag_input_bgr_and_padding(self):
+        target_size = 8
+        image = Image.new("RGB", (4, 6), color=(10, 20, 30))
+
+        arr = prepare_tag_input(image, target_size)
+
+        self.assertEqual(arr.shape, (target_size, target_size, 3))
+        self.assertEqual(arr.dtype, np.float32)
+        center = arr[target_size // 2, target_size // 2]
+        np.testing.assert_array_equal(center, np.array([30, 20, 10], dtype=np.float32))
+        np.testing.assert_array_equal(arr[0, 0], np.array([255.0, 255.0, 255.0]))
 
 
 if __name__ == "__main__":
