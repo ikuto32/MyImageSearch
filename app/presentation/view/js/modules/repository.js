@@ -50,6 +50,11 @@ export async function getItem(itemId) {
     return axios.get(`/image_item/${itemId}`).then(res => res.data)
 }
 
+export async function getImageMeta(modelName, pretrained, itemId) {
+
+    return axios.get(`/image_meta/${modelName}/${pretrained}/${itemId}`).then(res => res.data)
+}
+
 
 
 /**

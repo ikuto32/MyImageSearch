@@ -49,7 +49,17 @@ const app = Vue.createApp({
             /**
              * @type {{[itemId: string]: boolean}}
              */
-            selectedItemId:{}
+            selectedItemId:{},
+
+            /**
+             * @type {{[itemId: string]: {style_cluster: string, rating: string}}}
+             */
+            imageMeta:{},
+
+            /**
+             * @type {{[itemId: string]: boolean}}
+             */
+            dialogStates:{},
         }
     },
     mounted() {
@@ -298,6 +308,30 @@ const app = Vue.createApp({
 
             this.setBuffer(repository.searchTags(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
             .then(this.initImage);
+        },
+
+        openDialog(item) {
+            this.setDialogState(item.id, true)
+            this.fetchImageMeta(item)
+        },
+
+        setDialogState(itemId, value) {
+            this.dialogStates = { ...this.dialogStates, [itemId]: value }
+        },
+
+        fetchImageMeta(item) {
+            if (this.imageMeta[item.id]) {
+                return
+            }
+
+            repository.getImageMeta(this.model_name, this.pretrained, item.id)
+            .then(meta => {
+                this.imageMeta = { ...this.imageMeta, [item.id]: meta }
+            })
+        },
+
+        getImageMeta(itemId) {
+            return this.imageMeta[itemId] || { style_cluster: "", rating: "" }
         },
 
         onSelectItem(event) {
