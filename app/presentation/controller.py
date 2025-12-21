@@ -299,6 +299,27 @@ def search_tags():
     result = usecase.search_tags(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
     return from_result_to_json(result)
 
+
+@app.route("/search/style_cluster", methods=["POST"])
+def search_style_cluster():
+    """style_cluster から検索して、結果を返す"""
+
+    json_obj = json.loads(request.data).get("params")
+
+    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+
+    text: str = json_obj.get("text")
+    is_regexp: bool = (json_obj.get("is_regexp") == "true")
+
+    aesthetic_quality_beta: float = json_obj["aesthetic_quality_beta"]
+
+    aesthetic_quality_range = json_obj["aesthetic_quality_range"]
+
+    aesthetic_model_name = json_obj["aesthetic_model_name"]
+
+    result = usecase.search_style_cluster(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
+    return from_result_to_json(result)
+
 @app.route("/download_images_zip", methods=["POST"])
 def download_images_zip():
     json_obj = request.get_json().get("params")
