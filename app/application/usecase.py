@@ -482,6 +482,42 @@ class Usecase:
         )
         return ResultImageItemList(scores, "")
 
+    def search_style_cluster(
+        self,
+        model_id: ModelId,
+        text: UploadText,
+        is_regexp: bool,
+        aesthetic_quality_beta: float,
+        aesthetic_quality_range_min: float,
+        aesthetic_quality_range_max: float,
+        aesthetic_model_name: str,
+    ) -> ResultImageItemList:
+        """style_cluster を文字列検索する"""
+
+        scores: list[ResultImageItem] = []
+        style_cluster_map = self._accessor.load_style_cluster_list(model_id)
+
+        for image_item in tqdm.tqdm(self._accessor.load_index_item_list(model_id)):
+            style_cluster = style_cluster_map.get(image_item.id, "")
+
+            if is_regexp:
+                has_match: bool = re.search(text.text, style_cluster) is not None
+            else:
+                has_match = text.text in style_cluster
+
+            if has_match:
+                scores.append(ResultImageItem(image_item, Score(1.0)))
+
+        scores = self.aesthetic_quality_eval(
+            model_id,
+            scores,
+            aesthetic_quality_beta,
+            aesthetic_quality_range_min,
+            aesthetic_quality_range_max,
+            aesthetic_model_name,
+        )
+        return ResultImageItemList(scores, "")
+
     def get_images_zip(self, id_list):
         print("strat:get_images_zip")
         images_with_names = []

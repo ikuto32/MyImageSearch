@@ -125,3 +125,24 @@ class LocalAccessor(Accessor):
             "style_cluster": style_cluster or "",
             "rating": rating or "",
         }
+
+    @cache
+    def load_style_cluster_list(self, model_id: ModelId) -> Dict[ImageId, str]:
+        con: sqlite3.Connection = sqlite3.connect(
+            f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db",
+            isolation_level="DEFERRED",
+        )
+        result: pd.DataFrame = pd.read_sql_query(
+            """
+            SELECT image_id, style_cluster FROM image_meta
+            """,
+            con,
+        )
+        con.close()
+
+        return {
+            ImageId(id=str(image_id)): (style_cluster or "")
+            for image_id, style_cluster in tqdm.tqdm(
+                zip(result["image_id"], result["style_cluster"])
+            )
+        }
