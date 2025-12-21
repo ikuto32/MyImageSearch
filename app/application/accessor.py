@@ -46,3 +46,9 @@ class Accessor():
         """画像メタ情報を取得する"""
 
         pass
+
+    @abstractmethod
+    def load_style_cluster_list(self, model_id: ModelId) -> dict[ImageId, str]:
+        """style_cluster 情報を取得する"""
+
+        pass

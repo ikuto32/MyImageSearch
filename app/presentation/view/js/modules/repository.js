@@ -246,6 +246,34 @@ export async function searchTags(modelName, pretrained, itemId_list, is_regexp, 
 }
 
 /**
+ * style_cluster で検索する
+ *
+ * @param {string} modelName
+ * @param {string} pretrained
+ * @param {string} itemId_list
+ * @param {boolean} is_regexp
+ *
+ * @return {Promise<ResultItem[]>}
+ */
+export async function searchStyleCluster(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name) {
+
+    let payload = {
+
+        params:{
+            model_name: modelName,
+            pretrained: pretrained,
+            text : itemId_list,
+            is_regexp : is_regexp.toString(),
+            aesthetic_quality_beta: aesthetic_quality_beta,
+            aesthetic_quality_range: aesthetic_quality_range,
+            aesthetic_model_name: aesthetic_model_name
+        }
+    }
+
+    return axios.post("/search/style_cluster", payload).then(res => res.data)
+}
+
+/**
  * アップロードされた画像で検索する
  *
  * @param {string} modelName

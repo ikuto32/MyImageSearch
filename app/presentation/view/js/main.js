@@ -310,6 +310,13 @@ const app = Vue.createApp({
             .then(this.initImage);
         },
 
+        // style_cluster から検索するボタンの動作
+        styleClusterSearchButton() {
+
+            this.setBuffer(repository.searchStyleCluster(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
+            .then(this.initImage);
+        },
+
         openDialog(item) {
             this.setDialogState(item.id, true)
             this.fetchImageMeta(item)
