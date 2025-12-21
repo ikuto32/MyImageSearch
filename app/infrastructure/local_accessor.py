@@ -3,6 +3,8 @@ import sqlite3
 from typing import Any, Dict, List
 
 import pathlib
+import sqlite3
+from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
@@ -101,3 +103,25 @@ class LocalAccessor(Accessor):
         }
         print("end:load_aesthetic_quality_list")
         return aesthetic_quality_item
+
+    def load_image_meta_info(self, model_id: ModelId, image_id: ImageId) -> dict[str, str]:
+        con: sqlite3.Connection = sqlite3.connect(
+            f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db",
+            isolation_level="DEFERRED",
+        )
+        cur = con.cursor()
+        cur.execute(
+            "SELECT style_cluster, rating FROM image_meta WHERE image_id = ?",
+            (image_id.id,),
+        )
+        row = cur.fetchone()
+        con.close()
+
+        if row is None:
+            return {"style_cluster": "", "rating": ""}
+
+        style_cluster, rating = row
+        return {
+            "style_cluster": style_cluster or "",
+            "rating": rating or "",
+        }
