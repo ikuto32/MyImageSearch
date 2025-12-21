@@ -109,23 +109,27 @@
                             :data-selected="selectedItemId[item.id]"
                             >
                                 <v-img :src="item.img_small" :title="item.img_name" height="200" transition="false" v-show="true">
-                                    <v-btn icon>
+                                    <v-btn icon @click.stop="openDialog(item)">
                                         <v-icon icon="mdi-arrow-expand-all" color="info"></v-icon>
-                                        <v-dialog
-                                            activator="parent"
-                                            width="auto"
-                                        >
-                                            <v-card>
-                                                <v-img :src="item.img_original" :title="item.img_name" width="90vw" height="85vh"></v-img>
-                                                <v-card-title>
-                                                    <span class="meta">{{ item.img_name }}</span>
-                                                    <a :href="item.img_original" :download="item.img_name.split('\\').pop()">
-                                                        <v-icon icon="mdi-download" color="info"></v-icon>
-                                                    </a>
-                                                </v-card-title>
-                                            </v-card>
-                                        </v-dialog>
                                     </v-btn>
+                                    <v-dialog
+                                        v-model="dialogStates[item.id]"
+                                        width="auto"
+                                    >
+                                        <v-card>
+                                            <v-img :src="item.img_original" :title="item.img_name" width="90vw" height="85vh"></v-img>
+                                            <v-card-title>
+                                                <span class="meta">{{ item.img_name }}</span>
+                                                <a :href="item.img_original" :download="item.img_name.split('\\').pop()">
+                                                    <v-icon icon="mdi-download" color="info"></v-icon>
+                                                </a>
+                                            </v-card-title>
+                                            <v-card-text class="d-flex flex-column gap-2">
+                                                <span class="meta">style_cluster: {{ getImageMeta(item.id).style_cluster || '---' }}</span>
+                                                <span class="meta">rating: {{ getImageMeta(item.id).rating || '---' }}</span>
+                                            </v-card-text>
+                                        </v-card>
+                                    </v-dialog>
                                 </v-img>
                                 <span class="meta" :style="{width: 1 + 'fr'}">{{ item.img_name }}</span>
                                 <span class="tags" :style="{width: 1 + 'fr'}">{{ item.tags }}</span>

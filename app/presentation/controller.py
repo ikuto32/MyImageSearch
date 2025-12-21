@@ -93,6 +93,14 @@ def get_image_item(id: str):
     return from_image_item_to_json(usecase.get_image_item(ImageId(id)))
 
 
+@app.route("/image_meta/<model_name>/<pretrained>/<id>")
+def get_image_meta(model_name: str, pretrained: str, id: str):
+    """画像メタ情報を返す"""
+
+    model_id: ModelId = ModelId(model_name, pretrained)
+    return json.dumps(usecase.get_image_meta_info(model_id, ImageId(id)))
+
+
 @app.route("/image/<id>/small")
 def get_small_image(id: str):
     """画像IDから縮小画像を返す"""
