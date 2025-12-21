@@ -60,6 +60,11 @@ class Usecase:
 
         return self._repository.load_small_image(id)
 
+    def get_image_meta_info(self, model_id: ModelId, image_id: ImageId) -> dict[str, str]:
+        """画像の追加メタ情報を取得する"""
+
+        return self._accessor.load_image_meta_info(model_id, image_id)
+
     # ===================================================================
 
     def get_all_model(self) -> list[ModelItem]:

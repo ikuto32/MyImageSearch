@@ -40,3 +40,9 @@ class Accessor():
     def load_aesthetic_quality_list(self, model_id: ModelId, aesthetic_model_name) -> dict[ImageId, float]:
 
         pass
+
+    @abstractmethod
+    def load_image_meta_info(self, model_id: ModelId, image_id: ImageId) -> dict[str, str]:
+        """画像メタ情報を取得する"""
+
+        pass
