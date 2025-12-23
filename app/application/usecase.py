@@ -116,9 +116,25 @@ class Usecase:
     # ===================================================================
 
     def format_search_query(self, search_query_obj) -> str:
+        """検索クエリのnumpy配列を文字列表現に整形する。
+
+        Args:
+            search_query_obj (np.ndarray): 検索クエリとして扱う特徴量配列。1行ベクトルを想定。
+
+        Returns:
+            str: `np.array2string`でフォーマットした文字列表現。返却時に精度が抑制される。
+        """
         return np.array2string(search_query_obj, separator=", ", suppress_small=True)
 
     def parse_search_query(self, search_query_text: str):
+        """文字列表現の検索クエリをnumpy配列に変換する。
+
+        Args:
+            search_query_text (str): "[0.1, 0.2, ...]"形式を想定したテキスト。
+
+        Returns:
+            np.ndarray | None: `float32`の1行ベクトルに整形した配列。フォーマット不正時は`None`を返却し、エラー内容を標準出力へ記録する。
+        """
         try:
             return np.fromstring(
                 search_query_text.strip("[]"), sep=",", dtype=np.float32
@@ -132,6 +148,17 @@ class Usecase:
     def similarity_eval(
         self, item_list: list[ImageItem], index, query_features, result_size=2048
     ) -> list[ResultImageItem]:
+        """ベクトル類似度を計算し、結果を`ResultImageItem`一覧として返す。
+
+        Args:
+            item_list (list[ImageItem]): インデックスと同順でソートされる画像メタ情報一覧。
+            index (Any): FAISSインデックス。`nprobe`を64に更新して探索する。
+            query_features (np.ndarray): `(1, 次元数)`の特徴量配列。検索前にL2正規化を実施する副作用がある。
+            result_size (int, optional): 返却件数の上限。デフォルトは2048で、アイテム数を超える場合は自動で短縮される。
+
+        Returns:
+            list[ResultImageItem]: 距離に基づき生成した結果リスト。インデックス外参照が発生したIDはスキップし、`traceback`を標準出力へ表示する。
+        """
         print(f"shape:{query_features.shape}")
         # 正規化
         faiss.normalize_L2(query_features)
@@ -180,6 +207,19 @@ class Usecase:
         aesthetic_quality_range_max,
         aesthetic_model_name,
     ) -> list[ResultImageItem]:
+        """類似度スコアに審美性評価を組み合わせて再スコアリングする。
+
+        Args:
+            model_id (ModelId): 対象モデルID。
+            scores (list[ResultImageItem]): 類似度計算済みの結果リスト。
+            aesthetic_quality_beta (float): 審美性評価を加重する係数。0で無効化。
+            aesthetic_quality_range_min (float): 許容下限スコア。
+            aesthetic_quality_range_max (float): 許容上限スコア。
+            aesthetic_model_name (str): 審美性モデル名（閾値判定の文脈情報としてのみ使用）。
+
+        Returns:
+            list[ResultImageItem]: 審美性スコアが`None`のアイテムや範囲外のアイテムはスキップまたは0スコアとして扱った再計算結果。
+        """
         if (
             aesthetic_quality_beta == 0
             and aesthetic_quality_range_min <= 0
@@ -554,6 +594,14 @@ class Usecase:
         return ResultImageItemList(scores, "")
 
     def get_images_zip(self, id_list):
+        """指定された画像IDからZIPバッファを生成する。
+
+        Args:
+            id_list (Iterable[str]): 画像IDの反復可能オブジェクト。各IDは`ImageId`へ変換される。
+
+        Returns:
+            BytesIO: 取得できた画像とファイル名のペアを元に生成したZIPデータ。無効IDや読み込み失敗時は標準出力に理由を記録し、該当IDをスキップする。
+        """
         print("strat:get_images_zip")
         images_with_names = []
         for image_id_str in tqdm.tqdm(id_list):
