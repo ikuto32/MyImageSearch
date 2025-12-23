@@ -55,6 +55,11 @@ export async function getImageMeta(modelName, pretrained, itemId) {
     return axios.get(`/image_meta/${modelName}/${pretrained}/${itemId}`).then(res => res.data)
 }
 
+export async function getImageRatings(modelName, pretrained) {
+
+    return axios.get(`/image_ratings/${modelName}/${pretrained}`).then(res => res.data)
+}
+
 
 
 /**

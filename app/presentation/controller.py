@@ -101,6 +101,16 @@ def get_image_meta(model_name: str, pretrained: str, id: str):
     return json.dumps(usecase.get_image_meta_info(model_id, ImageId(id)))
 
 
+@app.route("/image_ratings/<model_name>/<pretrained>")
+def get_image_ratings(model_name: str, pretrained: str):
+    """画像のrating一覧を返す"""
+
+    model_id: ModelId = ModelId(model_name, pretrained)
+    ratings: dict[ImageId, str] = usecase.get_rating_list(model_id)
+    rating_dict = {image_id.id: rating for image_id, rating in ratings.items()}
+    return json.dumps(rating_dict)
+
+
 @app.route("/image/<id>/small")
 def get_small_image(id: str):
     """画像IDから縮小画像を返す"""
