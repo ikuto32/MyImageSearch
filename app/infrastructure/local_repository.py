@@ -3,6 +3,7 @@ from functools import cache
 import hashlib
 import io
 import itertools
+import logging
 import os
 import pathlib
 import mimetypes
@@ -34,6 +35,7 @@ class LocalRepository(Repository):
 
     def __init__(self, image_dir_path: pathlib.Path) -> None:
 
+        self._logger = logging.getLogger(__name__)
         self._image_dir_path: pathlib.Path = image_dir_path
         self._id_to_path: dict[ImageId, pathlib.Path] = {}
 
@@ -169,7 +171,7 @@ class LocalRepository(Repository):
         relative_path = self._id_to_path.get(image_id)
 
         if relative_path is None:
-            print(f"指定されたImageIdが存在しません: {image_id}")
+            self._logger.warning("指定されたImageIdが存在しません: %s", image_id)
             return None
 
         path: pathlib.Path = self._image_dir_path / relative_path
@@ -191,7 +193,7 @@ class LocalRepository(Repository):
         relative_path = self._id_to_path.get(image_id)
 
         if relative_path is None:
-            print(f"指定されたImageIdが存在しません: {image_id}")
+            self._logger.warning("指定されたImageIdが存在しません: %s", image_id)
             return None
 
         path: pathlib.Path = self._image_dir_path / relative_path

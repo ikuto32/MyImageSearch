@@ -12,6 +12,7 @@ import numpy as np
 
 from app.application.usecase import Usecase
 from app.domain.domain_object import ImageItem, ImageId, ModelId, ModelItem, ResultImageItemList, UploadImage, ResultImageItem, UploadText
+from app.logging_config import configure_logging
 
 
 # ============================================================
@@ -19,10 +20,13 @@ from app.domain.domain_object import ImageItem, ImageId, ModelId, ModelItem, Res
 
 app = Flask(__name__, static_folder=None)
 usecase: Usecase = None
+logger = logging.getLogger(__name__)
 
 
 def start_app(in_usecase: Usecase):
     """エントリーポイント"""
+
+    configure_logging()
 
     # ユースケースのDI
     global usecase
@@ -39,7 +43,7 @@ def start_app(in_usecase: Usecase):
     log.setLevel(logging.WARNING)
 
     # Flask実行
-    print(app.url_map)
+    logger.info("Flask URL map: %s", app.url_map)
     app.run(debug=False, port=80, host="0.0.0.0")
 
 
@@ -154,7 +158,14 @@ def search_text():
     aesthetic_quality_beta: float = args.get("aesthetic_quality_beta")
     aesthetic_quality_range = args.get("aesthetic_quality_range")
     aesthetic_model_name = args.get("aesthetic_model_name")
-    print({"parameter": {"model_id": model_id, "text": text, "aesthetic_quality_beta": aesthetic_quality_beta, "aesthetic_quality_range": aesthetic_quality_range, "aesthetic_model_name": aesthetic_model_name}})
+    logger.info(
+        "search_text parameters: model_id=%s text=%s aesthetic_quality_beta=%s aesthetic_quality_range=%s aesthetic_model_name=%s",
+        model_id,
+        text,
+        aesthetic_quality_beta,
+        aesthetic_quality_range,
+        aesthetic_model_name,
+    )
     result = usecase.search_text(model_id, UploadText(text), aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
     return from_result_to_json(result)
 
@@ -186,7 +197,6 @@ def search_image():
 @app.route("/search/name", methods=["POST"])
 def search_name():
     """名前から検索して、結果を返す"""
-    print(request.data.decode('utf-8'))
     args = ast.literal_eval(request.data.decode('utf-8')).get("params")
     # 検索モデルのIDを取得する。
     model_id: ModelId = ModelId(args.get("model_name"), args.get("pretrained"))
@@ -196,7 +206,15 @@ def search_name():
     aesthetic_quality_beta: float = args.get("aesthetic_quality_beta")
     aesthetic_quality_range = args.get("aesthetic_quality_range")
     aesthetic_model_name = args.get("aesthetic_model_name")
-    print({"parameter": {"text": text}})
+    logger.info(
+        "search_name parameters: model_id=%s text=%s is_regexp=%s aesthetic_quality_beta=%s aesthetic_quality_range=%s aesthetic_model_name=%s",
+        model_id,
+        text,
+        is_regexp,
+        aesthetic_quality_beta,
+        aesthetic_quality_range,
+        aesthetic_model_name,
+    )
     result = usecase.search_name(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
     return from_result_to_json(result)
 
