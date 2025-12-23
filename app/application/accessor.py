@@ -52,3 +52,9 @@ class Accessor():
         """style_cluster 情報を取得する"""
 
         pass
+
+    @abstractmethod
+    def load_rating_list(self, model_id: ModelId) -> dict[ImageId, str]:
+        """rating 情報を取得する"""
+
+        pass
