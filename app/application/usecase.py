@@ -1,3 +1,4 @@
+import logging
 import re
 import traceback
 from typing import Any
@@ -29,6 +30,7 @@ class Usecase:
     """このアプリケーションの動作を実装するクラス"""
 
     def __init__(self, repository: Repository, accessor: Accessor) -> None:
+        self._logger = logging.getLogger(__name__)
         self._repository: Repository = repository
         self._accessor: Accessor = accessor
         self._id_to_image_items: dict[ImageId, ImageItem] = {}
@@ -140,7 +142,7 @@ class Usecase:
                 search_query_text.strip("[]"), sep=",", dtype=np.float32
             ).reshape(1, -1)
         except ValueError:
-            print("Invalid input format for a numpy array.")
+            self._logger.error("Invalid input format for a numpy array: %s", search_query_text)
             return None
 
     # ===================================================================
@@ -159,7 +161,7 @@ class Usecase:
         Returns:
             list[ResultImageItem]: 距離に基づき生成した結果リスト。インデックス外参照が発生したIDはスキップし、`traceback`を標準出力へ表示する。
         """
-        print(f"shape:{query_features.shape}")
+        self._logger.info("query_features shape: %s", query_features.shape)
         # 正規化
         faiss.normalize_L2(query_features)
         item_list_length: int = len(item_list)
@@ -168,8 +170,8 @@ class Usecase:
 
         index.nprobe = 64
 
-        print(f"index len:{index.ntotal}")
-        print(f"averaged_query_features:{query_features}")
+        self._logger.info("index size: %s", index.ntotal)
+        self._logger.info("averaged_query_features: %s", query_features)
         distances, indices = index.search(query_features, k=result_size)
 
         sorted_items: list[ImageItem] = sorted(
@@ -195,7 +197,7 @@ class Usecase:
                 traceback.print_exc()
                 continue
 
-        print(f"results len:{len(result_image_items)}")
+        self._logger.info("results length: %s", len(result_image_items))
         return result_image_items
 
     def apply_aesthetic_quality_filter(
@@ -602,7 +604,7 @@ class Usecase:
         Returns:
             BytesIO: 取得できた画像とファイル名のペアを元に生成したZIPデータ。無効IDや読み込み失敗時は標準出力に理由を記録し、該当IDをスキップする。
         """
-        print("strat:get_images_zip")
+        self._logger.info("start:get_images_zip")
         images_with_names = []
         for image_id_str in tqdm.tqdm(id_list):
             image_id = ImageId(image_id_str)  # ImageId型に変換
@@ -610,7 +612,7 @@ class Usecase:
                 image_with_name: tuple[Image, ImageName] = self._repository.load_image(image_id), self._repository.get_image_name(image_id)
                 images_with_names.append(image_with_name)
             except (ValueError, FileNotFoundError) as e:
-                print(f"画像IDが無効のためスキップ: {e}")
+                self._logger.warning("画像IDが無効のためスキップ: %s", e)
 
         zip_buffer = self._repository.create_zip_from_images(images_with_names)
         return zip_buffer
