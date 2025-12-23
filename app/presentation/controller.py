@@ -79,11 +79,21 @@ def resource(target: str):
 # ------------------------------------------------------------
 
 
+DEFAULT_IMAGE_ITEM_PAGE_SIZE = 10000
+
+
 @app.route("/image_item")
 def get_all_image_item():
-    """画像項目をすべて返す"""
+    """ページングされた画像項目を返す"""
 
-    return from_image_item_list_to_json(usecase.get_all_image_item()[0:10000])
+    page: int = request.args.get("page", default=0, type=int) or 0
+    page_size: int = request.args.get(
+        "size", default=DEFAULT_IMAGE_ITEM_PAGE_SIZE, type=int
+    ) or DEFAULT_IMAGE_ITEM_PAGE_SIZE
+
+    return from_image_item_list_to_json(
+        usecase.get_image_items_by_page(page, page_size)
+    )
 
 
 @app.route("/image_item/<id>")
