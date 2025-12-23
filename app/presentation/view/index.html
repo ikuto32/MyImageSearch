@@ -85,6 +85,13 @@
                             label="aesthetic_model_name"
                             :items="['original','pony']"
                             ></v-autocomplete>
+                            <v-select
+                            v-model="ratingFilter"
+                            label="rating"
+                            :items="ratingOptions"
+                            multiple
+                            chips
+                            ></v-select>
                             <v-text-field
                             v-model="search_query"
                             label="search query"
