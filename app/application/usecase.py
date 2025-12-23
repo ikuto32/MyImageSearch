@@ -65,6 +65,11 @@ class Usecase:
 
         return self._accessor.load_image_meta_info(model_id, image_id)
 
+    def get_rating_list(self, model_id: ModelId) -> dict[ImageId, str]:
+        """画像のrating一覧を取得する"""
+
+        return self._accessor.load_rating_list(model_id)
+
     # ===================================================================
 
     def get_all_model(self) -> list[ModelItem]:

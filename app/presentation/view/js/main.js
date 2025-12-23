@@ -39,6 +39,11 @@ const app = Vue.createApp({
             /**
              * @type {ResultItem[]}
              */
+            rawResultBuffer:[],
+
+            /**
+             * @type {ResultItem[]}
+             */
             resultBuffer:[],
 
             /**
@@ -57,6 +62,14 @@ const app = Vue.createApp({
             imageMeta:{},
 
             /**
+             * @type {{[modelKey: string]: {[itemId: string]: string}}}
+             */
+            ratingMaps:{},
+
+            ratingOptions: ["general", "questionable", "sensitive", "explicit"],
+            ratingFilter: ["general", "questionable", "sensitive", "explicit"],
+
+            /**
              * @type {{[itemId: string]: boolean}}
              */
             dialogStates:{},
@@ -66,6 +79,18 @@ const app = Vue.createApp({
         // window.addEventListener("scroll", this.updateImageFromScroll)
         window.addEventListener("load", this.init)
     },
+    watch:{
+        ratingFilter(){
+            this.applyRatingFilterToBuffer()
+            this.initImage()
+        },
+        model_name(){
+            this.onModelChange()
+        },
+        pretrained(){
+            this.onModelChange()
+        }
+    },
     methods:{
 
         /**
@@ -73,8 +98,17 @@ const app = Vue.createApp({
          */
         init() {
 
-            this.initBuffer()
+            this.ensureRatingMap()
+            .then(this.initBuffer)
             .then(this.initImage)
+        },
+
+        onModelChange(){
+            this.ensureRatingMap()
+            .then(() => {
+                this.applyRatingFilterToBuffer()
+                this.initImage()
+            })
         },
 
         /**
@@ -88,7 +122,7 @@ const app = Vue.createApp({
             this.showedItemIndex = 0;
             //一部表示
             this.sliceShowImg(0, this.numRows * this.numCols)
-            this.padding_bottom = this.item_height * this.resultBuffer.length / this.numCols - this.padding_top;
+            this.padding_bottom = Math.max(this.item_height * this.resultBuffer.length / this.numCols - this.padding_top, 0);
         },
 
         /**
@@ -106,12 +140,54 @@ const app = Vue.createApp({
                 /**
                  * @type {repository.ResultItem[]}
                  */
-                this.resultBuffer = objs.map(obj => ({
+                this.rawResultBuffer = objs.map(obj => ({
 
                     item: obj,
                     score: 0
                 }));
+                this.applyRatingFilterToBuffer()
             })
+        },
+
+        getRatingMapKey() {
+            return `${this.model_name}-${this.pretrained}`
+        },
+
+        ensureRatingMap() {
+            const ratingKey = this.getRatingMapKey()
+
+            if(this.ratingMaps[ratingKey]) {
+                return Promise.resolve()
+            }
+
+            return repository.getImageRatings(this.model_name, this.pretrained)
+            .then((ratings) => {
+                this.ratingMaps = { ...this.ratingMaps, [ratingKey]: ratings }
+            })
+        },
+
+        getCurrentRatingMap() {
+            const ratingKey = this.getRatingMapKey()
+            return this.ratingMaps[ratingKey] || {}
+        },
+
+        applyRatingFilter(resultList) {
+            const allowedRatings = new Set(this.ratingFilter)
+            const ratingMap = this.getCurrentRatingMap()
+
+            return resultList.filter(result => {
+                const rating = ratingMap[result.item.id] || ""
+
+                if(rating === "") {
+                    return true
+                }
+
+                return allowedRatings.has(rating)
+            })
+        },
+
+        applyRatingFilterToBuffer() {
+            this.resultBuffer = this.applyRatingFilter(this.rawResultBuffer)
         },
 
 
@@ -205,7 +281,9 @@ const app = Vue.createApp({
          */
         setBuffer(promise) {
 
-            return promise.then(result => {
+            return this.ensureRatingMap()
+            .then(() => promise)
+            .then(result => {
 
                 let array = result.list
                 console.log('結果', result)
@@ -221,7 +299,8 @@ const app = Vue.createApp({
 
                 //バッファに登録
                 this.search_query = result.search_query
-                this.resultBuffer = array
+                this.rawResultBuffer = array
+                this.applyRatingFilterToBuffer()
             })
         },
 
