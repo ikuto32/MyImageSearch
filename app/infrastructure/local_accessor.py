@@ -1,10 +1,8 @@
 from functools import cache
 import sqlite3
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import pathlib
-import sqlite3
-from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
@@ -32,18 +30,10 @@ class LocalAccessor(Accessor):
         self._meta_dir_path = meta_dir_path
         self._id_to_path: Dict[ImageId, pathlib.Path] = {}
 
-    def load_meta(self, model_id: ModelId, image_id: ImageId) -> np.ndarray:
+    def load_image_feature(self, model_id: ModelId, image_id: ImageId) -> np.ndarray:
         return np.load(
             f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/{image_id}.npy"
         )
-
-    @cache
-    def load_index_file(self, model_id: ModelId) -> Any:
-
-        index = faiss.read_index(
-            f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/{"metafiles.index"}'
-        )
-        return index
 
     @cache
     def load_model(self, model_id: ModelId) -> Model:
@@ -58,110 +48,47 @@ class LocalAccessor(Accessor):
         return Tokenizer(open_clip.get_tokenizer(model_id.model_name))
 
     @cache
-    def load_index_item_list(self, model_id: ModelId) -> List[ImageItem]:
-        print("start:load_index_item_list")
+    def load_index_with_metadata(
+        self, model_id: ModelId, aesthetic_model_name: str
+    ) -> Tuple[Any, List[ImageItem]]:
+        index = faiss.read_index(
+            f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/{"metafiles.index"}'
+        )
+
         con: sqlite3.Connection = sqlite3.connect(
             f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db",
             isolation_level="DEFERRED",
         )
         result: pd.DataFrame = pd.read_sql_query(
             """
-            SELECT image_id, image_path, image_tags FROM image_meta
+            SELECT image_id, image_path, image_tags, aesthetic_quality, pony_aesthetic_quality, style_cluster, rating
+            FROM image_meta
             """,
             con,
         )
-        sorted_result: pd.DataFrame = result.sort_values("image_path").reset_index()
+        con.close()
 
-        image_items: List[ImageItem] = [
-            ImageItem(
-                id=ImageId(sorted_result.iat[index, 1]),
-                display_name=ImageName(sorted_result.iat[index, 2]),
-                tags=ImageTags(sorted_result.iat[index, 3]),
+        aesthetic_name = (
+            "pony_aesthetic_quality" if aesthetic_model_name != "original" else "aesthetic_quality"
+        )
+        sorted_result: pd.DataFrame = result.sort_values("image_path").reset_index(
+            drop=True
+        )
+
+        image_items: List[ImageItem] = []
+        for row in tqdm.tqdm(sorted_result.itertuples(index=False)):
+            aesthetic_score = getattr(row, aesthetic_name, None)
+            image_items.append(
+                ImageItem(
+                    id=ImageId(str(row.image_id)),
+                    display_name=ImageName(row.image_path),
+                    tags=ImageTags(row.image_tags),
+                    aesthetic_quality=float(aesthetic_score)
+                    if aesthetic_score is not None
+                    else None,
+                    rating=row.rating or "",
+                    style_cluster=row.style_cluster or "",
+                )
             )
-            for index, _ in enumerate(tqdm.tqdm(sorted_result["image_id"]))
-        ]
-        print("end:load_index_item_list")
-        return image_items
 
-    @cache
-    def load_aesthetic_quality_list(self, model_id: ModelId, aesthetic_model_name) -> Dict[ImageId, float]:
-        print("start:load_aesthetic_quality_list")
-        con: sqlite3.Connection = sqlite3.connect(
-            f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db",
-            isolation_level="DEFERRED",
-        )
-        result: pd.DataFrame = pd.read_sql_query(
-            """
-            SELECT image_id, aesthetic_quality, pony_aesthetic_quality FROM image_meta
-            """,
-            con,
-        )
-        aesthetic_name = "pony_aesthetic_quality" if not aesthetic_model_name == "original" else "aesthetic_quality"
-        aesthetic_quality_item: Dict[ImageId, float] = {
-            ImageId(id=str(id)): float(q)
-            for id, q in tqdm.tqdm(zip(result["image_id"], result[aesthetic_name]))
-        }
-        print("end:load_aesthetic_quality_list")
-        return aesthetic_quality_item
-
-    def load_image_meta_info(self, model_id: ModelId, image_id: ImageId) -> dict[str, str]:
-        con: sqlite3.Connection = sqlite3.connect(
-            f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db",
-            isolation_level="DEFERRED",
-        )
-        cur = con.cursor()
-        cur.execute(
-            "SELECT style_cluster, rating FROM image_meta WHERE image_id = ?",
-            (image_id.id,),
-        )
-        row = cur.fetchone()
-        con.close()
-
-        if row is None:
-            return {"style_cluster": "", "rating": ""}
-
-        style_cluster, rating = row
-        return {
-            "style_cluster": style_cluster or "",
-            "rating": rating or "",
-        }
-
-    @cache
-    def load_rating_list(self, model_id: ModelId) -> Dict[ImageId, str]:
-        con: sqlite3.Connection = sqlite3.connect(
-            f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db",
-            isolation_level="DEFERRED",
-        )
-        result: pd.DataFrame = pd.read_sql_query(
-            """
-            SELECT image_id, rating FROM image_meta
-            """,
-            con,
-        )
-        con.close()
-
-        return {
-            ImageId(id=str(image_id)): (rating or "")
-            for image_id, rating in tqdm.tqdm(zip(result["image_id"], result["rating"]))
-        }
-
-    @cache
-    def load_style_cluster_list(self, model_id: ModelId) -> Dict[ImageId, str]:
-        con: sqlite3.Connection = sqlite3.connect(
-            f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db",
-            isolation_level="DEFERRED",
-        )
-        result: pd.DataFrame = pd.read_sql_query(
-            """
-            SELECT image_id, style_cluster FROM image_meta
-            """,
-            con,
-        )
-        con.close()
-
-        return {
-            ImageId(id=str(image_id)): (style_cluster or "")
-            for image_id, style_cluster in tqdm.tqdm(
-                zip(result["image_id"], result["style_cluster"])
-            )
-        }
+        return index, image_items
