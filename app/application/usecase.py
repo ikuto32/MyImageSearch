@@ -60,18 +60,24 @@ class Usecase:
 
         return self._repository.load_small_image(id)
 
-    def get_image_meta_info(self, model_id: ModelId, image_id: ImageId) -> dict[str, str]:
-        """画像の追加メタ情報を取得する"""
+    def get_image_metadata(self, model_id: ModelId, image_id: ImageId) -> dict[str, str | float]:
+        """画像のタグや評価などのメタデータを取得する"""
 
         _, items = self._accessor.load_index_with_metadata(model_id, "original")
         for item in items:
             if item.id == image_id:
                 return {
+                    "tags": item.tags.tags,
                     "style_cluster": item.style_cluster,
                     "rating": item.rating,
                     "aesthetic_quality": item.aesthetic_quality or 0.0,
                 }
-        return {"style_cluster": "", "rating": "", "aesthetic_quality": 0.0}
+        return {
+            "tags": "",
+            "style_cluster": "",
+            "rating": "",
+            "aesthetic_quality": 0.0,
+        }
 
     def get_rating_list(self, model_id: ModelId) -> dict[ImageId, str]:
         """画像のrating一覧を取得する"""
