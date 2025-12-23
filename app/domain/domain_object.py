@@ -43,7 +43,10 @@ class ImageItem:
 
     id: ImageId
     display_name: ImageName
-    tags: ImageTags
+    tags: ImageTags = ImageTags("")
+    aesthetic_quality: float | None = None
+    rating: str = ""
+    style_cluster: str = ""
 
 
 # =====================================================
