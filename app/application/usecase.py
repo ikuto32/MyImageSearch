@@ -63,12 +63,21 @@ class Usecase:
     def get_image_meta_info(self, model_id: ModelId, image_id: ImageId) -> dict[str, str]:
         """画像の追加メタ情報を取得する"""
 
-        return self._accessor.load_image_meta_info(model_id, image_id)
+        _, items = self._accessor.load_index_with_metadata(model_id, "original")
+        for item in items:
+            if item.id == image_id:
+                return {
+                    "style_cluster": item.style_cluster,
+                    "rating": item.rating,
+                    "aesthetic_quality": item.aesthetic_quality or 0.0,
+                }
+        return {"style_cluster": "", "rating": "", "aesthetic_quality": 0.0}
 
     def get_rating_list(self, model_id: ModelId) -> dict[ImageId, str]:
         """画像のrating一覧を取得する"""
 
-        return self._accessor.load_rating_list(model_id)
+        _, items = self._accessor.load_index_with_metadata(model_id, "original")
+        return {item.id: item.rating for item in items}
 
     # ===================================================================
 
@@ -150,27 +159,22 @@ class Usecase:
             and aesthetic_quality_range_max >= 10
         ):
             return scores
-        aesthetic_quality_item: dict[ImageId, float] = (
-            self._accessor.load_aesthetic_quality_list(model_id, aesthetic_model_name)
-        )
         new_scores = []
         for i in scores:
-            try:
-                aesthetic_quality_score: float = aesthetic_quality_item[i.item.id]
-                if (
-                    aesthetic_quality_score >= aesthetic_quality_range_min
-                    and aesthetic_quality_score <= aesthetic_quality_range_max
-                ):
-                    new_score = (
-                        i.score.score * (1 - aesthetic_quality_beta**2)
-                        + aesthetic_quality_score * aesthetic_quality_beta
-                    )
-                else:
-                    new_score = 0
-                new_scores.append(ResultImageItem(i.item, Score(new_score)))
-            except IndexError:
-                traceback.print_exc()
+            aesthetic_quality_score = i.item.aesthetic_quality
+            if aesthetic_quality_score is None:
                 continue
+            if (
+                aesthetic_quality_score >= aesthetic_quality_range_min
+                and aesthetic_quality_score <= aesthetic_quality_range_max
+            ):
+                new_score = (
+                    i.score.score * (1 - aesthetic_quality_beta**2)
+                    + aesthetic_quality_score * aesthetic_quality_beta
+                )
+            else:
+                new_score = 0
+            new_scores.append(ResultImageItem(i.item, Score(new_score)))
 
         return new_scores
 
@@ -199,11 +203,13 @@ class Usecase:
             .copy()
         )
         # indexを読み込み
-        index = self._accessor.load_index_file(model_id)
+        index, item_list = self._accessor.load_index_with_metadata(
+            model_id, aesthetic_model_name
+        )
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
-            item_list=self._accessor.load_index_item_list(model_id),
+            item_list=item_list,
             index=index,
             query_features=features,
         )
@@ -250,11 +256,13 @@ class Usecase:
         features: np.ndarray = np.vstack(temp).mean(axis=0).reshape(1, -1)
 
         # indexを読み込み
-        index = self._accessor.load_index_file(model_id)
+        index, item_list = self._accessor.load_index_with_metadata(
+            model_id, aesthetic_model_name
+        )
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
-            item_list=self._accessor.load_index_item_list(model_id),
+            item_list=item_list,
             index=index,
             query_features=features,
         )
@@ -283,7 +291,8 @@ class Usecase:
 
         scores: list[ResultImageItem] = []
         # 類似度を計算する
-        for image_item in tqdm.tqdm(self._accessor.load_index_item_list(model_id)):
+        _, item_list = self._accessor.load_index_with_metadata(model_id, aesthetic_model_name)
+        for image_item in tqdm.tqdm(item_list):
             name: str = image_item.display_name.name
             # print(args.get("trueRegexp"))
             if is_regexp:
@@ -323,11 +332,13 @@ class Usecase:
         features = model.encode_image(image_tensor).to("cpu").detach().numpy().copy()
 
         # indexを読み込み
-        index = self._accessor.load_index_file(model_id)
+        index, item_list = self._accessor.load_index_with_metadata(
+            model_id, "original"
+        )
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
-            item_list=self._accessor.load_index_item_list(model_id),
+            item_list=item_list,
             index=index,
             query_features=features,
         )
@@ -347,11 +358,13 @@ class Usecase:
         features: np.ndarray = np.random.normal(0, 1, [1, 768]).astype(np.float32)
 
         # indexを読み込み
-        index = self._accessor.load_index_file(model_id)
+        index, item_list = self._accessor.load_index_with_metadata(
+            model_id, aesthetic_model_name
+        )
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
-            item_list=self._accessor.load_index_item_list(model_id),
+            item_list=item_list,
             index=index,
             query_features=features,
         )
@@ -379,11 +392,13 @@ class Usecase:
         features = self.parse_search_query(search_query)
 
         # indexを読み込み
-        index = self._accessor.load_index_file(model_id)
+        index, item_list = self._accessor.load_index_with_metadata(
+            model_id, aesthetic_model_name
+        )
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
-            item_list=self._accessor.load_index_item_list(model_id),
+            item_list=item_list,
             index=index,
             query_features=features,
         )
@@ -432,11 +447,13 @@ class Usecase:
         features = query_features + text_features * strength
 
         # indexを読み込み
-        index = self._accessor.load_index_file(model_id)
+        index, item_list = self._accessor.load_index_with_metadata(
+            model_id, aesthetic_model_name
+        )
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
-            item_list=self._accessor.load_index_item_list(model_id),
+            item_list=item_list,
             index=index,
             query_features=features,
         )
@@ -466,7 +483,8 @@ class Usecase:
 
         scores: list[ResultImageItem] = []
         # 類似度を計算する
-        for image_item in tqdm.tqdm(self._accessor.load_index_item_list(model_id)):
+        _, item_list = self._accessor.load_index_with_metadata(model_id, aesthetic_model_name)
+        for image_item in tqdm.tqdm(item_list):
             tags: str = image_item.tags.tags
             # print(args.get("trueRegexp"))
             if is_regexp:
@@ -500,10 +518,10 @@ class Usecase:
         """style_cluster を文字列検索する"""
 
         scores: list[ResultImageItem] = []
-        style_cluster_map = self._accessor.load_style_cluster_list(model_id)
+        _, item_list = self._accessor.load_index_with_metadata(model_id, aesthetic_model_name)
 
-        for image_item in tqdm.tqdm(self._accessor.load_index_item_list(model_id)):
-            style_cluster = style_cluster_map.get(image_item.id, "")
+        for image_item in tqdm.tqdm(item_list):
+            style_cluster = image_item.style_cluster
 
             if is_regexp:
                 has_match: bool = re.search(text.text, style_cluster) is not None
