@@ -94,11 +94,11 @@ def get_image_item(id: str):
 
 
 @app.route("/image_meta/<model_name>/<pretrained>/<id>")
-def get_image_meta(model_name: str, pretrained: str, id: str):
-    """画像メタ情報を返す"""
+def get_image_metadata(model_name: str, pretrained: str, id: str):
+    """画像のメタデータ（タグやratingなど）を返す"""
 
     model_id: ModelId = ModelId(model_name, pretrained)
-    return json.dumps(usecase.get_image_meta_info(model_id, ImageId(id)))
+    return json.dumps(usecase.get_image_metadata(model_id, ImageId(id)))
 
 
 @app.route("/image_ratings/<model_name>/<pretrained>")
