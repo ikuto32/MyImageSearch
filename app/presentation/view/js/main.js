@@ -57,7 +57,7 @@ const app = Vue.createApp({
             selectedItemId:{},
 
             /**
-             * @type {{[itemId: string]: {style_cluster: string, rating: string}}}
+             * @type {{[itemId: string]: {tags: string, style_cluster: string, rating: string, aesthetic_quality: number}}}
              */
             imageMeta:{},
 
@@ -398,26 +398,26 @@ const app = Vue.createApp({
 
         openDialog(item) {
             this.setDialogState(item.id, true)
-            this.fetchImageMeta(item)
+            this.fetchImageMetadata(item)
         },
 
         setDialogState(itemId, value) {
             this.dialogStates = { ...this.dialogStates, [itemId]: value }
         },
 
-        fetchImageMeta(item) {
+        fetchImageMetadata(item) {
             if (this.imageMeta[item.id]) {
                 return
             }
 
-            repository.getImageMeta(this.model_name, this.pretrained, item.id)
+            repository.getImageMetadata(this.model_name, this.pretrained, item.id)
             .then(meta => {
                 this.imageMeta = { ...this.imageMeta, [item.id]: meta }
             })
         },
 
-        getImageMeta(itemId) {
-            return this.imageMeta[itemId] || { style_cluster: "", rating: "" }
+        getImageMetadata(itemId) {
+            return this.imageMeta[itemId] || { tags: "", style_cluster: "", rating: "", aesthetic_quality: 0 }
         },
 
         onSelectItem(event) {
