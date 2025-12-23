@@ -9,6 +9,7 @@ from io import BytesIO
 
 @dataclass(frozen=True)
 class ImageId:
+    """画像を一意に識別するID。"""
 
     id: str
 
@@ -18,28 +19,33 @@ class ImageId:
 
 @dataclass(frozen=True)
 class ImageName:
+    """画像の表示名。"""
 
     name: str
 
 
 @dataclass(frozen=True)
 class ImageTags:
+    """検索や分類に使うタグ文字列。"""
 
     tags: str
 
 
 @dataclass(frozen=True)
 class Image:
+    """画像バイナリとコンテンツタイプを保持し、Pillow画像へ変換できる。"""
 
     binary: bytes
     content_type: str
 
     def to_ptl_image(self):
+        """バイナリがPillowで解釈可能な形式である前提で画像に変換する。"""
         return PILImage.open(BytesIO(self.binary))
 
 
 @dataclass(frozen=True)
 class ImageItem:
+    """画像メタデータ一式。評価値やクラスタ情報は未設定も許容。"""
 
     id: ImageId
     display_name: ImageName
@@ -54,6 +60,7 @@ class ImageItem:
 
 @dataclass(frozen=True)
 class ModelId:
+    """モデル名と事前学習設定の組み合わせで一意となるID。"""
 
     model_name: str
     pretrained: str
@@ -61,12 +68,14 @@ class ModelId:
 
 @dataclass(frozen=True)
 class ModelName:
+    """ユーザー向けに表示するモデル名。"""
 
     name: str
 
 
 @dataclass(frozen=True)
 class ModelItem:
+    """検索に利用可能なモデルのメタデータ。"""
 
     id: ModelId
     display_name: ModelName
@@ -74,12 +83,14 @@ class ModelItem:
 
 @dataclass(frozen=True)
 class Model:
+    """実際のモデルオブジェクトのラッパー。"""
 
     model_obj: Any
 
 
 @dataclass(frozen=True)
 class Tokenizer:
+    """テキスト前処理用トークナイザオブジェクトのラッパー。"""
 
     tokenizer_obj: Any
 
@@ -117,7 +128,7 @@ class ResultImageItemList:
 
 @dataclass(frozen=True)
 class UploadText:
-    "(入力された)検索文字列を示す値クラス"
+    """(入力された)検索文字列を示す値クラス"""
 
     text: str
 
