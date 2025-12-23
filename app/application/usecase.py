@@ -31,19 +31,32 @@ class Usecase:
         self._repository: Repository = repository
         self._accessor: Accessor = accessor
         self._id_to_image_items: dict[ImageId, ImageItem] = {}
+        self._image_items: list[ImageItem] = []
 
         # 画像項目の読み込み
-        items: list[ImageItem] = self._repository.load_all_image_item()
+        self._image_items = self._repository.load_all_image_item()
 
         # 画像IDと画像項目の対応を作成
-        self._id_to_image_items = dict(map(lambda i: (i.id, i), items))
+        self._id_to_image_items = dict(map(lambda i: (i.id, i), self._image_items))
 
     # ===================================================================
 
     def get_all_image_item(self) -> list[ImageItem]:
         """すべての画像項目を取得する"""
 
-        return list(self._id_to_image_items.values())
+        return list(self._image_items)
+
+    def get_image_items_by_page(self, page: int, size: int) -> list[ImageItem]:
+        """ページングして画像項目を取得する"""
+
+        if size <= 0:
+            return []
+
+        normalized_page = max(page, 0)
+        start_index = normalized_page * size
+        end_index = start_index + size
+
+        return self._image_items[start_index:end_index]
 
     def get_image_item(self, id: ImageId) -> ImageItem:
         """画像IDから画像項目を取得する"""

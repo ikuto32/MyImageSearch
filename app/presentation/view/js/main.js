@@ -132,8 +132,8 @@ const app = Vue.createApp({
          */
         initBuffer() {
 
-            //画像項目をすべて取得する
-            return repository.getImageItems()
+            //画像項目をページ指定で取得する（デフォルトは最初の1万件）
+            return repository.getImageItemsByPage(0)
             .then(objs => {
 
                 //バッファに登録

@@ -29,13 +29,16 @@ export function getImageOriginalUrl(itemId) {
 
 
 /**
- * 画像項目の一覧を取得する
- * 
+ * ページ指定で画像項目の一覧を取得する
+ *
+ * @param {number} page 0始まりのページ番号
+ * @param {number} pageSize 取得する件数（デフォルトは1万件）
+ *
  * @return {Promise<ImageItem[]>}
  */
-export async function getImageItems() {
+export async function getImageItemsByPage(page = 0, pageSize = 10000) {
 
-    return axios.get(`/image_item`).then(res => res.data)
+    return axios.get(`/image_item`, { params: { page: page, size: pageSize } }).then(res => res.data)
 }
 
 /**
