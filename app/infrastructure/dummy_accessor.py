@@ -1,6 +1,5 @@
 from typing import Any
 
-
 import numpy as np
 
 from app.domain.domain_object import ImageId, ModelId
@@ -32,4 +31,7 @@ class DummyAccessor(Accessor):
         return {"style_cluster": "", "rating": ""}
 
     def load_style_cluster_list(self, model_id: ModelId):
+        return {}
+
+    def load_rating_list(self, model_id: ModelId):
         return {}
