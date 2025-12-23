@@ -39,6 +39,14 @@ class LocalRepository(Repository):
 
     @cache
     def load_all_image_item(self) -> List[ImageItem]:
+        """画像ルート以下を非同期に走査し、キャッシュされたImageItem一覧を返す。
+
+        - asyncio + ThreadPoolExecutor を組み合わせ、最大640ワーカーでディレクトリを幅優先的に巡回する。
+        - scandir の結果をキューに積みつつ、拡張子リストにマッチするファイルだけを収集する。
+        - 関数呼び出しは ``functools.cache`` によりメモ化され、2回目以降はディスクを走査しない。
+        - 収集したパスを32スレッドで並列処理し、ハッシュ化したIDや表示名を持つ ``ImageItem`` を生成する。
+        - 戻り値はファイル名でソートされた ``ImageItem`` のリスト。
+        """
         async def _load_all_image_item_async():
             files = []
             # extensions = list(PILImage.registered_extensions().keys())
@@ -134,6 +142,12 @@ class LocalRepository(Repository):
 
     @cache
     def load_all_model_item(self) -> list[ModelItem]:
+        """open_clip の事前学習モデル一覧を取得し、キャッシュ済みのModelItemに変換する。
+
+        - ``open_clip.list_pretrained()`` が返す (モデル名, データセット) のペアを ``ModelItem`` にマッピングする。
+        - 結果は ``functools.cache`` によりメモ化され、同一プロセス内で再計算を避ける。
+        - 戻り値は ``ModelItem`` オブジェクトのリスト。
+        """
 
         items: list[ModelItem] = [
             ModelItem(
@@ -145,6 +159,13 @@ class LocalRepository(Repository):
 
     @cache
     def load_image(self, image_id: ImageId) -> Image:
+        """フルサイズ画像を読み込み、MIME 推定結果とともに返す（キャッシュ対象）。
+
+        - ``load_all_image_item`` で構築された ``_id_to_path`` を用いて相対パスを引き当てる。
+        - 対応するファイルをバイナリとして読み込み、 ``mimetypes.guess_type`` でContent-Typeを推測する。
+        - 結果は ``functools.cache`` によりメモ化され、同一IDの再読み込みを防ぐ。
+        - 戻り値は ``Image`` ドメインオブジェクト（バイナリ本体とcontent_typeを保持）。
+        """
         relative_path = self._id_to_path.get(image_id)
 
         if relative_path is None:
@@ -160,6 +181,13 @@ class LocalRepository(Repository):
 
     @cache
     def load_small_image(self, image_id: ImageId) -> Image:
+        """縮小サムネイルを生成して返す（400px以下、キャッシュ対象）。
+
+        - ``_id_to_path`` から元画像パスを取得し、Pillow で開いて長辺が400pxになるよう ``thumbnail`` で縮小する。
+        - 元のフォーマットを維持しつつバイナリへ保存する。形式が判別できない場合は PNG を使用。
+        - ``mimetypes.guess_type`` による MIME 推定結果を ``Image`` に格納する。
+        - 生成済みのサムネイルは ``functools.cache`` でメモ化され、再生成を回避する。
+        """
         relative_path = self._id_to_path.get(image_id)
 
         if relative_path is None:
@@ -181,6 +209,12 @@ class LocalRepository(Repository):
         return Image(binary, content_type)
 
     def create_zip_from_images(self, images_with_names: list[tuple[Image, ImageName]]):
+        """画像バイナリのリストからZIPを生成し、メモリ上のバッファを返す。
+
+        - 引数は ``(Image, ImageName)`` のタプルのリストで、content_typeから拡張子を推定しつつ元の名前で格納する。
+        - 圧縮形式は ``zipfile.ZIP_DEFLATED``、出力は ``io.BytesIO`` 上に書き込まれ ``seek(0)`` 済みで返却される。
+        - 戻り値は ``BytesIO`` バッファで、呼び出し側がHTTPレスポンス等へ直接書き出せる。
+        """
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for image, image_name in images_with_names:
@@ -192,6 +226,12 @@ class LocalRepository(Repository):
 
     @cache
     def get_image_name(self, image_id: ImageId) -> ImageName:
+        """画像IDに対応するファイル名だけを返す（キャッシュ対象）。
+
+        - ``load_all_image_item`` が構築した ``_id_to_path`` を参照し、相対パスからファイル名を抽出する。
+        - 見つからない場合は ``ValueError`` を送出し、成功時は ``ImageName`` ドメインオブジェクトを返す。
+        - 関数結果は ``functools.cache`` によりメモ化される。
+        """
         relative_path = self._id_to_path.get(image_id)
         if relative_path is None:
             raise ValueError(f"指定されたImageIdが存在しません: {image_id}")
