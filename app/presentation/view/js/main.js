@@ -35,6 +35,9 @@ const app = Vue.createApp({
             padding_top: 0,
             padding_bottom: 500,
             item_height:282,
+            searchDurationMs: null,
+            clientDurationMs: null,
+            isSearching: false,
 
             /**
              * @type {ResultItem[]}
@@ -284,6 +287,7 @@ const app = Vue.createApp({
             return this.ensureRatingMap()
             .then(() => promise)
             .then(result => {
+                const clientStart = performance.now()
 
                 let array = result.list
                 console.log('結果', result)
@@ -301,6 +305,7 @@ const app = Vue.createApp({
                 this.search_query = result.search_query
                 this.rawResultBuffer = array
                 this.applyRatingFilterToBuffer()
+                this.clientDurationMs = performance.now() - clientStart
             })
         },
 
@@ -308,18 +313,35 @@ const app = Vue.createApp({
 
         //テキストから検索するボタンの動作
         textSearchButton() {
+            const searchStart = performance.now()
+            this.isSearching = true
+            const searchPromise = repository.searchText(this.model_name, this.pretrained, this.text, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            .then(result => {
+                this.searchDurationMs = performance.now() - searchStart
+                return result
+            })
 
-            this.setBuffer(repository.searchText(this.model_name, this.pretrained, this.text, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
-            .then(this.initImage);
+            this.setBuffer(searchPromise)
+            .then(this.initImage)
+            .finally(() => { this.isSearching = false });
         },
 
         //画像から検索するボタンの動作
         imagesSearchButton() {
+            const searchStart = performance.now()
+            this.isSearching = true
 
             let selectedId = Object.keys(this.selectedItemId)
 
-            this.setBuffer(repository.searchImage(this.model_name, this.pretrained, selectedId, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
-            .then(this.initImage);
+            const searchPromise = repository.searchImage(this.model_name, this.pretrained, selectedId, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            .then(result => {
+                this.searchDurationMs = performance.now() - searchStart
+                return result
+            })
+
+            this.setBuffer(searchPromise)
+            .then(this.initImage)
+            .finally(() => { this.isSearching = false });
         },
 
         //アップロード画像から検索するボタンの動作
@@ -327,16 +349,33 @@ const app = Vue.createApp({
             if(!this.uploadFile) {
                 return;
             }
-            this.setBuffer(repository.searchUploadImage(this.model_name, this.pretrained, this.uploadFile))
+            const searchStart = performance.now()
+            this.isSearching = true
+            const searchPromise = repository.searchUploadImage(this.model_name, this.pretrained, this.uploadFile)
+            .then(result => {
+                this.searchDurationMs = performance.now() - searchStart
+                return result
+            })
+
+            this.setBuffer(searchPromise)
             .then(() => { this.uploadFile = null })
-            .then(this.initImage);
+            .then(this.initImage)
+            .finally(() => { this.isSearching = false });
         },
 
         //画像名前から検索するボタンの動作
         nameSearchButton() {
+            const searchStart = performance.now()
+            this.isSearching = true
+            const searchPromise = repository.searchName(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            .then(result => {
+                this.searchDurationMs = performance.now() - searchStart
+                return result
+            })
 
-            this.setBuffer(repository.searchName(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
-            .then(this.initImage);
+            this.setBuffer(searchPromise)
+            .then(this.initImage)
+            .finally(() => { this.isSearching = false });
         },
 
         allDownloadImagesButton() {
@@ -363,37 +402,77 @@ const app = Vue.createApp({
 
         //乱数から検索するボタンの動作
         randomSearchButton() {
+            const searchStart = performance.now()
+            this.isSearching = true
+            const searchPromise = repository.searchRandom(this.model_name, this.pretrained, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            .then(result => {
+                this.searchDurationMs = performance.now() - searchStart
+                return result
+            })
 
-            this.setBuffer(repository.searchRandom(this.model_name, this.pretrained, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
-            .then(this.initImage);
+            this.setBuffer(searchPromise)
+            .then(this.initImage)
+            .finally(() => { this.isSearching = false });
         },
 
         //クエリから検索するボタンの動作
         querySearchButton() {
+            const searchStart = performance.now()
+            this.isSearching = true
+            const searchPromise = repository.searchQuery(this.model_name, this.pretrained, this.search_query, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            .then(result => {
+                this.searchDurationMs = performance.now() - searchStart
+                return result
+            })
 
-            this.setBuffer(repository.searchQuery(this.model_name, this.pretrained, this.search_query, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
-            .then(this.initImage);
+            this.setBuffer(searchPromise)
+            .then(this.initImage)
+            .finally(() => { this.isSearching = false });
         },
 
         //クエリにテキストの特徴を足して検索するボタンの動作
         addTextFeaturesButton() {
+            const searchStart = performance.now()
+            this.isSearching = true
+            const searchPromise = repository.addTextFeatures(this.model_name, this.pretrained, this.text, this.search_query, this.features_strength, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            .then(result => {
+                this.searchDurationMs = performance.now() - searchStart
+                return result
+            })
 
-            this.setBuffer(repository.addTextFeatures(this.model_name, this.pretrained, this.text, this.search_query, this.features_strength, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
-            .then(this.initImage);
+            this.setBuffer(searchPromise)
+            .then(this.initImage)
+            .finally(() => { this.isSearching = false });
         },
 
         //テキストからタグを検索するボタンの動作
         tagSearchButton() {
+            const searchStart = performance.now()
+            this.isSearching = true
+            const searchPromise = repository.searchTags(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            .then(result => {
+                this.searchDurationMs = performance.now() - searchStart
+                return result
+            })
 
-            this.setBuffer(repository.searchTags(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
-            .then(this.initImage);
+            this.setBuffer(searchPromise)
+            .then(this.initImage)
+            .finally(() => { this.isSearching = false });
         },
 
         // style_cluster から検索するボタンの動作
         styleClusterSearchButton() {
+            const searchStart = performance.now()
+            this.isSearching = true
+            const searchPromise = repository.searchStyleCluster(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            .then(result => {
+                this.searchDurationMs = performance.now() - searchStart
+                return result
+            })
 
-            this.setBuffer(repository.searchStyleCluster(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name))
-            .then(this.initImage);
+            this.setBuffer(searchPromise)
+            .then(this.initImage)
+            .finally(() => { this.isSearching = false });
         },
 
         openDialog(item) {
