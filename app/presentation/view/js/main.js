@@ -309,6 +309,23 @@ const app = Vue.createApp({
             })
         },
 
+        /**
+         * 検索結果の反映後に表示を更新して状態を戻す
+         * @param {Promise<repository.ResultItem[]>} promise
+         * @param {(() => void) | null} afterBuffer
+         * @return {Promise<void>}
+         */
+        runSearch(promise, afterBuffer = null) {
+            return this.setBuffer(promise)
+            .then(() => {
+                if (afterBuffer) {
+                    return afterBuffer()
+                }
+            })
+            .then(this.initImage)
+            .finally(() => { this.isSearching = false })
+        },
+
 
 
         //テキストから検索するボタンの動作
@@ -321,9 +338,7 @@ const app = Vue.createApp({
                 return result
             })
 
-            this.setBuffer(searchPromise)
-            .then(this.initImage)
-            .finally(() => { this.isSearching = false });
+            this.runSearch(searchPromise)
         },
 
         //画像から検索するボタンの動作
@@ -339,9 +354,7 @@ const app = Vue.createApp({
                 return result
             })
 
-            this.setBuffer(searchPromise)
-            .then(this.initImage)
-            .finally(() => { this.isSearching = false });
+            this.runSearch(searchPromise)
         },
 
         //アップロード画像から検索するボタンの動作
@@ -357,10 +370,7 @@ const app = Vue.createApp({
                 return result
             })
 
-            this.setBuffer(searchPromise)
-            .then(() => { this.uploadFile = null })
-            .then(this.initImage)
-            .finally(() => { this.isSearching = false });
+            this.runSearch(searchPromise, () => { this.uploadFile = null })
         },
 
         //画像名前から検索するボタンの動作
@@ -373,9 +383,7 @@ const app = Vue.createApp({
                 return result
             })
 
-            this.setBuffer(searchPromise)
-            .then(this.initImage)
-            .finally(() => { this.isSearching = false });
+            this.runSearch(searchPromise)
         },
 
         allDownloadImagesButton() {
@@ -410,9 +418,7 @@ const app = Vue.createApp({
                 return result
             })
 
-            this.setBuffer(searchPromise)
-            .then(this.initImage)
-            .finally(() => { this.isSearching = false });
+            this.runSearch(searchPromise)
         },
 
         //クエリから検索するボタンの動作
@@ -425,9 +431,7 @@ const app = Vue.createApp({
                 return result
             })
 
-            this.setBuffer(searchPromise)
-            .then(this.initImage)
-            .finally(() => { this.isSearching = false });
+            this.runSearch(searchPromise)
         },
 
         //クエリにテキストの特徴を足して検索するボタンの動作
@@ -440,9 +444,7 @@ const app = Vue.createApp({
                 return result
             })
 
-            this.setBuffer(searchPromise)
-            .then(this.initImage)
-            .finally(() => { this.isSearching = false });
+            this.runSearch(searchPromise)
         },
 
         //テキストからタグを検索するボタンの動作
@@ -455,9 +457,7 @@ const app = Vue.createApp({
                 return result
             })
 
-            this.setBuffer(searchPromise)
-            .then(this.initImage)
-            .finally(() => { this.isSearching = false });
+            this.runSearch(searchPromise)
         },
 
         // style_cluster から検索するボタンの動作
@@ -470,9 +470,7 @@ const app = Vue.createApp({
                 return result
             })
 
-            this.setBuffer(searchPromise)
-            .then(this.initImage)
-            .finally(() => { this.isSearching = false });
+            this.runSearch(searchPromise)
         },
 
         openDialog(item) {
