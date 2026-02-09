@@ -56,7 +56,29 @@ body{
 	overflow: auto;
 }
 
+.timingArea {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 8px 0 12px;
+	font-size: 0.9rem;
+}
 
+.timingChip {
+	padding: 4px 8px;
+}
+
+.timingLabel {
+	margin-right: 6px;
+	font-weight: 600;
+}
+
+.timingValue {
+	display: inline-block;
+	min-width: 64px;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
 
 
 
