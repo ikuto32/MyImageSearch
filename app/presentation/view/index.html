@@ -15,10 +15,17 @@
             <v-app-bar id="controlArea">
                 <v-app-bar-nav-icon @click.stop="isShowSetting = !isShowSetting"></v-app-bar-nav-icon>
                 <v-text-field label="search" id="textSearchBox" single-line dense clearable hide-details="auto" v-model="text" placeholder="Text"></v-text-field>
-                <v-btn @click="textSearchButton" prepend-icon="mdi-format-text-variant" class="d-none d-md-flex">テキスト検索</v-btn>
-                <v-btn @click="imagesSearchButton" prepend-icon="mdi-image-search " class="d-none d-md-flex">画像検索</v-btn>
-                <v-btn @click="textSearchButton" icon="mdi-format-text-variant" class="d-md-none"></v-btn>
-                <v-btn @click="imagesSearchButton" icon="mdi-image-search " class="d-md-none"></v-btn>
+                <v-btn @click="textSearchButton" :disabled="isSearching" prepend-icon="mdi-format-text-variant" class="d-none d-md-flex">テキスト検索</v-btn>
+                <v-btn @click="imagesSearchButton" :disabled="isSearching" prepend-icon="mdi-image-search " class="d-none d-md-flex">画像検索</v-btn>
+                <v-btn @click="textSearchButton" :disabled="isSearching" icon="mdi-format-text-variant" class="d-md-none"></v-btn>
+                <v-btn @click="imagesSearchButton" :disabled="isSearching" icon="mdi-image-search " class="d-md-none"></v-btn>
+                <v-progress-circular
+                    v-if="isSearching"
+                    class="ml-3"
+                    color="primary"
+                    indeterminate
+                    size="24"
+                ></v-progress-circular>
             </v-app-bar>
             <v-main>
                 <div class="scrollArea"
@@ -33,13 +40,13 @@
                         temporary
                         :width="500"
                         >
-                            <v-btn @click="nameSearchButton">名前検索</v-btn>
+                            <v-btn @click="nameSearchButton" :disabled="isSearching">名前検索</v-btn>
                             <v-btn @click="allDownloadImagesButton">画像を一括ダウンロード</v-btn>
-                            <v-btn @click="randomSearchButton">乱数から検索</v-btn>
-                            <v-btn @click="querySearchButton">クエリから検索</v-btn>
-                            <v-btn @click="addTextFeaturesButton">クエリにテキストの特徴を足す</v-btn>
-                            <v-btn @click="tagSearchButton">タグを検索</v-btn>
-                            <v-btn @click="styleClusterSearchButton">style_cluster を検索</v-btn>
+                            <v-btn @click="randomSearchButton" :disabled="isSearching">乱数から検索</v-btn>
+                            <v-btn @click="querySearchButton" :disabled="isSearching">クエリから検索</v-btn>
+                            <v-btn @click="addTextFeaturesButton" :disabled="isSearching">クエリにテキストの特徴を足す</v-btn>
+                            <v-btn @click="tagSearchButton" :disabled="isSearching">タグを検索</v-btn>
+                            <v-btn @click="styleClusterSearchButton" :disabled="isSearching">style_cluster を検索</v-btn>
                             <v-switch label="正規表現を使う" id="trueRegexp" v-model="isRegexp"></v-switch>
                             <span class="rangeSpan d-flex flex-row">
                                 <v-slider class="" label="numCols" id="setnNumCols" :min="1" :max="24" :step="1"
@@ -102,7 +109,7 @@
                             prepend-icon="mdi-upload"
                             hide-details="auto"
                             ></v-file-input>
-                            <v-btn @click="uploadImageSearchButton">アップロード検索</v-btn>
+                            <v-btn @click="uploadImageSearchButton" :disabled="isSearching">アップロード検索</v-btn>
                         </v-navigation-drawer>
                         <div class="timingArea">
                             <v-chip size="small" class="timingChip" label>
