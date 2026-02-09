@@ -509,6 +509,14 @@ const app = Vue.createApp({
             } else {
                 this.selectedItemId[item.id] = true;
             }
+        },
+
+        formatDuration(durationMs) {
+            if (!Number.isFinite(durationMs)) {
+                return "--"
+            }
+
+            return `${Math.round(durationMs)} ms`
         }
     }
 })
