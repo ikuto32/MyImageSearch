@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import concurrent.futures
+import contextlib
 import datetime
 import gc
 import hashlib
@@ -16,6 +17,7 @@ from typing import Any, Iterable
 import csv
 import uuid
 import types
+import time
 
 import faiss
 import huggingface_hub
@@ -765,6 +767,8 @@ def parse_arguments():
 
 
 _PARALLEL = 64
+_SCAN_TIMEOUT_SEC = 120
+_SCAN_STALL_LOG_INTERVAL_SEC = 30
 
 def get_default_image_extensions() -> list[str]:
     """Return a list of image file extensions supported by Pillow.
@@ -795,6 +799,9 @@ async def _collect_images(root: pathlib.Path, exts: typing.Sequence[str]) -> lis
     files: list[str] = []
     bar = tqdm.tqdm(unit="file", dynamic_ncols=True)
 
+    in_progress_scans: dict[pathlib.Path, float] = {}
+    in_progress_lock = asyncio.Lock()
+
     # 同時実行制限
     sem = asyncio.Semaphore(_PARALLEL)
 
@@ -819,10 +826,50 @@ async def _collect_images(root: pathlib.Path, exts: typing.Sequence[str]) -> lis
             pass
         return dirs, hits
 
+    async def _scan_with_timeout(path: pathlib.Path) -> tuple[list[pathlib.Path], list[str]]:
+        start = time.monotonic()
+        async with in_progress_lock:
+            in_progress_scans[path] = start
+
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(pool, _scan_dir_sync, path),
+                timeout=_SCAN_TIMEOUT_SEC,
+            )
+        except TimeoutError:
+            print(
+                f"[scan timeout] {path} did not finish within "
+                f"{_SCAN_TIMEOUT_SEC} sec and will be skipped"
+            )
+            return [], []
+        finally:
+            async with in_progress_lock:
+                in_progress_scans.pop(path, None)
+
+    async def _stall_monitor() -> None:
+        try:
+            while True:
+                await asyncio.sleep(_SCAN_STALL_LOG_INTERVAL_SEC)
+                now = time.monotonic()
+                async with in_progress_lock:
+                    stalled = [
+                        (path, now - started)
+                        for path, started in in_progress_scans.items()
+                        if now - started >= _SCAN_STALL_LOG_INTERVAL_SEC
+                    ]
+
+                if stalled:
+                    stalled.sort(key=lambda x: x[1], reverse=True)
+                    print("[scan monitor] slow directories currently being scanned:")
+                    for path, elapsed in stalled[:10]:
+                        print(f"  - {path} ({elapsed:.1f} sec)")
+        except asyncio.CancelledError:
+            return
+
     async def _walk(path: pathlib.Path):
         async with sem:
             # thread pool で同期スキャン
-            dirs, hits = await loop.run_in_executor(pool, _scan_dir_sync, path)
+            dirs, hits = await _scan_with_timeout(path)
             files.extend(hits)
             bar.update(len(hits))
 
@@ -831,7 +878,13 @@ async def _collect_images(root: pathlib.Path, exts: typing.Sequence[str]) -> lis
 
     # プールは with で自動クローズ
     with concurrent.futures.ThreadPoolExecutor(max_workers=_PARALLEL) as pool:
-        await _walk(root)
+        monitor_task = asyncio.create_task(_stall_monitor())
+        try:
+            await _walk(root)
+        finally:
+            monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await monitor_task
 
     bar.close()
     return sorted(files)
