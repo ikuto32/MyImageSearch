@@ -773,6 +773,14 @@ def parse_arguments():
             "no progress is observed for this duration."
         ),
     )
+    parser.add_argument(
+        "--delete-orphan-db-records",
+        action="store_true",
+        help=(
+            "Delete records that exist only in DB (not in the current image directory). "
+            "Disabled by default."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -1124,6 +1132,15 @@ class ImageMetaFilterStats(typing.NamedTuple):
     has_existing_metas: bool
 
 
+class OrphanDbStats(typing.NamedTuple):
+    total_db_count: int
+    orphan_records: list[tuple[str, str | None]]
+
+    @property
+    def orphan_count(self) -> int:
+        return len(self.orphan_records)
+
+
 def filter_valid_image_meta(args, result, image_id_to_path):
     valid_meta_count = 0
     has_existing_metas = False
@@ -1143,7 +1160,51 @@ def filter_valid_image_meta(args, result, image_id_to_path):
     return ImageMetaFilterStats(valid_meta_count, has_existing_metas), uncreated_image_paths
 
 
-def print_image_meta_stats(meta_stats, uncreated_image_paths, max_len):
+def collect_orphan_db_records(
+    con: sqlite3.Connection, id_list: list[str], loop_size: int
+) -> OrphanDbStats:
+    total_db_count = int(con.execute("SELECT COUNT(*) FROM image_meta").fetchone()[0])
+    if total_db_count == 0:
+        return OrphanDbStats(total_db_count=0, orphan_records=[])
+
+    cur = con.cursor()
+    temp_table = f"valid_id_{uuid.uuid4().hex}"
+
+    try:
+        cur.execute(f'DROP TABLE IF EXISTS "{temp_table}"')
+        cur.execute(f'CREATE TEMP TABLE "{temp_table}" (image_id TEXT PRIMARY KEY)')
+
+        if id_list:
+            cur.execute("BEGIN")
+            try:
+                for idx in tqdm.tqdm(range(0, len(id_list), loop_size)):
+                    sub_list: list[str] = id_list[idx: idx + loop_size]
+                    cur.executemany(
+                        f'INSERT INTO "{temp_table}" (image_id) VALUES (?)',
+                        ((image_id,) for image_id in sub_list),
+                    )
+            except Exception:
+                con.rollback()
+                raise
+            else:
+                con.commit()
+
+        cur.execute(
+            f"""
+            SELECT image_meta.image_id, image_meta.image_path
+              FROM image_meta
+              LEFT JOIN "{temp_table}" AS valid_id
+                ON image_meta.image_id = valid_id.image_id
+             WHERE valid_id.image_id IS NULL
+            """
+        )
+        orphan_records = list(cur.fetchall())
+        return OrphanDbStats(total_db_count=total_db_count, orphan_records=orphan_records)
+    finally:
+        cur.execute(f'DROP TABLE IF EXISTS "{temp_table}"')
+
+
+def print_image_meta_stats(meta_stats, uncreated_image_paths, max_len, orphan_db_stats):
     valid_count = meta_stats.valid_meta_count
     print(
         f"uncreated images:{len(uncreated_image_paths)}/{max_len} ({len(uncreated_image_paths)/max_len*100.:.4f}%)"
@@ -1151,6 +1212,31 @@ def print_image_meta_stats(meta_stats, uncreated_image_paths, max_len):
     print(
         f"existing metas:{valid_count}/{max_len} ({valid_count/max_len*100.:.4f}%)"
     )
+    orphan_ratio = (
+        (orphan_db_stats.orphan_count / orphan_db_stats.total_db_count) * 100.0
+        if orphan_db_stats.total_db_count
+        else 0.0
+    )
+    print(
+        f"orphan db records:{orphan_db_stats.orphan_count}/{orphan_db_stats.total_db_count} ({orphan_ratio:.4f}%)"
+    )
+
+
+def delete_orphan_db_records(con: sqlite3.Connection, orphan_db_stats: OrphanDbStats):
+    if orphan_db_stats.orphan_count == 0:
+        print("No orphan DB records to delete.")
+        return
+
+    print("Deleting orphan DB records...")
+    with con:
+        con.executemany(
+            "DELETE FROM image_meta WHERE image_id = ?",
+            ((image_id,) for image_id, _ in orphan_db_stats.orphan_records),
+        )
+
+    print("Deleted records:")
+    for image_id, image_path in orphan_db_stats.orphan_records:
+        print(f"- {image_path if image_path else image_id}")
 
 
 def extract_image_features(
@@ -1574,10 +1660,18 @@ def main():
 
     meta_stats, uncreated_image_paths = filter_valid_image_meta(args, result, index_item_list)
     uncreated_image_ids = [path_to_image_id[path] for path in uncreated_image_paths]
+    orphan_db_stats = collect_orphan_db_records(
+        con,
+        id_list=list(index_item_list.keys()),
+        loop_size=10000,
+    )
 
-    print_image_meta_stats(meta_stats, uncreated_image_paths, len(index_item_list))
+    print_image_meta_stats(meta_stats, uncreated_image_paths, len(index_item_list), orphan_db_stats)
 
-    del result, index_item_list, meta_stats
+    if args.delete_orphan_db_records:
+        delete_orphan_db_records(con, orphan_db_stats)
+
+    del result, index_item_list, meta_stats, orphan_db_stats
 
     dataset = None
     T = True
