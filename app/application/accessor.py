@@ -37,6 +37,7 @@ class Accessor():
     @abstractmethod
     def load_startup_image_items(
         self,
+        model_id: ModelId,
     ) -> tuple[list[ImageItem], dict[ImageId, pathlib.Path]]:
         """起動時表示用の画像一覧とImageId->相対パスマップを読み込む"""
 

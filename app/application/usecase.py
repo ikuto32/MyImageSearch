@@ -29,7 +29,12 @@ from app.domain.repository import Repository
 class Usecase:
     """このアプリケーションの動作を実装するクラス"""
 
-    def __init__(self, repository: Repository, accessor: Accessor) -> None:
+    def __init__(
+        self,
+        repository: Repository,
+        accessor: Accessor,
+        startup_model_id: ModelId,
+    ) -> None:
         self._logger = logging.getLogger(__name__)
         self._repository: Repository = repository
         self._accessor: Accessor = accessor
@@ -37,7 +42,9 @@ class Usecase:
         self._image_items: list[ImageItem] = []
 
         # 起動時はDBのメタ情報から画像項目を読み込む（失敗時のみ従来の全走査へフォールバック）
-        startup_items, image_paths = self._accessor.load_startup_image_items()
+        startup_items, image_paths = self._accessor.load_startup_image_items(
+            startup_model_id
+        )
         if startup_items:
             self._repository.set_image_paths(image_paths)
             self._image_items = startup_items
