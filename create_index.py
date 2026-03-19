@@ -712,7 +712,9 @@ def get_aesthetic_model(path_to_model, clip_model="vit_l_14"):
         m = Aesthetic_model()
     else:
         raise ValueError()
-    m.load_state_dict(torch.load(path_to_model))
+    raw = torch.load(path_to_model, map_location="cpu")
+    state_dict = raw.get("state_dict", raw) if isinstance(raw, dict) else raw
+    m.load_state_dict(state_dict, strict=True)
     m.eval()
     return m
 
@@ -721,10 +723,10 @@ def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
 
-    # parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
-    # parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
-    parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
+    parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
+    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
+    # parser.add_argument("--image_dir", help="dir", default="./images")
+    # parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
 
     parser.add_argument(
         "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_ranking100.pth"
@@ -780,6 +782,21 @@ def parse_arguments():
             "Delete records that exist only in DB (not in the current image directory). "
             "Disabled by default."
         ),
+    )
+    parser.add_argument(
+        "--recalc-aesthetic",
+        action="store_true",
+        help=(
+            "DBに保存済みの CLIP ベクトル (meta) を再利用して aesthetic_quality / "
+            "pony_aesthetic_quality のみを高速再計算し、DB を更新して FAISSインデックスを再構築する。"
+            "画像ファイルのスキャン・CLIP推論・タグ付けはすべてスキップされる。"
+        ),
+    )
+    parser.add_argument(
+        "--recalc-aesthetic-batch-size",
+        type=int,
+        default=4096,
+        help="recalc-aesthetic モード時の DB フェッチ・更新バッチサイズ (default: 4096)",
     )
 
     return parser.parse_args()
@@ -1504,6 +1521,99 @@ def collect_train_samples_algL(
     # 到達しない
 
 
+def recalc_aesthetic_scores(
+    con: sqlite3.Connection,
+    aesthetic_model: nn.Module,
+    pony_scorer: "PonyAestheticScorer",
+    device: str,
+    out_dim: int,
+    batch_size: int = 4096,
+) -> int:
+    """
+    DB に保存済みの CLIP ベクトル (meta BLOB) だけを使って
+    aesthetic_quality と pony_aesthetic_quality を高速に再計算する。
+
+    - 画像ファイルのスキャン・CLIP推論・タグ付けは一切行わない。
+    - meta が NULL または次元不一致のレコードはスキップする。
+    - バッチ単位でフェッチ → 推論 → UPDATE を繰り返すためメモリ効率が良い。
+
+    Returns:
+        更新した行数
+    """
+    expected_bytes = out_dim * np.dtype(np.float32).itemsize
+
+    total = con.execute(
+        "SELECT COUNT(*) FROM image_meta WHERE meta IS NOT NULL"
+    ).fetchone()[0]
+    print(f"[recalc_aesthetic] target rows with meta: {total}")
+
+    cur_read = con.execute(
+        "SELECT image_id, meta FROM image_meta WHERE meta IS NOT NULL ORDER BY image_path"
+    )
+
+    updated = 0
+    pbar = tqdm.tqdm(total=total, unit="row", desc="recalc_aesthetic")
+
+    aesthetic_dtype = next(aesthetic_model.parameters()).dtype
+
+    while True:
+        rows = cur_read.fetchmany(batch_size)
+        if not rows:
+            break
+
+        # --- 次元が一致するレコードだけを集める ---
+        valid_ids: list[str] = []
+        vectors: list[np.ndarray] = []
+        for image_id, meta_blob in rows:
+            if len(meta_blob) != expected_bytes:
+                pbar.update(1)
+                continue
+            vec = np.frombuffer(meta_blob, dtype=np.float32).copy()
+            valid_ids.append(image_id)
+            vectors.append(vec)
+            pbar.update(1)
+
+        if not valid_ids:
+            continue
+
+        # --- バッチ推論 ---
+        feats = torch.from_numpy(np.stack(vectors)).to(device=device, dtype=aesthetic_dtype)
+
+        # L2正規化（aesthetic_model は正規化済みベクトルを期待）
+        denom = feats.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+        feats_norm = feats / denom
+
+        with torch.no_grad():
+            aesthetic_scores: np.ndarray = (
+                torch.sigmoid(aesthetic_model(feats_norm))
+                .squeeze(-1)
+                .cpu()
+                .numpy()
+            )
+            pony_scores: np.ndarray = pony_scorer.score_batch(feats_norm)
+
+        # --- DB 更新 ---
+        params = [
+            (float(a), float(p), iid)
+            for iid, a, p in zip(valid_ids, aesthetic_scores, pony_scores)
+        ]
+        con.executemany(
+            """
+            UPDATE image_meta
+               SET aesthetic_quality      = ?,
+                   pony_aesthetic_quality = ?
+             WHERE image_id = ?
+            """,
+            params,
+        )
+        con.commit()
+        updated += len(params)
+
+    pbar.close()
+    print(f"[recalc_aesthetic] updated {updated} rows")
+    return updated
+
+
 def stream_build_faiss(
     db_path: str,
     nlist: int, M: int, bits_per_code: int,
@@ -1585,6 +1695,56 @@ def main():
 
     # 作業フォルダの作成
     search_model_meta_dir: str = create_search_model_meta_dir(args)
+
+    # --recalc-aesthetic モード: 画像スキャン不要。DB の meta ベクトルだけを再利用する。
+    if getattr(args, "recalc_aesthetic", False):
+        print("[recalc_aesthetic] mode: skipping image scan / CLIP inference / tagging")
+        configure_torch_backends()
+        device = get_device()
+
+        # aesthetic モデルだけ読み込む（CLIP・タガーは不要）
+        aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
+        aesthetic_model = aesthetic_model.to(device)
+        aesthetic_model.eval()
+
+        aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
+        aesthetic_checkpoint = ensure_asset_path(
+            aesthetic_checkpoint_arg,
+            AESTHETIC_CHECKPOINT_FILENAME,
+            "aesthetic checkpoint",
+        )
+        pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
+
+        con = connect_db(search_model_meta_dir)
+        cur = con.cursor()
+        init_db(cur)
+
+        recalc_batch = getattr(args, "recalc_aesthetic_batch_size", 4096)
+        recalc_aesthetic_scores(
+            con,
+            aesthetic_model,
+            pony_scorer,
+            device,
+            out_dim=args.search_model_out_dim,
+            batch_size=recalc_batch,
+        )
+
+        cur.execute("pragma optimize")
+        con.close()
+
+        # FAISSインデックスを再構築
+        stream_build_faiss(
+            search_model_meta_dir,
+            args.nlist,
+            args.M,
+            args.bits_per_code,
+            args.search_model_out_dim,
+            f"{search_model_meta_dir}/{args.metas_faiss_index_file_name}",
+            batch_size=100_000,
+            train_samples=2_000_000,
+        )
+        print("[recalc_aesthetic] done.")
+        return
 
     # 画像ファイル一覧を求める
     print("files")

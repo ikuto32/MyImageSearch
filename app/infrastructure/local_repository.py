@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+from dataclasses import dataclass
 from functools import cache
 import hashlib
 import io
@@ -7,7 +9,9 @@ import logging
 import os
 import pathlib
 import mimetypes
-from typing import List
+import threading
+import time
+from typing import List, Sequence
 import concurrent.futures
 import zipfile
 
@@ -29,117 +33,283 @@ from PIL import Image as PILImage
 
 import open_clip
 
+@dataclass
+class _ScanProgress:
+    started_at: float
+    last_progress_at: float
+
 
 class LocalRepository(Repository):
     """ローカル上のファイルを対象としたRepository"""
 
-    def __init__(self, image_dir_path: pathlib.Path) -> None:
+    _PARALLEL = 64
+    _SCAN_TIMEOUT_SEC = 3600.0
+    _SCAN_STALL_LOG_INTERVAL_SEC = 300.0
+    _IMAGE_ITEM_WORKERS = 32
 
+    def __init__(
+        self,
+        image_dir_path: pathlib.Path,
+        *,
+        scan_timeout_sec: float = _SCAN_TIMEOUT_SEC,
+        scan_parallelism: int = _PARALLEL,
+    ) -> None:
         self._logger = logging.getLogger(__name__)
         self._image_dir_path: pathlib.Path = image_dir_path
         self._id_to_path: dict[ImageId, pathlib.Path] = {}
+        self._scan_timeout_sec = scan_timeout_sec
+        self._scan_parallelism = scan_parallelism
+
+    @staticmethod
+    def _get_default_image_extensions() -> list[str]:
+        """Pillow が現在サポートしている拡張子一覧を返す。"""
+        return sorted(PILImage.registered_extensions().keys())
+
+    def _run_coro_sync(self, coro):
+        """
+        同期メソッドから安全に coroutine を実行する。
+
+        - 通常の同期コンテキストでは asyncio.run() を使う
+        - すでに event loop が動作中なら別スレッドで実行する
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+
+        result = None
+        error = None
+
+        def runner():
+            nonlocal result, error
+            try:
+                result = asyncio.run(coro)
+            except BaseException as exc:  # noqa: BLE001
+                error = exc
+
+        thread = threading.Thread(target=runner, daemon=True)
+        thread.start()
+        thread.join()
+
+        if error is not None:
+            raise error
+        return result
+
+    async def _collect_image_relative_paths(
+        self,
+        exts: Sequence[str],
+    ) -> list[pathlib.Path]:
+        """
+        create_index.py の get_image_list_from_dir/_collect_images 相当。
+
+        - Pillow の拡張子一覧を利用
+        - ディレクトリごとに ThreadPoolExecutor で scandir
+        - 停滞したスキャンだけ timeout でスキップ
+        - 返り値は root からの相対パス
+        """
+        root = self._image_dir_path
+        loop = asyncio.get_running_loop()
+
+        ext_set = {
+            ("." + ext if not ext.startswith(".") else ext).lower()
+            for ext in exts
+        }
+        ext_tuple = tuple(ext_set)
+
+        files: list[pathlib.Path] = []
+        progress_bar = tqdm.tqdm(
+            unit="file",
+            dynamic_ncols=True,
+            desc="画像を走査中",
+        )
+
+        in_progress_scans: dict[pathlib.Path, _ScanProgress] = {}
+        in_progress_lock = asyncio.Lock()
+        thread_progress_lock = threading.Lock()
+        semaphore = asyncio.Semaphore(self._scan_parallelism)
+
+        def _mark_progress(path: pathlib.Path) -> None:
+            now = time.monotonic()
+            with thread_progress_lock:
+                progress = in_progress_scans.get(path)
+                if progress is not None:
+                    progress.last_progress_at = now
+
+        def _get_progress_snapshot(path: pathlib.Path) -> _ScanProgress | None:
+            with thread_progress_lock:
+                progress = in_progress_scans.get(path)
+                if progress is None:
+                    return None
+                return _ScanProgress(
+                    started_at=progress.started_at,
+                    last_progress_at=progress.last_progress_at,
+                )
+
+        def _scan_dir_sync(
+            path: pathlib.Path,
+        ) -> tuple[list[pathlib.Path], list[pathlib.Path]]:
+            dirs: list[pathlib.Path] = []
+            hits: list[pathlib.Path] = []
+
+            try:
+                with os.scandir(path) as it:
+                    for entry in it:
+                        _mark_progress(path)
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                dirs.append(pathlib.Path(entry.path))
+                            elif entry.is_file(follow_symlinks=False):
+                                name_lc = entry.name.lower()
+                                if name_lc.endswith(ext_tuple):
+                                    hits.append(
+                                        pathlib.Path(
+                                            os.path.relpath(entry.path, root)
+                                        )
+                                    )
+                        except OSError:
+                            # 個別エントリのアクセス失敗は無視
+                            continue
+            except (PermissionError, FileNotFoundError, NotADirectoryError):
+                # create_index.py と同様、読めないディレクトリはスキップ
+                pass
+
+            return dirs, hits
+
+        async def _scan_with_timeout(
+            path: pathlib.Path,
+        ) -> tuple[list[pathlib.Path], list[pathlib.Path]]:
+            start = time.monotonic()
+            async with in_progress_lock:
+                in_progress_scans[path] = _ScanProgress(
+                    started_at=start,
+                    last_progress_at=start,
+                )
+
+            future = loop.run_in_executor(pool, _scan_dir_sync, path)
+            try:
+                while True:
+                    try:
+                        return await asyncio.wait_for(
+                            asyncio.shield(future),
+                            timeout=self._scan_timeout_sec,
+                        )
+                    except TimeoutError:
+                        snapshot = _get_progress_snapshot(path)
+                        if snapshot is None:
+                            return await future
+
+                        now = time.monotonic()
+                        stall_sec = now - snapshot.last_progress_at
+                        if stall_sec >= self._scan_timeout_sec:
+                            self._logger.warning(
+                                "[scan timeout] path=%s last_progress_sec_ago=%.1f "
+                                "scan stalled and will be skipped",
+                                path,
+                                stall_sec,
+                            )
+                            return [], []
+            finally:
+                async with in_progress_lock:
+                    in_progress_scans.pop(path, None)
+
+        async def _stall_monitor() -> None:
+            try:
+                while True:
+                    await asyncio.sleep(self._SCAN_STALL_LOG_INTERVAL_SEC)
+                    now = time.monotonic()
+                    async with in_progress_lock:
+                        stalled = [
+                            (
+                                path,
+                                now - progress.started_at,
+                                now - progress.last_progress_at,
+                            )
+                            for path, progress in in_progress_scans.items()
+                            if now - progress.started_at
+                            >= self._SCAN_STALL_LOG_INTERVAL_SEC
+                        ]
+
+                    if stalled:
+                        stalled.sort(key=lambda x: x[2], reverse=True)
+                        self._logger.warning(
+                            "[scan monitor] slow directories currently being scanned:"
+                        )
+                        for path, elapsed, stall in stalled[:10]:
+                            self._logger.warning(
+                                "  - %s (elapsed=%.1f sec, stalled=%.1f sec)",
+                                path,
+                                elapsed,
+                                stall,
+                            )
+            except asyncio.CancelledError:
+                return
+
+        async def _walk(path: pathlib.Path) -> None:
+            async with semaphore:
+                dirs, hits = await _scan_with_timeout(path)
+                files.extend(hits)
+                progress_bar.update(len(hits))
+
+            if dirs:
+                await asyncio.gather(*(_walk(d) for d in dirs))
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self._scan_parallelism
+        ) as pool:
+            monitor_task = asyncio.create_task(_stall_monitor())
+            try:
+                await _walk(root)
+            finally:
+                monitor_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await monitor_task
+                progress_bar.close()
+
+        return sorted(files, key=lambda p: str(p).lower())
 
     @cache
     def load_all_image_item(self) -> List[ImageItem]:
-        """画像ルート以下を非同期に走査し、キャッシュされたImageItem一覧を返す。
-
-        - asyncio + ThreadPoolExecutor を組み合わせ、最大640ワーカーでディレクトリを幅優先的に巡回する。
-        - scandir の結果をキューに積みつつ、拡張子リストにマッチするファイルだけを収集する。
-        - 関数呼び出しは ``functools.cache`` によりメモ化され、2回目以降はディスクを走査しない。
-        - 収集したパスを32スレッドで並列処理し、ハッシュ化したIDや表示名を持つ ``ImageItem`` を生成する。
-        - 戻り値はファイル名でソートされた ``ImageItem`` のリスト。
         """
-        async def _load_all_image_item_async():
-            files = []
-            # extensions = list(PILImage.registered_extensions().keys())
-            extensions = ['.avif', '.avifs', '.blp', '.bmp', '.dib', '.bufr', '.cur', '.pcx', '.dcx', '.dds', '.ps', '.eps', '.fit', '.fits', '.fli', '.flc', '.ftc', '.ftu', '.gbr', '.gif', '.grib', '.h5', '.hdf', '.png', '.apng', '.jp2', '.j2k', '.jpc', '.jpf', '.jpx', '.j2c', '.icns', '.ico', '.im', '.iim', '.jfif', '.jpe', '.jpg', '.jpeg', '.mpg', '.mpeg', '.tif', '.tiff', '.mpo', '.msp', '.palm', '.pcd', '.pxr', '.pbm', '.pgm', '.ppm', '.pnm', '.pfm', '.psd', '.qoi', '.bw', '.rgb', '.rgba', '.sgi', '.ras', '.tga', '.icb', '.vda', '.vst', '.webp', '.wmf', '.emf', '.xbm', '.xpm']
-            ext_set = set(e.lower() if e.startswith('.') else f'.{e.lower()}' for e in extensions)
-            loop = asyncio.get_event_loop()
-            executor = concurrent.futures.ThreadPoolExecutor(max_workers=320)
-            queue = asyncio.Queue()
-            await queue.put(str(self._image_dir_path))
+        画像ルート以下を走査し、キャッシュされた ImageItem 一覧を返す。
 
-            progress = tqdm.tqdm(total=0, unit="file", dynamic_ncols=True)
-            update_interval = 100  # 進捗バーの更新間隔
-            counter = 0
+        create_index.py 由来の改善点:
+        - Pillow の registered_extensions() を使って拡張子を決定
+        - 64 並列を上限にディレクトリ単位で非同期走査
+        - 進捗停滞時だけ timeout 扱いでスキップ
+        - 遅いディレクトリを monitor ログに出す
+        """
+        extensions = ['.avif', '.avifs', '.blp', '.bmp', '.dib', '.bufr', '.cur', '.pcx', '.dcx', '.dds', '.ps', '.eps', '.fit', '.fits', '.fli', '.flc', '.ftc', '.ftu', '.gbr', '.gif', '.grib', '.h5', '.hdf', '.png', '.apng', '.jp2', '.j2k', '.jpc', '.jpf', '.jpx', '.j2c', '.icns', '.ico', '.im', '.iim', '.jfif', '.jpe', '.jpg', '.jpeg', '.mpg', '.mpeg', '.tif', '.tiff', '.mpo', '.msp', '.palm', '.pcd', '.pxr', '.pbm', '.pgm', '.ppm', '.pnm', '.pfm', '.psd', '.qoi', '.bw', '.rgb', '.rgba', '.sgi', '.ras', '.tga', '.icb', '.vda', '.vst', '.webp', '.wmf', '.emf', '.xbm', '.xpm']
+        extensions = set(e.lower() if e.startswith('.') else f'.{e.lower()}' for e in extensions)
+        files = self._run_coro_sync(self._collect_image_relative_paths(extensions))
 
-            async def worker():
-                nonlocal counter
-                while True:
-                    current_dir = await queue.get()
-                    try:
-                        # ディレクトリエントリを非同期に取得
-                        def list_dir(path):
-                            with os.scandir(path) as it:
-                                return [entry for entry in it]
-                        entries = await loop.run_in_executor(executor, list_dir, current_dir)
+        def create_image_item(relative_file: pathlib.Path):
+            relative_file_str = str(relative_file)
+            image_id = ImageId(
+                hashlib.sha256(relative_file_str.encode("utf-8")).hexdigest()
+            )
+            image_item = ImageItem(
+                image_id,
+                ImageName(relative_file_str),
+                ImageTags(relative_file_str),
+            )
+            return image_id, relative_file, image_item
 
-                        for entry in entries:
-                            try:
-                                if entry.is_dir(follow_symlinks=False):
-                                    await queue.put(entry.path)
-                                elif entry.is_file(follow_symlinks=False):
-                                    # ファイルの拡張子をチェック
-                                    name_lower = entry.name.lower()
-                                    if any(name_lower.endswith(ext) for ext in ext_set):
-                                        files.append(entry.path)
-                                        counter += 1
-                                        if counter >= update_interval:
-                                            progress.update(counter)
-                                            counter = 0
-                            except OSError:
-                                # エントリへのアクセスに失敗した場合
-                                continue
-                    except PermissionError:
-                        pass
-                    finally:
-                        queue.task_done()
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self._IMAGE_ITEM_WORKERS
+        ) as executor:
+            results = list(
+                executor.map(
+                    create_image_item,
+                    tqdm.tqdm(files, desc="ImageItemを作成中"),
+                )
+            )
 
-            # ワーカータスクを起動
-            tasks = []
-            num_workers = 640  # ワーカー数は環境に合わせて調整
-            for _ in range(num_workers):
-                task = asyncio.create_task(worker())
-                tasks.append(task)
+        self._id_to_path.update(
+            {image_id: relative_path for image_id, relative_path, _ in results}
+        )
 
-            # キューが空になるまで待機
-            await queue.join()
-
-            # 残ったカウンタを更新
-            if counter > 0:
-                progress.update(counter)
-
-            # ワーカータスクをキャンセル
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-            progress.close()
-            executor.shutdown()
-            return files
-
-        # 非同期関数を実行してファイルリストを取得
-        loop = asyncio.get_event_loop()
-        files = loop.run_until_complete(_load_all_image_item_async())
-
-        # ImageItemを作成する関数
-        def create_image_item(file_path: str):
-            relative_file = os.path.relpath(file_path, str(self._image_dir_path))
-            id = ImageId(hashlib.sha256(relative_file.encode()).hexdigest())
-            return id, relative_file, ImageItem(id, ImageName(relative_file), ImageTags(relative_file))
-
-        # ファイルを並列に処理してImageItemを作成
-        with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
-            results = list(executor.map(create_image_item, tqdm.tqdm(files, desc="ImageItemを作成中")))
-
-        # self._id_to_pathを更新
-        id_to_path = {id: relative_file for id, relative_file, _ in results}
-        self._id_to_path.update(id_to_path)
-
-        # ImageItemを抽出してソート
         items = [item for _, _, item in results]
         items.sort(key=lambda item: item.display_name.name)
-
         return items
 
     @cache

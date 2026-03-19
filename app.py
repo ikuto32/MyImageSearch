@@ -13,8 +13,8 @@ from app.application import usecase
 def main():
 
     # コンフィグ
-    image_dir_path: pathlib.Path = pathlib.Path('./images')
-    meta_dir_path: pathlib.Path = pathlib.Path('./clip_meta')
+    image_dir_path: pathlib.Path = pathlib.Path('//192.168.1.46/ikutoDataset/dataset/gallery-dl')
+    meta_dir_path: pathlib.Path = pathlib.Path('C:/Users/ikuto/projects/clip_meta')
 
     accessor: LocalAccessor = LocalAccessor(meta_dir_path)
 
