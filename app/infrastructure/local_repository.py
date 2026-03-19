@@ -412,3 +412,7 @@ class LocalRepository(Repository):
         image_name = pathlib.Path(relative_path).name
 
         return ImageName(name=image_name)
+
+    def set_image_paths(self, image_paths: dict[ImageId, pathlib.Path]) -> None:
+        """ImageIdから相対パスを引くためのマップを設定する。"""
+        self._id_to_path = dict(image_paths)

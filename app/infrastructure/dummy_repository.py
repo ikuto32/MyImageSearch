@@ -1,4 +1,6 @@
 import base64
+import io
+import pathlib
 
 from app.domain.domain_object import ImageItem, ImageId, Image, ImageName, Model, ModelId, ModelItem, ModelName
 from app.domain.repository import Repository
@@ -33,6 +35,10 @@ class DummyRepository(Repository):
 
         return self._dummy_image
 
+    def load_small_image(self, image_id: ImageId) -> Image:
+
+        return self._dummy_image
+
     def load_all_model_item(self) -> list[ModelItem]:
 
         return [ModelItem(ModelId("dummy_model_id", "dummy_pretrained"), ModelName("ダミーのモデルID"))]
@@ -40,3 +46,15 @@ class DummyRepository(Repository):
     def load_model(self, id: ModelId) -> Model:
 
         return Model(None)
+
+    def create_zip_from_images(self, images_with_names) -> io.BytesIO:
+
+        return io.BytesIO()
+
+    def get_image_name(self, image_id: ImageId) -> ImageName:
+
+        return ImageName("dummy.png")
+
+    def set_image_paths(self, image_paths: dict[ImageId, pathlib.Path]) -> None:
+
+        return None
