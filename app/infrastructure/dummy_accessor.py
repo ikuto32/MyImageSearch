@@ -1,8 +1,9 @@
+import pathlib
 from typing import Any
 
 import numpy as np
 
-from app.domain.domain_object import ImageId, ModelId
+from app.domain.domain_object import ImageId, ImageItem, ModelId
 from app.application.accessor import Accessor
 
 
@@ -20,3 +21,8 @@ class DummyAccessor(Accessor):
 
     def load_index_with_metadata(self, model_id: ModelId, aesthetic_model_name: str):
         return None, []
+
+    def load_startup_image_items(
+        self,
+    ) -> tuple[list[ImageItem], dict[ImageId, pathlib.Path]]:
+        return [], {}

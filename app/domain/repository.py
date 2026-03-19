@@ -3,6 +3,7 @@
 from abc import abstractmethod
 from abc import ABCMeta
 import io
+import pathlib
 
 from app.domain.domain_object import ImageItem, ImageId, Image, ImageName, ModelItem
 
@@ -36,5 +37,11 @@ class Repository(metaclass=ABCMeta):
 
     @abstractmethod
     def get_image_name(self, image_id: ImageId) -> ImageName:
+
+        pass
+
+    @abstractmethod
+    def set_image_paths(self, image_paths: dict[ImageId, pathlib.Path]) -> None:
+        """ImageIdから相対パスを引くためのマップを設定する"""
 
         pass

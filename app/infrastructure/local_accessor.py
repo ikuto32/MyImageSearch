@@ -1,4 +1,5 @@
 from functools import cache
+import logging
 import sqlite3
 from typing import Any, Dict, List, Tuple
 
@@ -26,7 +27,7 @@ class LocalAccessor(Accessor):
     """ローカル上のファイルを対象としたAccessor"""
 
     def __init__(self, meta_dir_path) -> None:
-
+        self._logger = logging.getLogger(__name__)
         self._meta_dir_path = meta_dir_path
         self._id_to_path: Dict[ImageId, pathlib.Path] = {}
 
@@ -96,3 +97,56 @@ class LocalAccessor(Accessor):
             )
 
         return index, image_items
+
+    @cache
+    def load_startup_image_items(
+        self,
+    ) -> tuple[list[ImageItem], dict[ImageId, pathlib.Path]]:
+        """起動時に必要な画像一覧とImageId->相対パスをSQLiteから構築して返す。"""
+
+        startup_items_by_id: dict[ImageId, ImageItem] = {}
+        id_to_path: dict[ImageId, pathlib.Path] = {}
+        db_paths = sorted(self._meta_dir_path.glob("*/sqlite_image_meta.db"))
+
+        if not db_paths:
+            self._logger.warning(
+                "起動用のsqlite_image_meta.dbが見つかりません: %s",
+                self._meta_dir_path,
+            )
+            return [], {}
+
+        for db_path in db_paths:
+            con: sqlite3.Connection = sqlite3.connect(
+                db_path,
+                isolation_level="DEFERRED",
+            )
+            try:
+                result: pd.DataFrame = pd.read_sql_query(
+                    """
+                    SELECT image_id, image_path, image_tags
+                    FROM image_meta
+                    """,
+                    con,
+                )
+            finally:
+                con.close()
+
+            for row in result.itertuples(index=False):
+                image_id = ImageId(str(row.image_id))
+                if image_id in startup_items_by_id:
+                    continue
+
+                image_path = pathlib.Path(str(row.image_path))
+                tags = row.image_tags if row.image_tags is not None else ""
+                startup_items_by_id[image_id] = ImageItem(
+                    id=image_id,
+                    display_name=ImageName(str(image_path)),
+                    tags=ImageTags(tags),
+                )
+                id_to_path[image_id] = image_path
+
+        startup_items = sorted(
+            startup_items_by_id.values(),
+            key=lambda item: item.display_name.name,
+        )
+        return startup_items, id_to_path
