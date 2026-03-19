@@ -36,8 +36,20 @@ class Usecase:
         self._id_to_image_items: dict[ImageId, ImageItem] = {}
         self._image_items: list[ImageItem] = []
 
-        # 画像項目の読み込み
-        self._image_items = self._repository.load_all_image_item()
+        # 起動時はDBのメタ情報から画像項目を読み込む（失敗時のみ従来の全走査へフォールバック）
+        startup_items, image_paths = self._accessor.load_startup_image_items()
+        if startup_items:
+            self._repository.set_image_paths(image_paths)
+            self._image_items = startup_items
+            self._logger.info(
+                "起動時メタデータ読み込み: %s 件（DB由来）",
+                len(startup_items),
+            )
+        else:
+            self._logger.warning(
+                "起動時メタデータをDBから取得できなかったため、ファイル全走査にフォールバックします。"
+            )
+            self._image_items = self._repository.load_all_image_item()
 
         # 画像IDと画像項目の対応を作成
         self._id_to_image_items = dict(map(lambda i: (i.id, i), self._image_items))

@@ -1,5 +1,6 @@
 
 from abc import abstractmethod
+import pathlib
 from typing import Any
 import numpy as np
 
@@ -30,5 +31,13 @@ class Accessor():
         self, model_id: ModelId, aesthetic_model_name: str
     ) -> tuple[Any, list[ImageItem]]:
         """外部から対応したインデックスとメタ情報付きの画像一覧を読み込む"""
+
+        pass
+
+    @abstractmethod
+    def load_startup_image_items(
+        self,
+    ) -> tuple[list[ImageItem], dict[ImageId, pathlib.Path]]:
+        """起動時表示用の画像一覧とImageId->相対パスマップを読み込む"""
 
         pass
