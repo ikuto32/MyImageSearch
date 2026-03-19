@@ -24,5 +24,6 @@ class DummyAccessor(Accessor):
 
     def load_startup_image_items(
         self,
+        model_id: ModelId,
     ) -> tuple[list[ImageItem], dict[ImageId, pathlib.Path]]:
         return [], {}
