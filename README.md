@@ -14,30 +14,56 @@ MyImageSearch は、OpenAI の [CLIP](https://openai.com/index/clip/) (Contrasti
 このプロジェクトで使用される主な言語は、Python、JavaScript、HTML です。
 
 # Setup
-次の手順に従って、win マシンで MyImageSearch をセットアップして実行します。
-## 仮想環境を作成:
+次の手順に従って、MyImageSearch をセットアップして実行します。
+
+---
+
+## 方法 1: uv を使ったセットアップ（推奨）
+
+### 仮想環境を作成して有効化:
+```
+uv venv
+.venv\Scripts\activate      # Windows の場合
+# または
+source .venv/bin/activate   # Linux/macOS の場合
+```
+
+### 依存ライブラリをインストール:
+pyproject.tomlからインストール
+```
+uv sync
+```
+
+### アプリケーションを起動:
+```
+python app.py
+```
+
+---
+
+## 方法 2: pip を使ったセットアップ
+
+### 仮想環境を作成:
 ```
 python -m venv venv
 ```
-## 仮想環境を有効化:
+
+### 仮想環境を有効化:
 ```
 venv\Scripts\activate      # Windows の場合
 # または
 source venv/bin/activate   # Linux/macOS の場合
 ```
 
-## 依存ライブラリをインストール:
+### 依存ライブラリをインストール:
 ```
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu117
 pip install faiss-cpu pandas Flask open_clip_torch
 ```
-## Run the application:
+
+### アプリケーションを起動:
 ```
 python app.py
 ```
 ## Access UI:
 [localhost](http://localhost)にブラウザからアクセスします。
-
-# TODO
-- 動作のステータス表示する
-- CoCa model
