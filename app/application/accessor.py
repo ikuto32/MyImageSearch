@@ -42,3 +42,9 @@ class Accessor():
         """起動時表示用の画像一覧とImageId->相対パスマップを読み込む"""
 
         pass
+
+    @abstractmethod
+    def get_mean_meta_vector(self, model_id: ModelId) -> np.ndarray | None:
+        """ModelIdからimage meta全体の平均ベクトルを取得する。"""
+
+        pass
