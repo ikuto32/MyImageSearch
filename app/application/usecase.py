@@ -167,7 +167,7 @@ class Usecase:
     # ===================================================================
 
     def similarity_eval(
-        self, item_list: list[ImageItem], index, query_features, result_size=2048
+        self, item_list: list[ImageItem], index, query_features, result_size=2048, mean_centering=True, mean_vector=None
     ) -> list[ResultImageItem]:
         """ベクトル類似度を計算し、結果を`ResultImageItem`一覧として返す。
 
@@ -181,6 +181,12 @@ class Usecase:
             list[ResultImageItem]: 距離に基づき生成した結果リスト。インデックス外参照が発生したIDはスキップし、`traceback`を標準出力へ表示する。
         """
         self._logger.info("query_features shape: %s", query_features.shape)
+
+        # Mean Centering
+        if mean_centering:
+            if mean_vector is not None and mean_vector.shape == query_features.shape:
+                query_features = query_features.copy() - mean_vector.reshape(1, -1)
+
         # 正規化
         faiss.normalize_L2(query_features)
         item_list_length: int = len(item_list)
@@ -295,6 +301,8 @@ class Usecase:
             item_list=item_list,
             index=index,
             query_features=features,
+            mean_centering=True,
+            mean_vector=self._accessor.get_mean_meta_vector(model_id),
         )
 
         scores = self.apply_aesthetic_quality_filter(
@@ -346,6 +354,8 @@ class Usecase:
             item_list=item_list,
             index=index,
             query_features=features,
+            mean_centering=True,
+            mean_vector=self._accessor.get_mean_meta_vector(model_id),
         )
 
         scores = self.apply_aesthetic_quality_filter(
@@ -420,6 +430,8 @@ class Usecase:
             item_list=item_list,
             index=index,
             query_features=features,
+            mean_centering=True,
+            mean_vector=self._accessor.get_mean_meta_vector(model_id),
         )
 
         return ResultImageItemList(scores, self.format_search_query(features))
@@ -434,6 +446,8 @@ class Usecase:
     ) -> ResultImageItemList:
         """乱数から検索する"""
 
+        # 単位超球面（Unit hypersphere）上から一様にベクトルをサンプリング
+        # similarity_evalの副作用で正規化されるため、ここでは正規化せずに生の乱数を渡す。
         features: np.ndarray = np.random.normal(0, 1, [1, 768]).astype(np.float32)
 
         # indexを読み込み
@@ -444,6 +458,8 @@ class Usecase:
             item_list=item_list,
             index=index,
             query_features=features,
+            mean_centering=True,
+            mean_vector=self._accessor.get_mean_meta_vector(model_id),
         )
         scores = self.apply_aesthetic_quality_filter(
             model_id,
@@ -476,6 +492,8 @@ class Usecase:
             item_list=item_list,
             index=index,
             query_features=features,
+            mean_centering=True,
+            mean_vector=self._accessor.get_mean_meta_vector(model_id),
         )
 
         scores: list[ResultImageItem] = self.apply_aesthetic_quality_filter(
@@ -529,6 +547,8 @@ class Usecase:
             item_list=item_list,
             index=index,
             query_features=features,
+            mean_centering=True,
+            mean_vector=self._accessor.get_mean_meta_vector(model_id),
         )
 
         scores: list[ResultImageItem] = self.apply_aesthetic_quality_filter(

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import gc
 import hashlib
 import json
+import math
 import os
 import pathlib
 import sqlite3
@@ -195,7 +196,6 @@ class DirImageIterable(IterableDataset):
                 print(f"[DirImageIterable] worker {info.id} processing {start} to {end} of {len(self.img_list)}")
                 worker_id = info.id
 
-                
             for idx in it:
                 try:
                     rel = self.img_list[idx]
@@ -245,13 +245,26 @@ class Aesthetic_model(nn.Module):
         super(Aesthetic_model, self).__init__()
         self.fc1 = nn.Sequential(nn.Linear(input_dim, 1024), nn.SiLU())
         self.dropout1 = nn.Dropout1d(0.5)
-        self.fc2 = nn.Sequential(nn.Linear(1024, 1))
+        self.fc2 = nn.Sequential(nn.Linear(1024, 512), nn.SiLU())
+        self.dropout2 = nn.Dropout1d(0.3)
+        self.fc3 = nn.Sequential(nn.Linear(512, 1))
 
     def forward(self, x):
         x = self.fc1(x)
         x = self.dropout1(x)
         x = self.fc2(x)
+        x = self.dropout2(x)
+        x = self.fc3(x)
         return x
+
+    def score_batch(self, features: torch.Tensor) -> torch.Tensor:
+        """features: (N, D) → (N,) の美的評価スコアを返す"""
+        norm = features.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+        norm[norm == 0] = 1
+        features = features / norm
+        with torch.no_grad():
+            scores = self.forward(features).squeeze(-1)
+        return scores.clamp(0, 1)
 
 
 # ================================================
@@ -295,7 +308,7 @@ class PonyAestheticScorer:
         norm[norm == 0] = 1
         features = features / norm
         with torch.no_grad():
-            aesthetic_score = self.aesthetic_model(features).item()
+            aesthetic_score = self.aesthetic_model(features).clamp(0, 1).item()
         return aesthetic_score
 
     @torch.no_grad()
@@ -723,13 +736,13 @@ def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
-    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
-    # parser.add_argument("--image_dir", help="dir", default="./images")
-    # parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
+    # parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
+    # parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
+    parser.add_argument("--image_dir", help="dir", default="./images")
+    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
 
     parser.add_argument(
-        "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_ranking100.pth"
+        "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_rankingv2.pth"
     )
     parser.add_argument(
         "--search_model_name", help="model_name", default="ViT-L-14"
@@ -795,8 +808,8 @@ def parse_arguments():
     parser.add_argument(
         "--recalc-aesthetic-batch-size",
         type=int,
-        default=4096,
-        help="recalc-aesthetic モード時の DB フェッチ・更新バッチサイズ (default: 4096)",
+        default=16384,
+        help="recalc-aesthetic モード時の DB フェッチ・更新バッチサイズ (default: 16384)",
     )
 
     return parser.parse_args()
@@ -1133,7 +1146,6 @@ def attach_visual_feature_helper(search_model):
     )
 
 
-
 def create_image_id_index(file_list):
     image_id_to_path = {}
     path_to_image_id = {}
@@ -1299,9 +1311,7 @@ def extract_image_features(
                 # 2) 美的評価とスタイルクラスタリングもバッチで
                 aesthetic_dtype = next(aesthetic_model.parameters()).dtype
                 image_features_tensor = image_features_tensor.to(dtype=aesthetic_dtype)
-                aesthetic_scores = torch.sigmoid(
-                    aesthetic_model(image_features_tensor)
-                ).squeeze(-1).cpu().numpy()  # (B,)
+                aesthetic_scores = aesthetic_model.score_batch(image_features_tensor).squeeze(-1).cpu().numpy()  # (B,)
 
                 pony_scores = pony_scorer.score_batch(image_features_tensor)  # (B,)
 
@@ -1521,84 +1531,169 @@ def collect_train_samples_algL(
     # 到達しない
 
 
+class SQLiteMetaDataset(IterableDataset):
+    def __init__(
+        self,
+        db_path: str,
+        expected_bytes: int,
+        min_rowid: int,
+        max_rowid: int,
+        fetch_size: int = 10000,
+    ):
+
+        self.db_path = db_path
+        self.expected_bytes = expected_bytes
+        self.min_rowid = min_rowid
+        self.max_rowid = max_rowid
+        self.fetch_size = fetch_size
+
+    def __iter__(self):
+
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:
+            start_row = self.min_rowid
+            end_row = self.max_rowid
+
+        else:
+            num_workers = worker_info.num_workers
+            worker_id = worker_info.id
+            total_range = self.max_rowid - self.min_rowid + 1
+            chunk_size = math.ceil(total_range / num_workers)
+            start_row = self.min_rowid + worker_id * chunk_size
+            end_row = min(start_row + chunk_size - 1, self.max_rowid)
+
+        con = sqlite3.connect(self.db_path, timeout=60.0)
+
+        # --- 修正ポイント：Read Lockをこまめに解放するページネーション ---
+
+        current_min = start_row
+        while current_min <= end_row:
+            # fetch_size分だけ読み込んで、すぐにデータを取得
+
+            cur = con.execute(
+                """
+                SELECT rowid, image_id, meta
+                FROM image_meta
+                WHERE rowid BETWEEN ? AND ?
+                  AND meta IS NOT NULL
+                ORDER BY rowid
+                LIMIT ?
+                """,
+                (current_min, end_row, self.fetch_size),
+            )
+
+            rows = cur.fetchall()
+            cur.close()
+
+            if not rows:
+                break
+
+            for rowid, image_id, meta_blob in rows:
+                current_min = rowid + 1  # 次回の開始位置を更新
+
+                if len(meta_blob) != self.expected_bytes:
+                    yield None, None
+                    continue
+
+                vec = np.frombuffer(meta_blob, dtype=np.float32).copy()
+                yield image_id, torch.from_numpy(vec)
+
+        con.close()
+
+
+def _meta_collate_fn(batch):
+    """バッチ内の None を除外し、テンソル化と処理件数を返す"""
+
+    valid_ids = []
+    vecs = []
+    total_count = len(batch)
+
+    for item in batch:
+        if item[0] is not None:
+            valid_ids.append(item[0])
+            vecs.append(item[1])
+
+    if not vecs:
+        return [], torch.empty(0), total_count
+
+    return valid_ids, torch.stack(vecs), total_count
+
+
 def recalc_aesthetic_scores(
     con: sqlite3.Connection,
     aesthetic_model: nn.Module,
     pony_scorer: "PonyAestheticScorer",
     device: str,
     out_dim: int,
-    batch_size: int = 4096,
+    batch_size: int = 16384,
+    num_workers: int = 8,  # 追加: DataLoaderのワーカー数
 ) -> int:
     """
-    DB に保存済みの CLIP ベクトル (meta BLOB) だけを使って
-    aesthetic_quality と pony_aesthetic_quality を高速に再計算する。
-
-    - 画像ファイルのスキャン・CLIP推論・タグ付けは一切行わない。
-    - meta が NULL または次元不一致のレコードはスキップする。
-    - バッチ単位でフェッチ → 推論 → UPDATE を繰り返すためメモリ効率が良い。
-
-    Returns:
-        更新した行数
+    DataLoaderを使ってメタデータの読み込みとテンソル変換を並列化して再計算を行う。
     """
+    # 現在のコネクションからDBの物理ファイルパスを取得 (インメモリDBの場合は機能しません)
+    print("[recalc_aesthetic] checking database file path...")
+    db_list = con.execute("PRAGMA database_list").fetchall()
+    db_path = db_list[0][2] if len(db_list) > 0 else ""
+    if not db_path:
+        raise ValueError(
+            "[recalc_aesthetic] DataLoader parallelization requires a physical database file."
+        )
     expected_bytes = out_dim * np.dtype(np.float32).itemsize
-
+    print("[recalc_aesthetic] counting rows...")
     total = con.execute(
-        "SELECT COUNT(*) FROM image_meta WHERE meta IS NOT NULL"
+        "SELECT COUNT(*) FROM image_meta"
     ).fetchone()[0]
-    print(f"[recalc_aesthetic] target rows with meta: {total}")
+    print(f"[recalc_aesthetic] finding rowid range...")
+    rowid_range = con.execute(
+        "SELECT MIN(rowid), MAX(rowid) FROM image_meta"
+    ).fetchone()
+    min_rowid, max_rowid = rowid_range if rowid_range[0] is not None else (0, -1)
+    print(f"[recalc_aesthetic] target rows with meta: {total} (workers: {num_workers})")
+    if total == 0 or min_rowid > max_rowid:
+        return 0
 
-    cur_read = con.execute(
-        "SELECT image_id, meta FROM image_meta WHERE meta IS NOT NULL ORDER BY image_path"
+    dataset = SQLiteMetaDataset(
+        db_path, expected_bytes, min_rowid, max_rowid, fetch_size=batch_size * 4
+    )
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        collate_fn=_meta_collate_fn,
+        prefetch_factor=16 if num_workers > 0 else None,
     )
 
     updated = 0
     pbar = tqdm.tqdm(total=total, unit="row", desc="recalc_aesthetic")
-
     aesthetic_dtype = next(aesthetic_model.parameters()).dtype
 
-    while True:
-        rows = cur_read.fetchmany(batch_size)
-        if not rows:
-            break
-
-        # --- 次元が一致するレコードだけを集める ---
-        valid_ids: list[str] = []
-        vectors: list[np.ndarray] = []
-        for image_id, meta_blob in rows:
-            if len(meta_blob) != expected_bytes:
-                pbar.update(1)
-                continue
-            vec = np.frombuffer(meta_blob, dtype=np.float32).copy()
-            valid_ids.append(image_id)
-            vectors.append(vec)
-            pbar.update(1)
-
+    # DataLoader からバッチを受け取って推論
+    for valid_ids, feats, processed_count in dataloader:
+        pbar.update(processed_count)
         if not valid_ids:
             continue
 
         # --- バッチ推論 ---
-        feats = torch.from_numpy(np.stack(vectors)).to(device=device, dtype=aesthetic_dtype)
-
-        # L2正規化（aesthetic_model は正規化済みベクトルを期待）
+        feats = feats.to(device=device, dtype=aesthetic_dtype)
+        # L2正規化
         denom = feats.norm(dim=-1, keepdim=True).clamp_min(1e-12)
         feats_norm = feats / denom
-
         with torch.no_grad():
             aesthetic_scores: np.ndarray = (
-                torch.sigmoid(aesthetic_model(feats_norm))
-                .squeeze(-1)
-                .cpu()
-                .numpy()
+                aesthetic_model.score_batch(feats_norm).squeeze(-1).cpu().numpy()
             )
             pony_scores: np.ndarray = pony_scorer.score_batch(feats_norm)
-
         # --- DB 更新 ---
         params = [
             (float(a), float(p), iid)
             for iid, a, p in zip(valid_ids, aesthetic_scores, pony_scores)
         ]
+
         con.executemany(
             """
+
             UPDATE image_meta
                SET aesthetic_quality      = ?,
                    pony_aesthetic_quality = ?
@@ -1606,12 +1701,63 @@ def recalc_aesthetic_scores(
             """,
             params,
         )
+
         con.commit()
+        # 最適化ルーチンのトリガーチェック (100万件更新ごとに実行)
+        prev_updated = updated
         updated += len(params)
+
+        if (updated // 1_000_000) > (prev_updated // 1_000_000):
+            print(
+                f"\n[recalc_aesthetic] updated {updated} rows so far, running optimize..."
+            )
+            res = con.execute("PRAGMA wal_checkpoint(TRUNCATE);").fetchone()
+            # res は (busy, log, checkpointed) のタプル。busy=1 なら競合して失敗している
+            print(f"\n[recalc_aesthetic] checkpoint result (busy, log, chkpt): {res}")
+            con.execute("PRAGMA vacuum;")
+            con.execute("PRAGMA optimize;")
 
     pbar.close()
     print(f"[recalc_aesthetic] updated {updated} rows")
     return updated
+
+
+def compute_mean_vector(
+    con: sqlite3.Connection, d: int, batch_size: int = 50_000
+) -> np.ndarray:
+    """全metaベクトルから平均ベクトルを計算する"""
+    print("Computing mean vector...")
+    cur = con.execute("SELECT meta FROM image_meta WHERE meta IS NOT NULL")
+    mean_vec = np.zeros(d, dtype=np.float64)
+    total_count = 0
+    pbar = tqdm.tqdm(desc="mean computation")
+
+    while True:
+        rows = cur.fetchmany(batch_size)
+        if not rows:
+            break
+
+        batch_arr = []
+        for (meta_blob,) in rows:
+            a = np.frombuffer(meta_blob, dtype=np.float32)
+            if a.size == d:
+                batch_arr.append(a)
+
+        if not batch_arr:
+            continue
+
+        batch_np = np.stack(batch_arr)
+        # float64で累積して精度を保つ
+        mean_vec += np.sum(batch_np, axis=0, dtype=np.float64)
+        total_count += batch_np.shape[0]
+        pbar.update(len(batch_arr))
+
+    pbar.close()
+
+    if total_count > 0:
+        mean_vec /= total_count
+
+    return mean_vec.astype(np.float32)
 
 
 def stream_build_faiss(
@@ -1626,22 +1772,34 @@ def stream_build_faiss(
     try:
         con.execute("PRAGMA case_sensitive_like=OFF")
         con.execute("PRAGMA temp_store=MEMORY")  # ソートの一部をメモリに。ただし無理はしない
-        # image_pathでのORDER BYを効かせるために、可能なら事前にINDEXを作っておく:
-        # CREATE INDEX IF NOT EXISTS idx_image_meta_path ON image_meta(image_path);
 
-        # 件数
-        total = con.execute("SELECT COUNT(*) FROM image_meta").fetchone()[0]
-        print(f"total rows: {total}")
+        # 件数 (NULLでないmetaの数を取得するよう微調整)
+        total = con.execute("SELECT COUNT(*) FROM image_meta WHERE meta IS NOT NULL").fetchone()[0]
+        print(f"total rows with meta: {total}")
 
-        # 正規化して訓練
+        if total == 0:
+            print("No valid meta found, skipping index creation.")
+            return
+
+        # -------- 平均ベクトルの計算と保存 --------
+        mean_vec = compute_mean_vector(con, d, batch_size)
+        mean_vec_path = out_index_path + ".mean.npy"
+        np.save(mean_vec_path, mean_vec)
+        print(f"Saved mean vector to {mean_vec_path}")
+
+        # -------- パス1: 訓練 --------
         train_buf = collect_train_samples_algL(con, d, train_samples, batch_size, total=total)
+
+        # Mean Centering -> L2正規化
+        train_buf -= mean_vec
         faiss.normalize_L2(train_buf)
+
         index = createIndex(nlist, M, bits_per_code, d)  # 既存関数を利用
         print(f"train {train_buf.shape}")
         index.train(train_buf)
         del train_buf  # 訓練後は解放
 
-        # -------- パス2: 逐次add（バッチ正規化→add） --------
+        # -------- パス2: 逐次add（Mean Centering -> バッチ正規化 -> add） --------
         print("add")
         cur = con.execute("""
             SELECT image_path, meta
@@ -1659,6 +1817,7 @@ def stream_build_faiss(
             if not rows:
                 # 端数のflush
                 if k > 0:
+                    buf[:k] -= mean_vec
                     faiss.normalize_L2(buf[:k])
                     index.add(buf[:k])
                 break
@@ -1674,6 +1833,7 @@ def stream_build_faiss(
                 pbar.update(1)
 
             if k > 0:
+                buf[:k] -= mean_vec
                 faiss.normalize_L2(buf[:k])
                 index.add(buf[:k])
 
@@ -1682,6 +1842,7 @@ def stream_build_faiss(
         print("write")
         faiss.write_index(index, out_index_path)
     finally:
+        print("close db connection")
         con.close()
 
 
@@ -1703,7 +1864,7 @@ def main():
         device = get_device()
 
         # aesthetic モデルだけ読み込む（CLIP・タガーは不要）
-        aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
+        aesthetic_model: Aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
         aesthetic_model = aesthetic_model.to(device)
         aesthetic_model.eval()
 
@@ -1716,21 +1877,24 @@ def main():
         pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
 
         con = connect_db(search_model_meta_dir)
-        cur = con.cursor()
-        init_db(cur)
+        try:
+            cur = con.cursor()
+            init_db(cur)
 
-        recalc_batch = getattr(args, "recalc_aesthetic_batch_size", 4096)
-        recalc_aesthetic_scores(
-            con,
-            aesthetic_model,
-            pony_scorer,
-            device,
-            out_dim=args.search_model_out_dim,
-            batch_size=recalc_batch,
-        )
+            recalc_batch = getattr(args, "recalc_aesthetic_batch_size", 16384)
+            recalc_aesthetic_scores(
+                con,
+                aesthetic_model,
+                pony_scorer,
+                device,
+                out_dim=args.search_model_out_dim,
+                batch_size=recalc_batch,
+            )
 
-        cur.execute("pragma optimize")
-        con.close()
+            cur.execute("pragma optimize")
+        finally:
+            print("close db connection")
+            con.close()
 
         # FAISSインデックスを再構築
         stream_build_faiss(
@@ -1765,168 +1929,172 @@ def main():
     # データベースの準備
     print("load_db")
     con: sqlite3.Connection = connect_db(search_model_meta_dir)
-    cur: sqlite3.Cursor = con.cursor()
-    init_db(cur)
+    try:
+        cur: sqlite3.Cursor = con.cursor()
+        init_db(cur)
 
-    # GPUが使用可能か
-    device = get_device()
+        # GPUが使用可能か
+        device = get_device()
 
-    # モデルの読み込み
-    print("load_model")
+        # モデルの読み込み
+        print("load_model")
 
-    search_model, eval_transform = load_clip_model(args, device)
+        search_model, eval_transform = load_clip_model(args, device)
 
-    aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
-    style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
-    style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
+        aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
+        style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
+        style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
 
-    aesthetic_checkpoint = ensure_asset_path(
-        aesthetic_checkpoint_arg,
-        AESTHETIC_CHECKPOINT_FILENAME,
-        "aesthetic checkpoint",
-    )
-    style_checkpoint_model = ensure_asset_path(
-        style_checkpoint_model_arg,
-        STYLE_MODEL_FILENAME,
-        "style classifier checkpoint",
-    )
-    style_checkpoint_centers = ensure_asset_path(
-        style_checkpoint_centers_arg,
-        STYLE_CENTERS_FILENAME,
-        "style cluster centers",
-    )
+        aesthetic_checkpoint = ensure_asset_path(
+            aesthetic_checkpoint_arg,
+            AESTHETIC_CHECKPOINT_FILENAME,
+            "aesthetic checkpoint",
+        )
+        style_checkpoint_model = ensure_asset_path(
+            style_checkpoint_model_arg,
+            STYLE_MODEL_FILENAME,
+            "style classifier checkpoint",
+        )
+        style_checkpoint_centers = ensure_asset_path(
+            style_checkpoint_centers_arg,
+            STYLE_CENTERS_FILENAME,
+            "style cluster centers",
+        )
 
-    aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
-    aesthetic_model = aesthetic_model.to(device)
-    aesthetic_model.eval()
+        aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
+        aesthetic_model = aesthetic_model.to(device)
+        aesthetic_model.eval()
 
-    pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
-    style_cluster = StyleCluster(
-        device=device,
-        checkpoint_model=style_checkpoint_model,
-        checkpoint_centers=style_checkpoint_centers,
-    )
-    if args.use_existing_tags:
-        tagging_service = None
-        wd_target_size = 448  # タグ付けを行わない場合でも前処理の形を維持
-    else:
-        tagging_service = ImageTaggingService(hf_token=None)
-        wd_target_size = tagging_service.ensure_wd_model_loaded()
+        pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
+        style_cluster = StyleCluster(
+            device=device,
+            checkpoint_model=style_checkpoint_model,
+            checkpoint_centers=style_checkpoint_centers,
+        )
+        if args.use_existing_tags:
+            tagging_service = None
+            wd_target_size = 448  # タグ付けを行わない場合でも前処理の形を維持
+        else:
+            tagging_service = ImageTaggingService(hf_token=None)
+            wd_target_size = tagging_service.ensure_wd_model_loaded()
 
-    index_item_list, path_to_image_id = create_image_id_index(index_item_list)
+        index_item_list, path_to_image_id = create_image_id_index(index_item_list)
 
-    # データベースに問い合わせる
-    result = load_image_meta_from_db(con, id_list=list(index_item_list.keys()), loop_size=10000)
+        # データベースに問い合わせる
+        result = load_image_meta_from_db(con, id_list=list(index_item_list.keys()), loop_size=10000)
 
-    meta_stats, uncreated_image_paths = filter_valid_image_meta(args, result, index_item_list)
-    uncreated_image_ids = [path_to_image_id[path] for path in uncreated_image_paths]
-    orphan_db_stats = collect_orphan_db_records(
-        con,
-        id_list=list(index_item_list.keys()),
-        loop_size=10000,
-    )
+        meta_stats, uncreated_image_paths = filter_valid_image_meta(args, result, index_item_list)
+        uncreated_image_ids = [path_to_image_id[path] for path in uncreated_image_paths]
+        orphan_db_stats = collect_orphan_db_records(
+            con,
+            id_list=list(index_item_list.keys()),
+            loop_size=10000,
+        )
 
-    print_image_meta_stats(meta_stats, uncreated_image_paths, len(index_item_list), orphan_db_stats)
+        print_image_meta_stats(meta_stats, uncreated_image_paths, len(index_item_list), orphan_db_stats)
 
-    if args.delete_orphan_db_records:
-        delete_orphan_db_records(con, orphan_db_stats)
+        if args.delete_orphan_db_records:
+            delete_orphan_db_records(con, orphan_db_stats)
 
-    del result, index_item_list, meta_stats, orphan_db_stats
+        del result, index_item_list, meta_stats, orphan_db_stats
 
-    dataset = None
-    T = True
-    i = 0
-    loader = None
-    if not uncreated_image_paths:
-        print("No new images to process.")
-    else:
+        dataset = None
+        T = True
+        i = 0
+        loader = None
+        if not uncreated_image_paths:
+            print("No new images to process.")
+        else:
 
-        while T:
-            if i < 1:
-                num_workers = max(0, args.num_workers)
-                dataloader_kwargs = dict(
-                    batch_size=args.batch_size,
-                    shuffle=False,
-                    num_workers=num_workers,
-                    pin_memory=True,
-                    collate_fn=safe_collate,
-                )
-                if num_workers > 0:
-                    dataloader_kwargs["prefetch_factor"] = 16  # default=2
-            else:
-                num_workers = max(0, args.num_workers-2*i)
-                dataloader_kwargs = dict(
-                    batch_size=args.batch_size,
-                    shuffle=False,
-                    num_workers=num_workers,
-                    pin_memory=False,
-                    collate_fn=safe_collate,
-                )
+            while T:
+                if i < 1:
+                    num_workers = max(0, args.num_workers)
+                    dataloader_kwargs = dict(
+                        batch_size=args.batch_size,
+                        shuffle=False,
+                        num_workers=num_workers,
+                        pin_memory=True,
+                        collate_fn=safe_collate,
+                    )
+                    if num_workers > 0:
+                        dataloader_kwargs["prefetch_factor"] = 16  # default=2
+                else:
+                    num_workers = max(0, args.num_workers-2*i)
+                    dataloader_kwargs = dict(
+                        batch_size=args.batch_size,
+                        shuffle=False,
+                        num_workers=num_workers,
+                        pin_memory=False,
+                        collate_fn=safe_collate,
+                    )
 
-            target_paths = uncreated_image_paths[i * args.batch_size: ]
-            target_ids = uncreated_image_ids[i * args.batch_size: ]
-            if not target_paths:
-                break
+                target_paths = uncreated_image_paths[i * args.batch_size: ]
+                target_ids = uncreated_image_ids[i * args.batch_size: ]
+                if not target_paths:
+                    break
 
-            dataset = DirImageIterable(
-                args.image_dir,
-                target_paths,
-                transform=eval_transform,
-                wd_target_size=wd_target_size,
-            )
-            loader = DataLoader(
-                dataset,
-                **dataloader_kwargs,
-            )
-            print(f"try {i}")
-            try:
-                extract_image_features(
-                    args,
-                    device,
-                    search_model,
-                    con,
-                    cur,
-                    loader,
+                dataset = DirImageIterable(
+                    args.image_dir,
                     target_paths,
-                    target_ids,
-                    aesthetic_model,
-                    pony_scorer,
-                    style_cluster,
-                    tagging_service,
+                    transform=eval_transform,
+                    wd_target_size=wd_target_size,
                 )
-                T = False
-            except Exception:
-                traceback.print_exc()
-                i += 1
-                torch.cuda.empty_cache()
-                gc.collect()
-                continue
+                loader = DataLoader(
+                    dataset,
+                    **dataloader_kwargs,
+                )
+                print(f"try {i}")
+                try:
+                    extract_image_features(
+                        args,
+                        device,
+                        search_model,
+                        con,
+                        cur,
+                        loader,
+                        target_paths,
+                        target_ids,
+                        aesthetic_model,
+                        pony_scorer,
+                        style_cluster,
+                        tagging_service,
+                    )
+                    T = False
+                except Exception:
+                    traceback.print_exc()
+                    i += 1
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    continue
 
-    con.commit()
+        con.commit()
 
-    del uncreated_image_paths, uncreated_image_ids, search_model, dataset, loader
-    torch.cuda.empty_cache()
+        del uncreated_image_paths, uncreated_image_ids, search_model, dataset, loader
+        torch.cuda.empty_cache()
 
-    print(
-        "CREATE INDEX IF NOT EXISTS idx_image_meta_image_id ON image_meta(image_id)"
-    )
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_image_meta_image_id ON image_meta(image_id)"
-    )
-    con.commit()
-    print(
-        "CREATE INDEX IF NOT EXISTS idx_image_meta_path ON image_meta(image_path)"
-    )
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_image_meta_path ON image_meta(image_path)"
-    )
-    con.commit()
-    print("pragma vacuum")
-    cur.execute("pragma vacuum")
-    print("pragma optimize")
-    cur.execute("pragma optimize")
-    print("close")
-    con.close()
+        print(
+            "CREATE INDEX IF NOT EXISTS idx_image_meta_image_id ON image_meta(image_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_image_meta_image_id ON image_meta(image_id)"
+        )
+        con.commit()
+        print(
+            "CREATE INDEX IF NOT EXISTS idx_image_meta_path ON image_meta(image_path)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_image_meta_path ON image_meta(image_path)"
+        )
+        con.commit()
+        con.execute("pragma wal_checkpoint(TRUNCATE);")
+        print("pragma vacuum")
+        cur.execute("pragma vacuum")
+        print("pragma optimize")
+        cur.execute("pragma optimize")
+
+    finally:
+        print("close db connection")
+        con.close()
 
     del con, cur
 
