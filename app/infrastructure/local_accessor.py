@@ -30,7 +30,6 @@ class LocalAccessor(Accessor):
         self._logger = logging.getLogger(__name__)
         self._meta_dir_path = meta_dir_path
         self._id_to_path: Dict[ImageId, pathlib.Path] = {}
-        self._mean_vector_cache: np.ndarray | None = None
 
     def load_image_feature(self, model_id: ModelId, image_id: ImageId) -> np.ndarray:
         """meta_dir配下のmodel-pretrained/image_id.npyから画像特徴量を読み込み、毎回np.loadで返す（キャッシュ無し）。"""
@@ -156,16 +155,12 @@ class LocalAccessor(Accessor):
         )
         return startup_items, id_to_path
 
+    @cache
     def get_mean_meta_vector(self, model_id: ModelId) -> np.ndarray | None:
         """ModelIdからimage meta全体の平均ベクトルを取得する。"""
-
-        if hasattr(self, "mean_vector_cache") and self._mean_vector_cache is not None:
-            return self._mean_vector_cache
 
         mean_vector = np.load(
                 f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/metafiles.index.mean.npy"
             )
 
-        # キャッシュに保存
-        self._mean_vector_cache = mean_vector
         return mean_vector
