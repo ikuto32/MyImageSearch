@@ -176,6 +176,8 @@ class Usecase:
             index (Any): FAISSインデックス。`nprobe`を64に更新して探索する。
             query_features (np.ndarray): `(1, 次元数)`の特徴量配列。検索前にL2正規化を実施する副作用がある。
             result_size (int, optional): 返却件数の上限。デフォルトは2048で、アイテム数を超える場合は自動で短縮される。
+            mean_centering (bool, optional): クエリ特徴量に平均ベクトルを引く前処理を行うか。デフォルトはTrue。
+            mean_vector (np.ndarray | None, optional): 平均ベクトル。`mean_centering`がTrueのときに使用され、クエリ特徴量と同次元である必要がある。デフォルトはNoneで、提供されない場合は平均ベクトルなしで処理される。
 
         Returns:
             list[ResultImageItem]: 距離に基づき生成した結果リスト。インデックス外参照が発生したIDはスキップし、`traceback`を標準出力へ表示する。
@@ -184,7 +186,8 @@ class Usecase:
 
         # Mean Centering
         if mean_centering:
-            if mean_vector is not None and mean_vector.shape == query_features.shape:
+            if mean_vector is not None and mean_vector.size == query_features.shape[-1]:
+                self._logger.info("Applying mean centering to query features.")
                 query_features = query_features.copy() - mean_vector.reshape(1, -1)
 
         # 正規化
