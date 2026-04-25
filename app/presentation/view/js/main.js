@@ -5,6 +5,7 @@ import jszip from 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm'
 import * as repository from "./modules/repository.js"
 import * as util from "./util.js"
 
+const { markRaw, nextTick } = Vue
 
 /**
  * @typedef {{id: string, score: number, img_name: string, img_small: string, img_original: string, selected: boolean}} DisplayItem
@@ -75,12 +76,21 @@ const app = Vue.createApp({
             /**
              * @type {{[itemId: string]: boolean}}
              */
-            dialogStates:{},
+            activeDialogItem: null,
         }
     },
     mounted() {
-        // window.addEventListener("scroll", this.updateImageFromScroll)
-        window.addEventListener("load", this.init)
+        let ticking = false
+        this._scrollHandler = (e) => {
+            if (ticking) return
+            ticking = true
+            requestAnimationFrame(() => {
+                this.updateImageFromScroll(e)
+                ticking = false
+            })
+        }
+        // window.addEventListener('scroll', this._scrollHandler, { passive: true })
+        window.addEventListener('load', this.init)
     },
     watch:{
         ratingFilter(){
@@ -118,14 +128,20 @@ const app = Vue.createApp({
          * 表示画像をリセットして、一部を表示する
          */
         initImage() {
-
-            //現在表示されているものを削除
-            this.displayItems = []
             this.selectedItemId = {}
-            this.showedItemIndex = 0;
-            //一部表示
-            this.sliceShowImg(0, this.numRows * this.numCols)
-            this.padding_bottom = Math.max(this.item_height * this.resultBuffer.length / this.numCols - this.padding_top, 0);
+            this.showedItemIndex = 0
+
+            const end = this.numRows * this.numCols
+            this.displayItems = this.resultBuffer.slice(0, end).map(result => ({
+                id: result.item.id,
+                score: result.score,
+                tags: result.item.tags,
+                img_name: result.item.name,
+                img_small: repository.getImageSmallUrl(result.item.id),
+                img_original: repository.getImageOriginalUrl(result.item.id),
+                selected: false
+            }))
+            this.padding_bottom = Math.max(this.item_height * this.resultBuffer.length / this.numCols - this.padding_top, 0)
         },
 
         /**
@@ -143,11 +159,7 @@ const app = Vue.createApp({
                 /**
                  * @type {repository.ResultItem[]}
                  */
-                this.rawResultBuffer = objs.map(obj => ({
-
-                    item: obj,
-                    score: 0
-                }));
+                this.rawResultBuffer = markRaw(objs.map(obj => ({ item: obj, score: 0 })))
                 this.applyRatingFilterToBuffer()
             })
         },
@@ -165,7 +177,7 @@ const app = Vue.createApp({
 
             return repository.getImageRatings(this.model_name, this.pretrained)
             .then((ratings) => {
-                this.ratingMaps = { ...this.ratingMaps, [ratingKey]: ratings }
+                this.ratingMaps[ratingKey] = ratings
             })
         },
 
@@ -257,23 +269,16 @@ const app = Vue.createApp({
         },
 
         sliceShowImg(start, end){
-            this.resultBuffer.slice(start, end).forEach(result => {
-
-                console.log("表示: " + JSON.stringify(result))
-
-                /**
-                 * @type {DisplayItem[]}
-                 */
-                this.displayItems.push({
-                    id: result.item.id,
-                    score: result.score,
-                    tags: result.item.tags,
-                    img_name: result.item.name,
-                    img_small: repository.getImageSmallUrl(result.item.id),
-                    img_original: repository.getImageOriginalUrl(result.item.id),
-                    selected: false
-                });
-            });
+            const slice = this.resultBuffer.slice(start, end).map(result => ({
+                id: result.item.id,
+                score: result.score,
+                tags: result.item.tags,
+                img_name: result.item.name,
+                img_small: repository.getImageSmallUrl(result.item.id),
+                img_original: repository.getImageOriginalUrl(result.item.id),
+                selected: false
+            }))
+            this.displayItems = this.displayItems.concat(slice) // 一度の代入
         },
 
 
@@ -290,20 +295,21 @@ const app = Vue.createApp({
                 const clientStart = performance.now()
 
                 let array = result.list
-                console.log('結果', result)
-                console.log('ソート前' + JSON.stringify(array))
+                // console.log('結果', result)
+                // console.log('ソート前' + JSON.stringify(array))
 
                 //並び替え
+                const nsCmp = natsort.default()
                 array = array.sort(util.cancatComparator(
                     (a, b) => b.score - a.score,
-                    (a, b) => natsort.default()(a.item.name, b.item.name)
+                    (a, b) => nsCmp(a.item.name, b.item.name)
                 ))
 
-                console.log('ソート後' + JSON.stringify(array))
+                // console.log('ソート後' + JSON.stringify(array))
 
                 //バッファに登録
                 this.search_query = result.search_query
-                this.rawResultBuffer = array
+                this.rawResultBuffer = markRaw(array)
                 this.applyRatingFilterToBuffer()
                 this.clientDurationMs = performance.now() - clientStart
             })
@@ -316,13 +322,40 @@ const app = Vue.createApp({
          * @return {Promise<void>}
          */
         runSearch(promise, afterBuffer = null) {
-            return this.setBuffer(promise)
-            .then(() => {
-                if (afterBuffer) {
-                    return afterBuffer()
-                }
+            return this.ensureRatingMap()
+            .then(() => promise)
+            .then(result => {
+                // ── 計測開始：fetch は完了している
+                const clientStart = performance.now()
+
+                // ソート
+                const array = result.list
+                const nsCmp = natsort.default()
+                array.sort(util.cancatComparator(
+                    (a, b) => b.score - a.score,
+                    (a, b) => nsCmp(a.item.name, b.item.name)
+                ))
+
+                // バッファ更新
+                this.search_query = result.search_query
+                this.rawResultBuffer = markRaw(array)
+                this.applyRatingFilterToBuffer()
+
+                if (afterBuffer) afterBuffer()
+
+                // displayItems を更新（ここで Vue が patch を予約する）
+                this.initImage()
+
+                // ── Vue の DOM patch 完了を待つ
+                return nextTick()
+                // ── さらにブラウザのレイアウト・ペイント完了まで待つ
+                .then(() => new Promise(resolve => {
+                    requestAnimationFrame(() => requestAnimationFrame(resolve))
+                }))
+                .then(() => {
+                    this.clientDurationMs = performance.now() - clientStart
+                })
             })
-            .then(this.initImage)
             .finally(() => { this.isSearching = false })
         },
 
@@ -474,12 +507,8 @@ const app = Vue.createApp({
         },
 
         openDialog(item) {
-            this.setDialogState(item.id, true)
+            this.activeDialogItem = item
             this.fetchImageMetadata(item)
-        },
-
-        setDialogState(itemId, value) {
-            this.dialogStates = { ...this.dialogStates, [itemId]: value }
         },
 
         fetchImageMetadata(item) {
@@ -489,7 +518,7 @@ const app = Vue.createApp({
 
             repository.getImageMetadata(this.model_name, this.pretrained, item.id)
             .then(meta => {
-                this.imageMeta = { ...this.imageMeta, [item.id]: meta }
+                this.imageMeta[item.id] = meta
             })
         },
 

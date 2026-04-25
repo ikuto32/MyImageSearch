@@ -133,30 +133,11 @@
                             :data-index="index"
                             :data-selected="selectedItemId[item.id]"
                             >
-                                <v-img :src="item.img_small" :title="item.img_name" height="200" transition="false" v-show="true">
+                                <v-img :src="item.img_small" :title="item.img_name" height="200" :transition="false" loading="lazy" decoding="async">
                                     <v-btn icon @click.stop="openDialog(item)">
                                         <v-icon icon="mdi-arrow-expand-all" color="info"></v-icon>
                                     </v-btn>
-                                    <v-dialog
-                                        v-model="dialogStates[item.id]"
-                                        width="auto"
-                                    >
-                                        <v-card>
-                                            <v-img :src="item.img_original" :title="item.img_name" width="90vw" height="85vh"></v-img>
-                                            <v-card-title>
-                                                <span class="meta">{{ item.img_name }}</span>
-                                                <a :href="item.img_original" :download="item.img_name.split('\\').pop()">
-                                                    <v-icon icon="mdi-download" color="info"></v-icon>
-                                                </a>
-                                            </v-card-title>
-                                            <v-card-text class="d-flex flex-column gap-2">
-                                                <span class="meta">style_cluster: {{ getImageMetadata(item.id).style_cluster || '---' }}</span>
-                                                <span class="meta">rating: {{ getImageMetadata(item.id).rating || '---' }}</span>
-                                                <span class="meta">aesthetic_quality: {{ getImageMetadata(item.id).aesthetic_quality || '---' }}</span>
-                                                <span class="meta">tags: {{ getImageMetadata(item.id).tags || '---' }}</span>
-                                            </v-card-text>
-                                        </v-card>
-                                    </v-dialog>
+
                                 </v-img>
                                 <span class="meta" :style="{width: 1 + 'fr'}">{{ item.img_name }}</span>
                                 <span class="tags" :style="{width: 1 + 'fr'}">{{ item.tags }}</span>
@@ -166,6 +147,28 @@
                     </v-container>
                 </div>
             </v-main>
+
+            <v-dialog
+                :model-value="activeDialogItem !== null"
+                @update:model-value="(v) => { if (!v) activeDialogItem = null }"
+                width="auto"
+            >
+                <v-card v-if="activeDialogItem">
+                    <v-img :src="activeDialogItem.img_original" :title="activeDialogItem.img_name" width="90vw" height="85vh"></v-img>
+                    <v-card-title>
+                        <span class="meta">{{ activeDialogItem.img_name }}</span>
+                        <a :href="activeDialogItem.img_original" :download="activeDialogItem.img_name.split('\\').pop()">
+                            <v-icon icon="mdi-download" color="info"></v-icon>
+                        </a>
+                    </v-card-title>
+                    <v-card-text class="d-flex flex-column gap-2">
+                        <span class="meta">style_cluster: {{ getImageMetadata(activeDialogItem.id).style_cluster || '---' }}</span>
+                        <span class="meta">rating: {{ getImageMetadata(activeDialogItem.id).rating || '---' }}</span>
+                        <span class="meta">aesthetic_quality: {{ getImageMetadata(activeDialogItem.id).aesthetic_quality || '---' }}</span>
+                        <span class="meta">tags: {{ getImageMetadata(activeDialogItem.id).tags || '---' }}</span>
+                    </v-card-text>
+                </v-card>
+            </v-dialog>
         </v-app>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/vue@3.4/dist/vue.global.min.js"></script>
