@@ -32,11 +32,11 @@ export function getImageOriginalUrl(itemId) {
  * ページ指定で画像項目の一覧を取得する
  *
  * @param {number} page 0始まりのページ番号
- * @param {number} pageSize 取得する件数（デフォルトは1万件）
+ * @param {number} pageSize 取得する件数（デフォルトは初期表示分）
  *
  * @return {Promise<ImageItem[]>}
  */
-export async function getImageItemsByPage(page = 0, pageSize = 10000) {
+export async function getImageItemsByPage(page = 0, pageSize = 60) {
 
     return axios.get(`/image_item`, { params: { page: page, size: pageSize } }).then(res => res.data)
 }
@@ -58,9 +58,19 @@ export async function getImageMetadata(modelName, pretrained, itemId) {
     return axios.get(`/image_meta/${modelName}/${pretrained}/${itemId}`).then(res => res.data)
 }
 
-export async function getImageRatings(modelName, pretrained) {
+export async function getImageRatings(modelName, pretrained, itemIds = []) {
 
-    return axios.get(`/image_ratings/${modelName}/${pretrained}`).then(res => res.data)
+    if(itemIds.length === 0) {
+        return Promise.resolve({})
+    }
+
+    const payload = {
+        params:{
+            id: itemIds
+        }
+    }
+
+    return axios.post(`/image_ratings/${modelName}/${pretrained}`, payload).then(res => res.data)
 }
 
 

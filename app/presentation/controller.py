@@ -83,7 +83,7 @@ def resource(target: str):
 # ------------------------------------------------------------
 
 
-DEFAULT_IMAGE_ITEM_PAGE_SIZE = 10000
+DEFAULT_IMAGE_ITEM_PAGE_SIZE = 60
 
 
 @app.route("/image_item")
@@ -115,14 +115,34 @@ def get_image_metadata(model_name: str, pretrained: str, id: str):
     return json.dumps(usecase.get_image_metadata(model_id, ImageId(id)))
 
 
-@app.route("/image_ratings/<model_name>/<pretrained>")
+@app.route("/image_ratings/<model_name>/<pretrained>", methods=["GET", "POST"])
 def get_image_ratings(model_name: str, pretrained: str):
-    """画像のrating一覧を返す"""
+    """指定された画像IDに限定してrating一覧を返す"""
 
     model_id: ModelId = ModelId(model_name, pretrained)
-    ratings: dict[ImageId, str] = usecase.get_rating_list(model_id)
+    image_ids = get_requested_image_ids()
+    ratings: dict[ImageId, str] = usecase.get_rating_list(model_id, image_ids)
     rating_dict = {image_id.id: rating for image_id, rating in ratings.items()}
     return json.dumps(rating_dict)
+
+
+def get_requested_image_ids() -> list[ImageId] | None:
+    """rating取得リクエストから対象画像IDリストを取り出す"""
+
+    if request.method == "POST":
+        json_obj = request.get_json(silent=True) or {}
+        params = json_obj.get("params", {})
+        id_text_list = params.get("id") or params.get("ids")
+    else:
+        id_text_list = request.args.getlist("id") or request.args.getlist("ids")
+        if not id_text_list:
+            ids_text = request.args.get("ids")
+            id_text_list = ids_text.split(",") if ids_text else None
+
+    if id_text_list is None:
+        return None
+
+    return [ImageId(item_id) for item_id in id_text_list if item_id]
 
 
 @app.route("/image/<id>/small")
