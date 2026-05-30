@@ -143,9 +143,12 @@ class Usecase:
             search_query_obj (np.ndarray): 検索クエリとして扱う特徴量配列。1行ベクトルを想定。
 
         Returns:
-            str: `np.array2string`でフォーマットした文字列表現。返却時に精度が抑制される。
+            str: `np.array2string`でフォーマットした文字列表現。返却時に精度が抑制される。正規化してから文字列化することで、
+                クエリの特徴量がどのような値の範囲にあるかをわかりやすくする。
         """
-        return np.array2string(search_query_obj, separator=", ", suppress_small=True)
+        f = search_query_obj.copy().astype(np.float32)
+        faiss.normalize_L2(f)
+        return np.array2string(f, separator=", ", suppress_small=True, threshold=np.inf, max_line_width=np.inf)
 
     def parse_search_query(self, search_query_text: str):
         """文字列表現の検索クエリをnumpy配列に変換する。
@@ -167,31 +170,27 @@ class Usecase:
     # ===================================================================
 
     def similarity_eval(
-        self, item_list: list[ImageItem], index, query_features, result_size=2048, mean_centering=True, mean_vector=None
+        self, item_list: list[ImageItem], index, query_features, result_size=8192,
+        mean_centering=True, mean_vector=None
     ) -> list[ResultImageItem]:
-        """ベクトル類似度を計算し、結果を`ResultImageItem`一覧として返す。
-
-        Args:
-            item_list (list[ImageItem]): インデックスと同順でソートされる画像メタ情報一覧。
-            index (Any): FAISSインデックス。`nprobe`を64に更新して探索する。
-            query_features (np.ndarray): `(1, 次元数)`の特徴量配列。検索前にL2正規化を実施する副作用がある。
-            result_size (int, optional): 返却件数の上限。デフォルトは2048で、アイテム数を超える場合は自動で短縮される。
-            mean_centering (bool, optional): クエリ特徴量に平均ベクトルを引く前処理を行うか。デフォルトはTrue。
-            mean_vector (np.ndarray | None, optional): 平均ベクトル。`mean_centering`がTrueのときに使用され、クエリ特徴量と同次元である必要がある。デフォルトはNoneで、提供されない場合は平均ベクトルなしで処理される。
-
-        Returns:
-            list[ResultImageItem]: 距離に基づき生成した結果リスト。インデックス外参照が発生したIDはスキップし、`traceback`を標準出力へ表示する。
-        """
         self._logger.info("query_features shape: %s", query_features.shape)
 
-        # Mean Centering
+        # コピーして float32 を保証(faiss.normalize_L2 は in-place + float32 必須)
+        q_features = query_features.copy().astype(np.float32)
+
+        # ① 先に L2 正規化(mean_vector と同じスケールに揃える)
+        faiss.normalize_L2(q_features)
+
+        # ② Mean centering(後段で再正規化しない!)
         if mean_centering:
             if mean_vector is not None and mean_vector.size == query_features.shape[-1]:
                 self._logger.info("Applying mean centering to query features.")
-                query_features = query_features.copy() - mean_vector.reshape(1, -1)
+                q_features = q_features - mean_vector.reshape(1, -1).astype(np.float32)
+            else:
+                self._logger.warning("mean_vector が未指定または次元不一致のため中心化をスキップ")
 
-        # 正規化
-        faiss.normalize_L2(query_features)
+        # ← ここに faiss.normalize_L2 を呼ばない
+
         item_list_length: int = len(item_list)
         if result_size > item_list_length:
             result_size = item_list_length
@@ -199,21 +198,17 @@ class Usecase:
         index.nprobe = 64
 
         self._logger.info("index size: %s", index.ntotal)
-        self._logger.info("averaged_query_features: %s", query_features)
-        distances, indices = index.search(query_features, k=result_size)
+        self._logger.info("query_features: %s", q_features)
+        distances, indices = index.search(q_features, k=result_size)
 
-        sorted_items: list[ImageItem] = sorted(
-            item_list, key=lambda x: x.display_name.name
-        )
+        sorted_items: list[ImageItem] = sorted(item_list, key=lambda x: x.display_name.name)
 
         item_distances: dict[int, float] = {}
-
         for matched_indices, matched_distances in zip(indices, distances):
             for item_id, item_distance in zip(matched_indices, matched_distances):
-                if item_id in item_distances:
-                    item_distances[item_id] += item_distance
-                else:
-                    item_distances[item_id] = item_distance
+                if item_id == -1:                       # FAISS は埋まらない枠を -1 で返す
+                    continue
+                item_distances[item_id] = item_distances.get(item_id, 0.0) + float(item_distance)
 
         result_image_items: list[ResultImageItem] = []
         for item_id, total_distance in item_distances.items():
@@ -304,7 +299,7 @@ class Usecase:
             item_list=item_list,
             index=index,
             query_features=features,
-            mean_centering=True,
+            mean_centering=False,  # CLIPのテキスト特徴は中心化しない
             mean_vector=self._accessor.get_mean_meta_vector(model_id),
         )
 
@@ -316,7 +311,7 @@ class Usecase:
             aesthetic_quality_range_max,
             aesthetic_model_name,
         )
-        return ResultImageItemList(scores, self.format_search_query(features.copy()))
+        return ResultImageItemList(scores, self.format_search_query(features))
 
     def search_image(
         self,
@@ -347,7 +342,9 @@ class Usecase:
             temp.append(meta)
 
         # クエリベクトルの平均を計算
-        features: np.ndarray = np.vstack(temp).mean(axis=0).reshape(1, -1)
+        batch = np.vstack(temp)
+        faiss.normalize_L2(batch)
+        features = batch.mean(axis=0).reshape(1, -1)
 
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
@@ -357,7 +354,7 @@ class Usecase:
             item_list=item_list,
             index=index,
             query_features=features,
-            mean_centering=True,
+            mean_centering=True,  # CLIPの画像特徴は中心化する
             mean_vector=self._accessor.get_mean_meta_vector(model_id),
         )
 
@@ -450,7 +447,6 @@ class Usecase:
         """乱数から検索する"""
 
         # 単位超球面（Unit hypersphere）上から一様にベクトルをサンプリング
-        # similarity_evalの副作用で正規化されるため、ここでは正規化せずに生の乱数を渡す。
         features: np.ndarray = np.random.normal(0, 1, [1, 768]).astype(np.float32)
 
         # indexを読み込み
