@@ -1,9 +1,7 @@
-import natsort from 'https://cdn.jsdelivr.net/npm/natsort@2.0.3/+esm'
 import jszip from 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm'
 
 
 import * as repository from "./modules/repository.js"
-import * as util from "./util.js"
 
 const { markRaw, nextTick } = Vue
 
@@ -29,6 +27,7 @@ const app = Vue.createApp({
             isRegexp: false,
             numCols: 6,
             numRows: 10,
+            resultSize: 2048,
             model_name: "ViT-L-14",
             pretrained: "openai",
             search_query: "",
@@ -357,14 +356,7 @@ const app = Vue.createApp({
                 // console.log('結果', result)
                 // console.log('ソート前' + JSON.stringify(array))
 
-                //並び替え
-                const nsCmp = natsort.default()
-                array = array.sort(util.cancatComparator(
-                    (a, b) => b.score - a.score,
-                    (a, b) => nsCmp(a.item.name, b.item.name)
-                ))
-
-                // console.log('ソート後' + JSON.stringify(array))
+                // サーバ側でスコア降順・名前昇順に整列済み
 
                 //バッファに登録
                 this.search_query = result.search_query
@@ -389,13 +381,8 @@ const app = Vue.createApp({
                 // ── 計測開始：fetch は完了している
                 const clientStart = performance.now()
 
-                // ソート
+                // サーバ側でスコア降順・名前昇順に整列済み
                 const array = result.list
-                const nsCmp = natsort.default()
-                array.sort(util.cancatComparator(
-                    (a, b) => b.score - a.score,
-                    (a, b) => nsCmp(a.item.name, b.item.name)
-                ))
 
                 // バッファ更新
                 this.search_query = result.search_query
@@ -430,7 +417,7 @@ const app = Vue.createApp({
         textSearchButton() {
             const searchStart = performance.now()
             this.isSearching = true
-            const searchPromise = repository.searchText(this.model_name, this.pretrained, this.text, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            const searchPromise = repository.searchText(this.model_name, this.pretrained, this.text, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize)
             .then(result => {
                 this.searchDurationMs = performance.now() - searchStart
                 return result
@@ -446,7 +433,7 @@ const app = Vue.createApp({
 
             let selectedId = Object.keys(this.selectedItemId)
 
-            const searchPromise = repository.searchImage(this.model_name, this.pretrained, selectedId, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            const searchPromise = repository.searchImage(this.model_name, this.pretrained, selectedId, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize)
             .then(result => {
                 this.searchDurationMs = performance.now() - searchStart
                 return result
@@ -462,7 +449,7 @@ const app = Vue.createApp({
             }
             const searchStart = performance.now()
             this.isSearching = true
-            const searchPromise = repository.searchUploadImage(this.model_name, this.pretrained, this.uploadFile)
+            const searchPromise = repository.searchUploadImage(this.model_name, this.pretrained, this.uploadFile, this.resultSize)
             .then(result => {
                 this.searchDurationMs = performance.now() - searchStart
                 return result
@@ -475,7 +462,7 @@ const app = Vue.createApp({
         nameSearchButton() {
             const searchStart = performance.now()
             this.isSearching = true
-            const searchPromise = repository.searchName(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            const searchPromise = repository.searchName(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize)
             .then(result => {
                 this.searchDurationMs = performance.now() - searchStart
                 return result
@@ -510,7 +497,7 @@ const app = Vue.createApp({
         randomSearchButton() {
             const searchStart = performance.now()
             this.isSearching = true
-            const searchPromise = repository.searchRandom(this.model_name, this.pretrained, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            const searchPromise = repository.searchRandom(this.model_name, this.pretrained, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize)
             .then(result => {
                 this.searchDurationMs = performance.now() - searchStart
                 return result
@@ -523,7 +510,7 @@ const app = Vue.createApp({
         querySearchButton() {
             const searchStart = performance.now()
             this.isSearching = true
-            const searchPromise = repository.searchQuery(this.model_name, this.pretrained, this.search_query, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            const searchPromise = repository.searchQuery(this.model_name, this.pretrained, this.search_query, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize)
             .then(result => {
                 this.searchDurationMs = performance.now() - searchStart
                 return result
@@ -536,7 +523,7 @@ const app = Vue.createApp({
         addTextFeaturesButton() {
             const searchStart = performance.now()
             this.isSearching = true
-            const searchPromise = repository.addTextFeatures(this.model_name, this.pretrained, this.text, this.search_query, this.features_strength, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            const searchPromise = repository.addTextFeatures(this.model_name, this.pretrained, this.text, this.search_query, this.features_strength, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize)
             .then(result => {
                 this.searchDurationMs = performance.now() - searchStart
                 return result
@@ -549,7 +536,7 @@ const app = Vue.createApp({
         tagSearchButton() {
             const searchStart = performance.now()
             this.isSearching = true
-            const searchPromise = repository.searchTags(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            const searchPromise = repository.searchTags(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize)
             .then(result => {
                 this.searchDurationMs = performance.now() - searchStart
                 return result
@@ -562,7 +549,7 @@ const app = Vue.createApp({
         styleClusterSearchButton() {
             const searchStart = performance.now()
             this.isSearching = true
-            const searchPromise = repository.searchStyleCluster(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name)
+            const searchPromise = repository.searchStyleCluster(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize)
             .then(result => {
                 this.searchDurationMs = performance.now() - searchStart
                 return result
