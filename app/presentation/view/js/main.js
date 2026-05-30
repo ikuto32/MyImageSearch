@@ -311,7 +311,6 @@ const app = Vue.createApp({
                 this.search_query = result.search_query
                 this.rawResultBuffer = markRaw(array)
                 this.applyRatingFilterToBuffer()
-                this.clientDurationMs = performance.now() - clientStart
             })
         },
 

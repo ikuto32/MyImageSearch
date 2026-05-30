@@ -736,10 +736,10 @@ def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
 
-    # parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
-    # parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
-    parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
+    parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
+    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
+    # parser.add_argument("--image_dir", help="dir", default="./images")
+    # parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
 
     parser.add_argument(
         "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_rankingv2.pth"
@@ -1725,7 +1725,10 @@ def recalc_aesthetic_scores(
 def compute_mean_vector(
     con: sqlite3.Connection, d: int, batch_size: int = 50_000
 ) -> np.ndarray:
-    """全metaベクトルから平均ベクトルを計算する"""
+    """全metaベクトルをL2正規化してから平均ベクトルを計算する。
+    ビルド/検索側で `faiss.normalize_L2` を経たベクトルと整合させるため、
+    ここでも明示的に正規化してから平均を取る。
+    """
     print("Computing mean vector...")
     cur = con.execute("SELECT meta FROM image_meta WHERE meta IS NOT NULL")
     mean_vec = np.zeros(d, dtype=np.float64)
@@ -1746,35 +1749,39 @@ def compute_mean_vector(
         if not batch_arr:
             continue
 
-        batch_np = np.stack(batch_arr)
-        # float64で累積して精度を保つ
-        mean_vec += np.sum(batch_np, axis=0, dtype=np.float64)
+        # 連続メモリの float32 配列にしてから正規化(faiss.normalize_L2 の要件)
+        batch_np = np.ascontiguousarray(np.stack(batch_arr), dtype=np.float32)
+        faiss.normalize_L2(batch_np)              # ← 追加
+
+        # float64 で累積して精度を保つ
+        mean_vec += batch_np.sum(axis=0, dtype=np.float64)
         total_count += batch_np.shape[0]
         pbar.update(len(batch_arr))
 
     pbar.close()
 
-    if total_count > 0:
-        mean_vec /= total_count
+    if total_count == 0:
+        raise ValueError("No valid meta vectors found.")
 
-    return mean_vec.astype(np.float32)
+    return (mean_vec / total_count).astype(np.float32)
 
 
 def stream_build_faiss(
     db_path: str,
     nlist: int, M: int, bits_per_code: int,
-    d: int,                       # args.search_model_out_dim
+    d: int,
     out_index_path: str,
-    batch_size: int = 50_000,     # メモリに合わせて調整
-    train_samples: int = 2_000_000, # 訓練に使う最大サンプル数（d次元×この件数だけ常駐）
+    batch_size: int = 50_000,
+    train_samples: int = 2_000_000,
 ):
     con = connect_db(db_path)
     try:
         con.execute("PRAGMA case_sensitive_like=OFF")
-        con.execute("PRAGMA temp_store=MEMORY")  # ソートの一部をメモリに。ただし無理はしない
+        con.execute("PRAGMA temp_store=MEMORY")
 
-        # 件数 (NULLでないmetaの数を取得するよう微調整)
-        total = con.execute("SELECT COUNT(*) FROM image_meta WHERE meta IS NOT NULL").fetchone()[0]
+        total = con.execute(
+            "SELECT COUNT(*) FROM image_meta WHERE meta IS NOT NULL"
+        ).fetchone()[0]
         print(f"total rows with meta: {total}")
 
         if total == 0:
@@ -1782,24 +1789,28 @@ def stream_build_faiss(
             return
 
         # -------- 平均ベクトルの計算と保存 --------
-        mean_vec = compute_mean_vector(con, d, batch_size)
+        mean_vec = compute_mean_vector(con, d, batch_size).astype(np.float32)
         mean_vec_path = out_index_path + ".mean.npy"
         np.save(mean_vec_path, mean_vec)
         print(f"Saved mean vector to {mean_vec_path}")
 
         # -------- パス1: 訓練 --------
         train_buf = collect_train_samples_algL(con, d, train_samples, batch_size, total=total)
+        train_buf = np.ascontiguousarray(train_buf, dtype=np.float32)
 
-        # Mean Centering -> L2正規化
-        train_buf -= mean_vec
+        # ① 正規化 → ② 中心化(再正規化しない)
         faiss.normalize_L2(train_buf)
+        train_buf -= mean_vec
 
-        index = createIndex(nlist, M, bits_per_code, d)  # 既存関数を利用
+        index = createIndex(nlist, M, bits_per_code, d)
+        assert index.metric_type == faiss.METRIC_INNER_PRODUCT, \
+            f"Index must be IP metric, got {index.metric_type}"
+
         print(f"train {train_buf.shape}")
         index.train(train_buf)
-        del train_buf  # 訓練後は解放
+        del train_buf
 
-        # -------- パス2: 逐次add（Mean Centering -> バッチ正規化 -> add） --------
+        # -------- パス2: 逐次add --------
         print("add")
         cur = con.execute("""
             SELECT image_path, meta
@@ -1815,12 +1826,7 @@ def stream_build_faiss(
         while True:
             rows = cur.fetchmany(batch_size)
             if not rows:
-                # 端数のflush
-                if k > 0:
-                    buf[:k] -= mean_vec
-                    faiss.normalize_L2(buf[:k])
-                    index.add(buf[:k])
-                break
+                break  # 各バッチで即 add しているので、ここでの flush は不要
 
             k = 0
             for (_, meta_blob) in rows:
@@ -1833,12 +1839,12 @@ def stream_build_faiss(
                 pbar.update(1)
 
             if k > 0:
-                buf[:k] -= mean_vec
+                # ① 正規化 → ② 中心化(再正規化しない)
                 faiss.normalize_L2(buf[:k])
+                buf[:k] -= mean_vec
                 index.add(buf[:k])
 
         pbar.close()
-
         print("write")
         faiss.write_index(index, out_index_path)
     finally:
