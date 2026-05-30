@@ -18,6 +18,11 @@ const app = Vue.createApp({
     data() {
         return {
             load_size: 50,
+            pageSize: 0,
+            nextPage: 0,
+            hasMorePages: true,
+            isLoadingPage: false,
+            isPagedBrowseMode: true,
             message: "test",
             text: "",
             isShowSetting: false,
@@ -111,13 +116,12 @@ const app = Vue.createApp({
          */
         init() {
 
-            this.ensureRatingMap()
-            .then(this.initBuffer)
-            .then(this.initImage)
+            this.initBuffer()
+            .then(() => this.initImage())
         },
 
         onModelChange(){
-            this.ensureRatingMap()
+            this.ensureRatingMapForResults(this.rawResultBuffer)
             .then(() => {
                 this.applyRatingFilterToBuffer()
                 this.initImage()
@@ -130,6 +134,7 @@ const app = Vue.createApp({
         initImage() {
             this.selectedItemId = {}
             this.showedItemIndex = 0
+            this.padding_top = 0
 
             const end = this.numRows * this.numCols
             this.displayItems = this.resultBuffer.slice(0, end).map(result => ({
@@ -151,16 +156,42 @@ const app = Vue.createApp({
          */
         initBuffer() {
 
-            //画像項目をページ指定で取得する（デフォルトは最初の1万件）
-            return repository.getImageItemsByPage(0)
+            this.pageSize = this.numRows * this.numCols
+            this.nextPage = 0
+            this.hasMorePages = true
+            this.isPagedBrowseMode = true
+            this.rawResultBuffer = []
+            this.resultBuffer = []
+
+            return this.loadNextImagePage()
+        },
+
+        loadNextImagePage() {
+            if (!this.hasMorePages || this.isLoadingPage) {
+                return Promise.resolve()
+            }
+
+            this.isLoadingPage = true
+
+            return repository.getImageItemsByPage(this.nextPage, this.pageSize)
             .then(objs => {
+                this.hasMorePages = objs.length === this.pageSize
+                this.nextPage += 1
 
                 //バッファに登録
                 /**
                  * @type {repository.ResultItem[]}
                  */
-                this.rawResultBuffer = markRaw(objs.map(obj => ({ item: obj, score: 0 })))
+                const results = objs.map(obj => ({ item: obj, score: 0 }))
+                this.rawResultBuffer = markRaw(this.rawResultBuffer.concat(results))
+                return this.ensureRatingMapForResults(results)
+            })
+            .then(() => {
                 this.applyRatingFilterToBuffer()
+                this.refreshVisibleItems()
+            })
+            .finally(() => {
+                this.isLoadingPage = false
             })
         },
 
@@ -168,16 +199,24 @@ const app = Vue.createApp({
             return `${this.model_name}-${this.pretrained}`
         },
 
-        ensureRatingMap() {
-            const ratingKey = this.getRatingMapKey()
+        ensureRatingMapForResults(results) {
+            return this.ensureRatingMapForItemIds(results.map(result => result.item.id))
+        },
 
-            if(this.ratingMaps[ratingKey]) {
+        ensureRatingMapForItemIds(itemIds) {
+            const ratingKey = this.getRatingMapKey()
+            const ratingMap = this.ratingMaps[ratingKey] || {}
+            const uniqueItemIds = [...new Set(itemIds)]
+            const missingItemIds = uniqueItemIds.filter(itemId => ratingMap[itemId] === undefined)
+
+            if(missingItemIds.length === 0) {
+                this.ratingMaps[ratingKey] = ratingMap
                 return Promise.resolve()
             }
 
-            return repository.getImageRatings(this.model_name, this.pretrained)
+            return repository.getImageRatings(this.model_name, this.pretrained, missingItemIds)
             .then((ratings) => {
-                this.ratingMaps[ratingKey] = ratings
+                this.ratingMaps[ratingKey] = { ...ratingMap, ...ratings }
             })
         },
 
@@ -213,6 +252,8 @@ const app = Vue.createApp({
 
             console.log("スクロール: " + scrollY + " / " + (this.item_height * this.resultBuffer.length / this.numCols));
 
+            this.loadNextImagePageIfNeeded()
+
             while (scrollY - this.padding_top > this.item_height){
                 this.padding_top += this.item_height;
                 this.padding_bottom = (this.item_height * this.resultBuffer.length / this.numCols) - this.padding_top;
@@ -223,6 +264,19 @@ const app = Vue.createApp({
                 this.padding_bottom = (this.item_height * this.resultBuffer.length / this.numCols) - this.padding_top;
                 this.showPrevImg();
             }
+        },
+
+        loadNextImagePageIfNeeded() {
+            if (!this.isPagedBrowseMode) {
+                return
+            }
+
+            const visibleEnd = this.showedItemIndex + this.numRows * this.numCols
+            if (visibleEnd + this.load_size < this.resultBuffer.length) {
+                return
+            }
+
+            this.loadNextImagePage()
         },
 
 
@@ -268,6 +322,13 @@ const app = Vue.createApp({
             this.showedItemIndex = start
         },
 
+        refreshVisibleItems(){
+            const end = Math.min(this.showedItemIndex + this.numRows * this.numCols, this.resultBuffer.length)
+            this.displayItems = []
+            this.sliceShowImg(this.showedItemIndex, end)
+            this.padding_bottom = Math.max((this.item_height * this.resultBuffer.length / this.numCols) - this.padding_top, 0)
+        },
+
         sliceShowImg(start, end){
             const slice = this.resultBuffer.slice(start, end).map(result => ({
                 id: result.item.id,
@@ -289,9 +350,7 @@ const app = Vue.createApp({
          */
         setBuffer(promise) {
 
-            return this.ensureRatingMap()
-            .then(() => promise)
-            .then(result => {
+            return promise.then(result => {
                 const clientStart = performance.now()
 
                 let array = result.list
@@ -310,8 +369,12 @@ const app = Vue.createApp({
                 //バッファに登録
                 this.search_query = result.search_query
                 this.rawResultBuffer = markRaw(array)
-                this.applyRatingFilterToBuffer()
-                this.clientDurationMs = performance.now() - clientStart
+                this.isPagedBrowseMode = false
+                return this.ensureRatingMapForResults(array)
+                .then(() => {
+                    this.applyRatingFilterToBuffer()
+                    this.clientDurationMs = performance.now() - clientStart
+                })
             })
         },
 
@@ -322,9 +385,7 @@ const app = Vue.createApp({
          * @return {Promise<void>}
          */
         runSearch(promise, afterBuffer = null) {
-            return this.ensureRatingMap()
-            .then(() => promise)
-            .then(result => {
+            return promise.then(result => {
                 // ── 計測開始：fetch は完了している
                 const clientStart = performance.now()
 
@@ -339,21 +400,25 @@ const app = Vue.createApp({
                 // バッファ更新
                 this.search_query = result.search_query
                 this.rawResultBuffer = markRaw(array)
-                this.applyRatingFilterToBuffer()
-
-                if (afterBuffer) afterBuffer()
-
-                // displayItems を更新（ここで Vue が patch を予約する）
-                this.initImage()
-
-                // ── Vue の DOM patch 完了を待つ
-                return nextTick()
-                // ── さらにブラウザのレイアウト・ペイント完了まで待つ
-                .then(() => new Promise(resolve => {
-                    requestAnimationFrame(() => requestAnimationFrame(resolve))
-                }))
+                this.isPagedBrowseMode = false
+                return this.ensureRatingMapForResults(array)
                 .then(() => {
-                    this.clientDurationMs = performance.now() - clientStart
+                    this.applyRatingFilterToBuffer()
+
+                    if (afterBuffer) afterBuffer()
+
+                    // displayItems を更新（ここで Vue が patch を予約する）
+                    this.initImage()
+
+                    // ── Vue の DOM patch 完了を待つ
+                    return nextTick()
+                    // ── さらにブラウザのレイアウト・ペイント完了まで待つ
+                    .then(() => new Promise(resolve => {
+                        requestAnimationFrame(() => requestAnimationFrame(resolve))
+                    }))
+                    .then(() => {
+                        this.clientDurationMs = performance.now() - clientStart
+                    })
                 })
             })
             .finally(() => { this.isSearching = false })

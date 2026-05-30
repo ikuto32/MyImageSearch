@@ -121,11 +121,18 @@ class Usecase:
             "aesthetic_quality": 0.0,
         }
 
-    def get_rating_list(self, model_id: ModelId) -> dict[ImageId, str]:
-        """画像のrating一覧を取得する"""
+    def get_rating_list(
+        self, model_id: ModelId, image_ids: list[ImageId] | None = None
+    ) -> dict[ImageId, str]:
+        """指定された画像IDに限定してrating一覧を取得する"""
 
         _, items = self._get_index_and_items(model_id, "original")
-        return {item.id: item.rating for item in items}
+        target_ids = set(image_ids) if image_ids is not None else None
+        return {
+            item.id: item.rating
+            for item in items
+            if target_ids is None or item.id in target_ids
+        }
 
     # ===================================================================
 
