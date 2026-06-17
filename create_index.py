@@ -61,8 +61,13 @@ def safe_collate(batch):
     wd_inputs = [b[3] for b in batch]
     z3d_inputs = [b[4] for b in batch]
 
+    if search_inputs and isinstance(search_inputs[0], Image.Image):
+        batched_search_inputs = search_inputs
+    else:
+        batched_search_inputs = default_collate(search_inputs)
+
     return (
-        default_collate(search_inputs),
+        batched_search_inputs,
         default_collate(metadata_inputs) if metadata_inputs[0] is not None else None,
         default_collate(indices),
         default_collate(wd_inputs),
@@ -1201,6 +1206,19 @@ class OpenClipEmbeddingBackend(SearchEmbeddingBackend):
         return self.model.encode_text(tokens)
 
 
+class QwenVlImagePreprocess:
+    """Picklable image transform for Qwen VL search inputs.
+
+    Qwen preprocessing is intentionally deferred to the main-process batch
+    path because the processor owns non-trivial model state and may not be
+    picklable under multiprocessing spawn. DataLoader workers only return
+    lightweight PIL images.
+    """
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        return image.copy()
+
+
 class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
     """Qwen3-VL-Embedding を使う検索エンコーダ。"""
 
@@ -1221,10 +1239,7 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
 
     @property
     def preprocess(self):
-        def _preprocess(image: Image.Image):
-            return self.processor(images=image, return_tensors="pt")
-
-        return _preprocess
+        return QwenVlImagePreprocess()
 
     def _move_inputs_to_device(self, inputs):
         if isinstance(inputs, dict):
@@ -1544,6 +1559,17 @@ def extract_image_features(
                 batched_wd_inputs,
                 batched_z3d_inputs,
             ) = batch
+
+            if (
+                isinstance(batched_image_input, list)
+                and batched_image_input
+                and isinstance(batched_image_input[0], Image.Image)
+            ):
+                batched_image_input = search_model.processor(
+                    images=batched_image_input,
+                    padding=True,
+                    return_tensors="pt",
+                )
 
             batched_image_input = _to_device(batched_image_input, device)
             batched_metadata_input = _to_device(batched_metadata_input, device)
