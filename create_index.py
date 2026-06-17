@@ -1306,6 +1306,42 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
     def preprocess(self):
         return QwenVlImagePreprocess()
 
+    def prepare_image_inputs(self, images: list[Image.Image]) -> dict[str, Any]:
+        """Build Qwen3-VL image embedding inputs with required prompt tokens."""
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": "Represent this image for retrieval."},
+                ],
+            }
+        ]
+        if hasattr(self.processor, "apply_chat_template"):
+            prompt = self.processor.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+        else:
+            prompt = "<|vision_start|><|image_pad|><|vision_end|>Represent this image for retrieval."
+
+        inputs = self.processor(
+            text=[prompt] * len(images),
+            images=images,
+            padding=True,
+            return_tensors="pt",
+        )
+        if "input_ids" not in inputs and "inputs_embeds" not in inputs:
+            raise RuntimeError(
+                "Qwen VL image preprocessing must include text/chat prompt tokens "
+                "(`input_ids` or `inputs_embeds`)."
+            )
+        if not any(key in inputs for key in QWEN_VARIABLE_IMAGE_KEYS):
+            raise RuntimeError("Qwen VL image preprocessing did not return image tensors.")
+        return inputs
+
     def _move_inputs_to_device(self, inputs):
         if isinstance(inputs, dict):
             return {
@@ -1630,11 +1666,7 @@ def extract_image_features(
                 and batched_image_input
                 and isinstance(batched_image_input[0], Image.Image)
             ):
-                batched_image_input = search_model.processor(
-                    images=batched_image_input,
-                    padding=True,
-                    return_tensors="pt",
-                )
+                batched_image_input = search_model.prepare_image_inputs(batched_image_input)
 
             batched_image_input = _to_device(batched_image_input, device)
             batched_metadata_input = _to_device(batched_metadata_input, device)
