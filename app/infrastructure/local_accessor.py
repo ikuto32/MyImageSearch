@@ -239,6 +239,8 @@ class LocalAccessor(Accessor):
         image_items: List[ImageItem] = []
         for row in tqdm.tqdm(sorted_result.itertuples(index=False)):
             aesthetic_score = getattr(row, aesthetic_name, None)
+            if aesthetic_score is not None and pd.isna(aesthetic_score):
+                aesthetic_score = None
             image_items.append(
                 ImageItem(
                     id=ImageId(str(row.image_id)),
