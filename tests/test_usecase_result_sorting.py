@@ -22,8 +22,11 @@ from app.domain.domain_object import (
     ImageId,
     ImageItem,
     ImageName,
+    ModelId,
     ResultImageItem,
+    ResultImageItemList,
     Score,
+    UploadText,
 )
 
 
@@ -58,6 +61,30 @@ class UsecaseResultSortingTests(unittest.TestCase):
         self.assertEqual(self.usecase._normalize_result_size(None), 2048)
         self.assertEqual(self.usecase._normalize_result_size("invalid"), 2048)
         self.assertEqual(self.usecase._normalize_result_size(0), 1)
+
+    def test_warmup_search_cache_runs_minimal_text_search_with_defaults(self):
+        model_id = ModelId("ViT-L-14", "openai")
+        calls = []
+        expected = ResultImageItemList([], "query")
+        self.usecase._logger = types.SimpleNamespace(info=lambda *args, **kwargs: None)
+
+        def fake_search_text(**kwargs):
+            calls.append(kwargs)
+            return expected
+
+        self.usecase.search_text = fake_search_text
+
+        result = self.usecase.warmup_search_cache(model_id)
+
+        self.assertIs(result, expected)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["model_id"], model_id)
+        self.assertEqual(calls[0]["text"], UploadText("An image a cat."))
+        self.assertEqual(calls[0]["aesthetic_quality_beta"], 0.0)
+        self.assertEqual(calls[0]["aesthetic_quality_range_min"], 0.0)
+        self.assertEqual(calls[0]["aesthetic_quality_range_max"], 10.0)
+        self.assertEqual(calls[0]["aesthetic_model_name"], "original")
+        self.assertEqual(calls[0]["result_size"], 1)
 
 
 if __name__ == "__main__":
