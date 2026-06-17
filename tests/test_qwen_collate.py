@@ -78,13 +78,33 @@ def _install_dummy_modules():
             return self
 
         def squeeze(self, dim=None):
-            return self
+            if dim is None:
+                return FakeTensor(self._squeeze_all(self.data))
+            if dim < 0:
+                dim += len(self._shape)
+            if self._shape[dim] != 1:
+                return self
+            return FakeTensor(self._squeeze_dim(self.data, dim))
 
         @classmethod
         def _infer_shape(cls, data):
             if isinstance(data, list):
                 return (len(data),) + (cls._infer_shape(data[0]) if data else ())
             return ()
+
+        @classmethod
+        def _squeeze_all(cls, data):
+            while isinstance(data, list) and len(data) == 1:
+                data = data[0]
+            if isinstance(data, list):
+                return [cls._squeeze_all(item) for item in data]
+            return data
+
+        @classmethod
+        def _squeeze_dim(cls, data, dim):
+            if dim == 0:
+                return data[0]
+            return [cls._squeeze_dim(item, dim - 1) for item in data]
 
         @classmethod
         def _filled(cls, shape, fill_value):
@@ -182,12 +202,21 @@ class QwenCollateTests(unittest.TestCase):
     def test_qwen_processor_dicts_are_padded_before_encoding(self):
         tensor = create_index.torch.FakeTensor
         samples = [
-            ({"pixel_values": tensor([[1, 2], [3, 4]]), "image_grid_thw": tensor([[1, 1, 2]])}, None, 0, tensor([1]), tensor([2])),
-            ({"pixel_values": tensor([[5, 6], [7, 8], [9, 10]]), "image_grid_thw": tensor([[1, 1, 3]])}, None, 1, tensor([3]), tensor([4])),
+            ({
+                "input_ids": tensor([101, 102]),
+                "pixel_values": tensor([[1, 2], [3, 4]]),
+                "image_grid_thw": tensor([[1, 1, 2]]),
+            }, None, 0, tensor([1]), tensor([2])),
+            ({
+                "input_ids": tensor([201, 202]),
+                "pixel_values": tensor([[5, 6], [7, 8], [9, 10]]),
+                "image_grid_thw": tensor([[1, 1, 3]]),
+            }, None, 1, tensor([3]), tensor([4])),
         ]
 
         search_batch, _, _, _, _ = safe_collate(samples)
 
+        self.assertEqual(search_batch["input_ids"].shape, (2, 2))
         self.assertEqual(search_batch["pixel_values"].shape, (2, 3, 2))
         self.assertEqual(search_batch["pixel_values"].data[0][2], [0, 0])
 
@@ -198,6 +227,12 @@ class QwenCollateTests(unittest.TestCase):
 
         class FakeModel:
             def __call__(self, **kwargs):
+                provided_embedding_inputs = sum(
+                    key in kwargs and kwargs[key] is not None
+                    for key in ("input_ids", "inputs_embeds")
+                )
+                if provided_embedding_inputs != 1:
+                    raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
                 seen.update(kwargs)
                 return types.SimpleNamespace(pooler_output=tensor([[1.0], [2.0]]))
 
@@ -206,7 +241,9 @@ class QwenCollateTests(unittest.TestCase):
 
         self.assertIs(internal, features)
         self.assertEqual(features.shape, (2, 1))
+        self.assertEqual(seen["input_ids"].shape, (2, 2))
         self.assertEqual(seen["pixel_values"].shape, (2, 3, 2))
+        self.assertEqual(seen["image_grid_thw"].shape, (2, 3))
 
 
     def test_pil_image_inputs_bypass_default_collate(self):
