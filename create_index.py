@@ -763,7 +763,7 @@ def parse_arguments():
     parser.add_argument(
         "--search_backend",
         choices=("open_clip", "qwen_vl"),
-        default="open_clip",
+        default="qwen_vl",
         help="Search embedding backend to use.",
     )
     parser.add_argument(
@@ -789,7 +789,7 @@ def parse_arguments():
             "are truncated to this size when specified."
         ),
         type=int,
-        default=None,
+        default=2048,
     )
 
     parser.add_argument(
