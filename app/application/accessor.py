@@ -4,6 +4,7 @@ import pathlib
 from typing import Any
 import numpy as np
 
+from app.application.embedding_backend import SearchEmbeddingBackend
 from app.domain.domain_object import ImageId, ImageItem, Model, ModelId, Tokenizer
 
 
@@ -23,6 +24,12 @@ class Accessor():
 
     @abstractmethod
     def load_tokenizer(self, model_id: ModelId) -> Tokenizer:
+
+        pass
+
+    @abstractmethod
+    def load_embedding_backend(self, model_id: ModelId) -> SearchEmbeddingBackend:
+        """ModelIdから検索クエリ生成用の埋め込みバックエンドを取得する。"""
 
         pass
 

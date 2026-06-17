@@ -18,7 +18,6 @@ import typing
 from typing import Any, Iterable
 import csv
 import uuid
-import types
 import time
 import threading
 
@@ -26,6 +25,11 @@ import faiss
 import huggingface_hub
 import numpy as np
 import open_clip
+
+from app.infrastructure.model_metadata import (
+    SearchModelMetadata,
+    write_model_metadata,
+)
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -45,19 +49,21 @@ Image.MAX_IMAGE_PIXELS = 268_435_456
 # =========================
 
 def safe_collate(batch):
-    """Custom collate that also bundles tagger preprocessed arrays."""
+    """Custom collate that bundles search, metadata, and tagger inputs."""
 
     batch = [b for b in batch if b is not None]
     if not batch:
         return None
 
-    image_tensors = [b[0] for b in batch]
-    indices = [b[1] for b in batch]
-    wd_inputs = [b[2] for b in batch]
-    z3d_inputs = [b[3] for b in batch]
+    search_inputs = [b[0] for b in batch]
+    metadata_inputs = [b[1] for b in batch]
+    indices = [b[2] for b in batch]
+    wd_inputs = [b[3] for b in batch]
+    z3d_inputs = [b[4] for b in batch]
 
     return (
-        default_collate(image_tensors),
+        default_collate(search_inputs),
+        default_collate(metadata_inputs) if metadata_inputs[0] is not None else None,
         default_collate(indices),
         default_collate(wd_inputs),
         default_collate(z3d_inputs),
@@ -163,10 +169,12 @@ class DirImageIterable(IterableDataset):
         transform=None,
         *,
         wd_target_size: int,
+        metadata_transform=None,
     ):
         self.images_dir = images_dir
         self.img_list = list(img_list)
         self.transform = transform
+        self.metadata_transform = metadata_transform
         self.wd_target_size = wd_target_size
 
     def _open_rgb(self, path: str):
@@ -223,14 +231,22 @@ class DirImageIterable(IterableDataset):
                     print(f"[DirImageIterable] tag preprocessing failed: {path} in {worker_id} -> {e}")
                     continue
 
+                search_img = img
+                metadata_img = None
                 if self.transform is not None:
                     try:
-                        img = self.transform(img)
+                        search_img = self.transform(img)
                     except Exception as e:
-                        print(f"[DirImageIterable] transform failed: {path} in {worker_id} -> {e}")
+                        print(f"[DirImageIterable] search transform failed: {path} in {worker_id} -> {e}")
+                        continue
+                if self.metadata_transform is not None:
+                    try:
+                        metadata_img = self.metadata_transform(img)
+                    except Exception as e:
+                        print(f"[DirImageIterable] metadata transform failed: {path} in {worker_id} -> {e}")
                         continue
                 try:
-                    yield img, idx, wd_arr, z3d_arr
+                    yield search_img, metadata_img, idx, wd_arr, z3d_arr
                 except Exception as e:
                     print(f"[DirImageIterable] yield failed: {path} in {worker_id} -> {e}")
                     continue
@@ -736,22 +752,44 @@ def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
-    parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
-    # parser.add_argument("--image_dir", help="dir", default="./images")
-    # parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
+    # parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
+    # parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
+    parser.add_argument("--image_dir", help="dir", default="./images")
+    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
 
     parser.add_argument(
         "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_rankingv2.pth"
     )
     parser.add_argument(
-        "--search_model_name", help="model_name", default="ViT-L-14"
+        "--search_backend",
+        choices=("open_clip", "qwen_vl"),
+        default="open_clip",
+        help="Search embedding backend to use.",
     )
     parser.add_argument(
-        "--search_model_pretrained", help="pretrained", default="openai"
+        "--search_model_name",
+        help="OpenCLIP model_name (used only with --search_backend open_clip)",
+        default="ViT-L-14",
     )
     parser.add_argument(
-        "--search_model_out_dim", help="search_model_out_dim", type=int, default=768
+        "--search_model_pretrained",
+        help="OpenCLIP pretrained tag (used only with --search_backend open_clip)",
+        default="openai",
+    )
+    parser.add_argument(
+        "--search_model_id",
+        help="Hugging Face model ID for non-OpenCLIP backends.",
+        default="Qwen/Qwen3-VL-Embedding-2B",
+    )
+    parser.add_argument(
+        "--search_model_out_dim",
+        help=(
+            "Optional output embedding dimension. If omitted, the dimension is "
+            "inferred from the first generated/stored embedding. Qwen MRL models "
+            "are truncated to this size when specified."
+        ),
+        type=int,
+        default=None,
     )
 
     parser.add_argument(
@@ -767,7 +805,14 @@ def parse_arguments():
     parser.add_argument("--batch_size", help="batch size", type=int, default=32)
     parser.add_argument("--num_workers", help="data loader workers", type=int, default=8)
     parser.add_argument("--nlist", help="centroid size", type=int, default=64)
-    parser.add_argument("--M", help="M", type=int, default=768)
+    parser.add_argument(
+        "--pq-m",
+        "--M",
+        dest="pq_m",
+        help="FAISS IVFPQ PQ subvector count (not embedding dimension).",
+        type=int,
+        default=64,
+    )
     parser.add_argument("--bits_per_code", help="bits_per_code", type=int, default=8)
     parser.add_argument(
         "--metas_faiss_index_file_name",
@@ -810,6 +855,14 @@ def parse_arguments():
         type=int,
         default=16384,
         help="recalc-aesthetic モード時の DB フェッチ・更新バッチサイズ (default: 16384)",
+    )
+    parser.add_argument(
+        "--disable-clip-metadata",
+        action="store_true",
+        help=(
+            "検索バックエンドと別に 768 次元 OpenCLIP メタデータ特徴量を生成せず、"
+            "aesthetic/style メタデータを NULL/空で保存する。主に Qwen インデックス用。"
+        ),
     )
 
     return parser.parse_args()
@@ -1021,10 +1074,18 @@ def init_db(cur: sqlite3.Cursor):
             style_cluster text,
             rating text,
             image_tags text,
-            time_stamp_ISO text
+            time_stamp_ISO text,
+            search_embedding_model text,
+            metadata_embedding_model text
         )
         """
     )
+    cur.execute("ALTER TABLE image_meta ADD COLUMN search_embedding_model text") if not _column_exists(cur, "image_meta", "search_embedding_model") else None
+    cur.execute("ALTER TABLE image_meta ADD COLUMN metadata_embedding_model text") if not _column_exists(cur, "image_meta", "metadata_embedding_model") else None
+
+
+def _column_exists(cur: sqlite3.Cursor, table_name: str, column_name: str) -> bool:
+    return any(row[1] == column_name for row in cur.execute(f"PRAGMA table_info({table_name})"))
 
 
 def load_image_meta_from_db(
@@ -1078,20 +1139,165 @@ def load_image_meta_from_db(
         cur.execute(f"DROP TABLE IF EXISTS \"{temp_table}\"")
 
 
-def createIndex(n_centroids, M, bits_per_code, dim) -> faiss.IndexIVFPQ:
+def createIndex(n_centroids, pq_m, bits_per_code, dim) -> faiss.IndexIVFPQ:
 
     quantizer = faiss.IndexFlatIP(dim)
     index = faiss.IndexIVFPQ(
-        quantizer, dim, n_centroids, M, bits_per_code, faiss.METRIC_INNER_PRODUCT
+        quantizer, dim, n_centroids, pq_m, bits_per_code, faiss.METRIC_INNER_PRODUCT
     )
 
     return index
 
 
+class SearchEmbeddingBackend:
+    """検索用の画像・テキスト埋め込みバックエンド共通インターフェース。"""
+
+    @property
+    def preprocess(self):
+        raise NotImplementedError
+
+    @torch.no_grad()
+    def encode_image_with_internal(self, image_inputs):
+        raise NotImplementedError
+
+    @torch.no_grad()
+    def encode_text(self, texts: list[str]) -> torch.Tensor:
+        raise NotImplementedError
+
+
+class OpenClipEmbeddingBackend(SearchEmbeddingBackend):
+    """既存の OpenCLIP ベース検索エンコーダ。"""
+
+    def __init__(self, model_name: str, pretrained: str, device: str):
+        self.device = device
+        self.model, _, self._preprocess = open_clip.create_model_and_transforms(
+            model_name,
+            pretrained=pretrained,
+            device=device,
+            jit=False,
+        )
+        self.model.eval()
+        self.tokenizer = open_clip.get_tokenizer(model_name)
+
+    @property
+    def preprocess(self):
+        return self._preprocess
+
+    @torch.no_grad()
+    def encode_image_with_internal(self, pixel_values: torch.Tensor):
+        visual = self.model.visual
+        x = visual._embeds(pixel_values)
+        x = visual.transformer(x)
+        pooled, _tokens = visual._pool(x)
+
+        internal_features = pooled
+        proj = getattr(visual, "proj", None)
+        projected_features = pooled @ proj if proj is not None else pooled
+        return internal_features, projected_features
+
+    @torch.no_grad()
+    def encode_text(self, texts: list[str]) -> torch.Tensor:
+        tokens = self.tokenizer(texts).to(self.device)
+        return self.model.encode_text(tokens)
+
+
+class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
+    """Qwen3-VL-Embedding を使う検索エンコーダ。"""
+
+    def __init__(self, model_id: str, device: str, output_dim: int | None = None):
+        from transformers import AutoModel, AutoProcessor
+
+        self.device = device
+        self.model_id = model_id
+        self.output_dim = output_dim
+        dtype = torch.float16 if device.startswith("cuda") else torch.float32
+        self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        self.model = AutoModel.from_pretrained(
+            model_id,
+            torch_dtype=dtype,
+            trust_remote_code=True,
+        ).to(device)
+        self.model.eval()
+
+    @property
+    def preprocess(self):
+        def _preprocess(image: Image.Image):
+            return self.processor(images=image, return_tensors="pt")
+
+        return _preprocess
+
+    def _move_inputs_to_device(self, inputs):
+        if isinstance(inputs, dict):
+            return {
+                key: value.to(self.device) if torch.is_tensor(value) else value
+                for key, value in inputs.items()
+            }
+        return inputs.to(self.device) if torch.is_tensor(inputs) else inputs
+
+    def _pool_outputs(self, outputs) -> torch.Tensor:
+        for attr in ("image_embeds", "text_embeds", "pooler_output"):
+            value = getattr(outputs, attr, None)
+            if value is not None:
+                return value
+        hidden = getattr(outputs, "last_hidden_state", None)
+        if hidden is None and isinstance(outputs, (tuple, list)) and outputs:
+            hidden = outputs[0]
+        if hidden is None:
+            raise RuntimeError("Qwen VL embedding model did not return embeddings.")
+        return hidden.mean(dim=1)
+
+    def _apply_output_dim(self, features: torch.Tensor) -> torch.Tensor:
+        if self.output_dim is None:
+            return features
+        if features.shape[-1] < self.output_dim:
+            raise ValueError(
+                f"Requested output dimension {self.output_dim} exceeds model dimension {features.shape[-1]}."
+            )
+        return features[..., : self.output_dim].contiguous()
+
+    @torch.no_grad()
+    def encode_image_with_internal(self, image_inputs):
+        if isinstance(image_inputs, dict):
+            image_inputs = {
+                key: value.squeeze(1) if torch.is_tensor(value) and value.ndim > 1 and value.shape[1] == 1 else value
+                for key, value in image_inputs.items()
+            }
+        image_inputs = self._move_inputs_to_device(image_inputs)
+        outputs = self.model(**image_inputs, return_dict=True)
+        features = self._apply_output_dim(self._pool_outputs(outputs))
+        return features, features
+
+    @torch.no_grad()
+    def encode_text(self, texts: list[str]) -> torch.Tensor:
+        inputs = self.processor(text=texts, padding=True, return_tensors="pt")
+        inputs = self._move_inputs_to_device(inputs)
+        outputs = self.model(**inputs, return_dict=True)
+        return self._apply_output_dim(self._pool_outputs(outputs))
+
+
+def safe_model_dir_name(value: str) -> str:
+    return value.replace("/", "--").replace("\\", "--").replace(":", "_")
+
+
 def create_search_model_meta_dir(args):
-    search_model_meta_dir = f"{args.meta_dir}/{args.search_model_name}-{args.search_model_pretrained}"
-    os.makedirs(search_model_meta_dir, exist_ok=True)
-    return search_model_meta_dir
+    if args.search_backend == "open_clip":
+        model_dir_name = f"{args.search_model_name}-{args.search_model_pretrained}"
+        metadata = SearchModelMetadata(
+            model_name=args.search_model_name,
+            pretrained=args.search_model_pretrained,
+            display_name=model_dir_name,
+        )
+    else:
+        model_dir_name = safe_model_dir_name(args.search_model_id)
+        metadata = SearchModelMetadata(
+            model_name=args.search_model_id,
+            pretrained="",
+            display_name=args.search_model_id,
+        )
+    search_model_meta_dir = pathlib.Path(args.meta_dir) / model_dir_name
+    search_model_meta_dir.mkdir(parents=True, exist_ok=True)
+    write_model_metadata(search_model_meta_dir, metadata)
+    return str(search_model_meta_dir)
 
 
 def configure_torch_backends():
@@ -1112,38 +1318,44 @@ def get_device():
     return device
 
 
-def load_clip_model(args, device):
-    search_model, _, eval_transform = open_clip.create_model_and_transforms(
-        args.search_model_name,
-        pretrained=args.search_model_pretrained,
-        device=device,
-        jit=False,
-    )
-    search_model.eval()
-    attach_visual_feature_helper(search_model)
-    return search_model, eval_transform
+def search_embedding_model_label(args) -> str:
+    if args.search_backend == "open_clip":
+        return f"open_clip:{args.search_model_name}:{args.search_model_pretrained}"
+    return f"{args.search_backend}:{args.search_model_id}"
 
 
-def attach_visual_feature_helper(search_model):
-    def encode_image_with_internal(self, pixel_values: torch.Tensor):
-        visual = self.visual
-        x = visual._embeds(pixel_values)
-        x = visual.transformer(x)
-        pooled, tokens = visual._pool(x)
+def metadata_embedding_model_label(args) -> str | None:
+    if args.disable_clip_metadata:
+        return None
+    return "open_clip:ViT-L-14:openai"
 
-        internal_features = pooled
-        proj = getattr(visual, "proj", None)
 
-        if proj is not None:
-            projected_features = pooled @ proj
-        else:
-            projected_features = pooled
+def load_metadata_embedding_backend(args, device) -> OpenClipEmbeddingBackend | None:
+    if args.disable_clip_metadata:
+        return None
+    return OpenClipEmbeddingBackend("ViT-L-14", "openai", device)
 
-        return internal_features, projected_features
 
-    search_model.encode_image_with_internal = types.MethodType(
-        encode_image_with_internal, search_model
-    )
+def _to_device(batch, device):
+    if batch is None:
+        return None
+    if isinstance(batch, dict):
+        return {k: _to_device(v, device) for k, v in batch.items()}
+    if torch.is_tensor(batch):
+        return batch.to(device, non_blocking=True)
+    return batch
+
+
+def load_search_embedding_backend(args, device) -> SearchEmbeddingBackend:
+    if args.search_backend == "open_clip":
+        return OpenClipEmbeddingBackend(
+            args.search_model_name,
+            args.search_model_pretrained,
+            device,
+        )
+    if args.search_backend == "qwen_vl":
+        return QwenVlEmbeddingBackend(args.search_model_id, device, args.search_model_out_dim)
+    raise ValueError(f"Unknown search backend: {args.search_backend}")
 
 
 def create_image_id_index(file_list):
@@ -1174,12 +1386,16 @@ def filter_valid_image_meta(args, result, image_id_to_path):
     valid_meta_count = 0
     has_existing_metas = False
     uncreated_image_paths = []
-    expected_bytes = args.search_model_out_dim * np.dtype(np.float32).itemsize
+    expected_bytes = (
+        args.search_model_out_dim * np.dtype(np.float32).itemsize
+        if args.search_model_out_dim is not None
+        else None
+    )
 
     for image_id, meta in tqdm.tqdm(result, total=len(image_id_to_path)):
         if meta is not None:
             meta_view = memoryview(meta)
-            if meta_view.nbytes == expected_bytes:
+            if expected_bytes is None or meta_view.nbytes == expected_bytes:
                 valid_meta_count += 1
                 has_existing_metas = True
                 continue
@@ -1187,6 +1403,34 @@ def filter_valid_image_meta(args, result, image_id_to_path):
         uncreated_image_paths.append(image_id_to_path[image_id])
 
     return ImageMetaFilterStats(valid_meta_count, has_existing_metas), uncreated_image_paths
+
+
+def infer_meta_dimension(con: sqlite3.Connection) -> int | None:
+    """保存済みmeta BLOBからfloat32埋め込み次元を推定する。"""
+    row = con.execute(
+        "SELECT meta FROM image_meta WHERE meta IS NOT NULL LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    meta_size = memoryview(row[0]).nbytes
+    item_size = np.dtype(np.float32).itemsize
+    if meta_size % item_size != 0:
+        raise ValueError(f"Invalid meta byte size for float32 vector: {meta_size}")
+    return meta_size // item_size
+
+
+def resolve_embedding_dimension(args, con: sqlite3.Connection) -> int:
+    """CLI指定または保存済みmetaから現在の埋め込み次元を決定する。"""
+    if args.search_model_out_dim is not None:
+        return int(args.search_model_out_dim)
+    inferred = infer_meta_dimension(con)
+    if inferred is None:
+        raise ValueError(
+            "Embedding dimension is unknown because no embeddings were generated or stored."
+        )
+    args.search_model_out_dim = inferred
+    print(f"Inferred search_model_out_dim={inferred}")
+    return inferred
 
 
 def collect_orphan_db_records(
@@ -1281,6 +1525,7 @@ def extract_image_features(
     pony_scorer,
     style_cluster,
     tagging_service,
+    metadata_model=None,
 ):
 
     processed_count = 0
@@ -1294,30 +1539,41 @@ def extract_image_features(
 
             (
                 batched_image_input,
+                batched_metadata_input,
                 batched_image_index,
                 batched_wd_inputs,
                 batched_z3d_inputs,
-            ) = batch  # (B, C, H, W), (B,), (B, H, H, 3), (B, 448, 448, 3)
+            ) = batch
 
-            batched_image_input = batched_image_input.to(device, non_blocking=True)
+            batched_image_input = _to_device(batched_image_input, device)
+            batched_metadata_input = _to_device(batched_metadata_input, device)
             try:
                 (
-                    internal_features_tensor,
-                    image_features_tensor,
+                    _search_internal_features_tensor,
+                    search_features_tensor,
                 ) = search_model.encode_image_with_internal(batched_image_input)
 
-                denom = image_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
-                image_features_tensor = (image_features_tensor / denom).contiguous()
-                # 2) 美的評価とスタイルクラスタリングもバッチで
-                aesthetic_dtype = next(aesthetic_model.parameters()).dtype
-                image_features_tensor = image_features_tensor.to(dtype=aesthetic_dtype)
-                aesthetic_scores = aesthetic_model.score_batch(image_features_tensor).squeeze(-1).cpu().numpy()  # (B,)
+                search_denom = search_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+                search_features_tensor = (search_features_tensor / search_denom).contiguous()
 
-                pony_scores = pony_scorer.score_batch(image_features_tensor)  # (B,)
-
-                cluster_ids, _cluster_dists = style_cluster.get_cluster_batch(
-                    internal_features_tensor
-                )  # cluster_ids: list[str], len=B
+                if aesthetic_model is not None and batched_metadata_input is not None:
+                    _metadata_internal_features_tensor, metadata_features_tensor = metadata_model.encode_image_with_internal(
+                        batched_metadata_input
+                    )
+                    metadata_denom = metadata_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+                    metadata_features_tensor = (metadata_features_tensor / metadata_denom).contiguous()
+                    aesthetic_dtype = next(aesthetic_model.parameters()).dtype
+                    metadata_features_for_scores = metadata_features_tensor.to(dtype=aesthetic_dtype)
+                    aesthetic_scores = aesthetic_model.score_batch(metadata_features_for_scores).squeeze(-1).cpu().numpy()
+                    pony_scores = pony_scorer.score_batch(metadata_features_for_scores)
+                    cluster_ids, _cluster_dists = style_cluster.get_cluster_batch(
+                        metadata_features_for_scores
+                    )
+                else:
+                    batch_size = int(search_features_tensor.shape[0])
+                    aesthetic_scores = [None] * batch_size
+                    pony_scores = [None] * batch_size
+                    cluster_ids = [None] * batch_size
 
                 # 3) タグ付けもバッチで
                 if args.use_existing_tags:
@@ -1347,7 +1603,7 @@ def extract_image_features(
 
 
                 batched_new_search_meta = (
-                    image_features_tensor.detach().cpu().float().numpy()
+                    search_features_tensor.detach().cpu().float().numpy()
                 )
 
                 params = []
@@ -1365,6 +1621,9 @@ def extract_image_features(
                         tagging_results,
                     )
                 ):
+                    if args.search_model_out_dim is None:
+                        args.search_model_out_dim = int(new_search_meta.shape[0])
+                        print(f"Detected search_model_out_dim={args.search_model_out_dim}")
                     if new_search_meta.shape[0] != args.search_model_out_dim:
                         print(f"{new_search_meta.shape[0]} != {args.search_model_out_dim}")
                         continue
@@ -1382,12 +1641,14 @@ def extract_image_features(
                             image_id,
                             image_path,
                             new_search_meta_bytes,
-                            float(aesthetic_score),
-                            float(pony_aesthetic_score),
+                            float(aesthetic_score) if aesthetic_score is not None else None,
+                            float(pony_aesthetic_score) if pony_aesthetic_score is not None else None,
                             claster,
                             rating,
                             image_tags,
                             time_stamp_ISO,
+                            search_embedding_model_label(args),
+                            metadata_embedding_model_label(args),
                         )
                     )
 
@@ -1402,8 +1663,10 @@ def extract_image_features(
                                 style_cluster,
                                 rating,
                                 image_tags,
-                                time_stamp_ISO
-                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                time_stamp_ISO,
+                                search_embedding_model,
+                                metadata_embedding_model
+                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             on conflict(image_id) do update set
                                 meta=excluded.meta,
                                 aesthetic_quality=excluded.aesthetic_quality,
@@ -1411,7 +1674,9 @@ def extract_image_features(
                                 style_cluster=excluded.style_cluster,
                                 rating=excluded.rating,
                                 image_tags=excluded.image_tags,
-                                time_stamp_ISO=excluded.time_stamp_ISO""",
+                                time_stamp_ISO=excluded.time_stamp_ISO,
+                                search_embedding_model=excluded.search_embedding_model,
+                                metadata_embedding_model=excluded.metadata_embedding_model""",
                         params,
                     )
 
@@ -1768,7 +2033,7 @@ def compute_mean_vector(
 
 def stream_build_faiss(
     db_path: str,
-    nlist: int, M: int, bits_per_code: int,
+    nlist: int, pq_m: int, bits_per_code: int,
     d: int,
     out_index_path: str,
     batch_size: int = 50_000,
@@ -1794,6 +2059,11 @@ def stream_build_faiss(
         np.save(mean_vec_path, mean_vec)
         print(f"Saved mean vector to {mean_vec_path}")
 
+        metadata_path = out_index_path + ".meta.json"
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump({"embedding_dim": d, "pq_m": pq_m}, f, ensure_ascii=False, indent=2)
+        print(f"Saved index metadata to {metadata_path}")
+
         # -------- パス1: 訓練 --------
         train_buf = collect_train_samples_algL(con, d, train_samples, batch_size, total=total)
         train_buf = np.ascontiguousarray(train_buf, dtype=np.float32)
@@ -1802,7 +2072,7 @@ def stream_build_faiss(
         faiss.normalize_L2(train_buf)
         train_buf -= mean_vec
 
-        index = createIndex(nlist, M, bits_per_code, d)
+        index = createIndex(nlist, pq_m, bits_per_code, d)
         assert index.metric_type == faiss.METRIC_INNER_PRODUCT, \
             f"Index must be IP metric, got {index.metric_type}"
 
@@ -1888,12 +2158,13 @@ def main():
             init_db(cur)
 
             recalc_batch = getattr(args, "recalc_aesthetic_batch_size", 16384)
+            embedding_dim = resolve_embedding_dimension(args, con)
             recalc_aesthetic_scores(
                 con,
                 aesthetic_model,
                 pony_scorer,
                 device,
-                out_dim=args.search_model_out_dim,
+                out_dim=embedding_dim,
                 batch_size=recalc_batch,
             )
 
@@ -1906,9 +2177,9 @@ def main():
         stream_build_faiss(
             search_model_meta_dir,
             args.nlist,
-            args.M,
+            args.pq_m,
             args.bits_per_code,
-            args.search_model_out_dim,
+            embedding_dim,
             f"{search_model_meta_dir}/{args.metas_faiss_index_file_name}",
             batch_size=100_000,
             train_samples=2_000_000,
@@ -1945,38 +2216,46 @@ def main():
         # モデルの読み込み
         print("load_model")
 
-        search_model, eval_transform = load_clip_model(args, device)
+        search_model = load_search_embedding_backend(args, device)
+        metadata_model = load_metadata_embedding_backend(args, device)
+        eval_transform = search_model.preprocess
+        metadata_transform = metadata_model.preprocess if metadata_model is not None else None
 
-        aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
-        style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
-        style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
+        if args.disable_clip_metadata:
+            aesthetic_model = None
+            pony_scorer = None
+            style_cluster = None
+        else:
+            aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
+            style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
+            style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
 
-        aesthetic_checkpoint = ensure_asset_path(
-            aesthetic_checkpoint_arg,
-            AESTHETIC_CHECKPOINT_FILENAME,
-            "aesthetic checkpoint",
-        )
-        style_checkpoint_model = ensure_asset_path(
-            style_checkpoint_model_arg,
-            STYLE_MODEL_FILENAME,
-            "style classifier checkpoint",
-        )
-        style_checkpoint_centers = ensure_asset_path(
-            style_checkpoint_centers_arg,
-            STYLE_CENTERS_FILENAME,
-            "style cluster centers",
-        )
+            aesthetic_checkpoint = ensure_asset_path(
+                aesthetic_checkpoint_arg,
+                AESTHETIC_CHECKPOINT_FILENAME,
+                "aesthetic checkpoint",
+            )
+            style_checkpoint_model = ensure_asset_path(
+                style_checkpoint_model_arg,
+                STYLE_MODEL_FILENAME,
+                "style classifier checkpoint",
+            )
+            style_checkpoint_centers = ensure_asset_path(
+                style_checkpoint_centers_arg,
+                STYLE_CENTERS_FILENAME,
+                "style cluster centers",
+            )
 
-        aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
-        aesthetic_model = aesthetic_model.to(device)
-        aesthetic_model.eval()
+            aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
+            aesthetic_model = aesthetic_model.to(device)
+            aesthetic_model.eval()
 
-        pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
-        style_cluster = StyleCluster(
-            device=device,
-            checkpoint_model=style_checkpoint_model,
-            checkpoint_centers=style_checkpoint_centers,
-        )
+            pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
+            style_cluster = StyleCluster(
+                device=device,
+                checkpoint_model=style_checkpoint_model,
+                checkpoint_centers=style_checkpoint_centers,
+            )
         if args.use_existing_tags:
             tagging_service = None
             wd_target_size = 448  # タグ付けを行わない場合でも前処理の形を維持
@@ -2044,6 +2323,7 @@ def main():
                     target_paths,
                     transform=eval_transform,
                     wd_target_size=wd_target_size,
+                    metadata_transform=metadata_transform,
                 )
                 loader = DataLoader(
                     dataset,
@@ -2064,6 +2344,7 @@ def main():
                         pony_scorer,
                         style_cluster,
                         tagging_service,
+                        metadata_model,
                     )
                     T = False
                 except Exception:
@@ -2104,7 +2385,13 @@ def main():
 
     del con, cur
 
-    stream_build_faiss(search_model_meta_dir, args.nlist, args.M, args.bits_per_code, args.search_model_out_dim,
+    con = connect_db(search_model_meta_dir)
+    try:
+        embedding_dim = resolve_embedding_dimension(args, con)
+    finally:
+        con.close()
+
+    stream_build_faiss(search_model_meta_dir, args.nlist, args.pq_m, args.bits_per_code, embedding_dim,
         f"{search_model_meta_dir}/{args.metas_faiss_index_file_name}", batch_size=100_000, train_samples=2_000_000
     )
 

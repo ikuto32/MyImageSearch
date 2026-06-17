@@ -13,10 +13,8 @@ from app.domain.domain_object import (
     Image,
     ImageName,
     ImageTags,
-    Model,
     ResultImageItemList,
     Score,
-    Tokenizer,
     UploadImage,
     ModelItem,
     ModelId,
@@ -68,6 +66,28 @@ class Usecase:
 
         return self._accessor.load_index_with_metadata(model_id, aesthetic_model_name)
 
+
+    def _get_index_dimension(self, index, mean_vector: np.ndarray | None = None) -> int:
+        """読み込んだFAISS indexまたは平均ベクトルから検索次元を取得する。"""
+
+        index_dim = getattr(index, "d", None)
+        if index_dim is not None:
+            return int(index_dim)
+        if mean_vector is not None:
+            return int(mean_vector.size)
+        raise ValueError("Unable to determine search embedding dimension from index or mean vector.")
+
+    def _ensure_query_dimension(self, query_features: np.ndarray, index, mean_vector: np.ndarray | None = None) -> None:
+        """クエリ次元とインデックス次元が一致することを検証する。"""
+
+        expected_dim = self._get_index_dimension(index, mean_vector)
+        actual_dim = int(query_features.shape[-1])
+        if actual_dim != expected_dim:
+            raise ValueError(
+                f"Query embedding dimension mismatch: query has {actual_dim} dimensions, "
+                f"but the FAISS index expects {expected_dim}."
+            )
+
     def _normalize_result_size(self, result_size: int | None) -> int:
         """検索結果件数の上限を安全な正整数に正規化する。"""
 
@@ -103,6 +123,36 @@ class Usecase:
         normalized_result_size = self._normalize_result_size(result_size)
         return ResultImageItemList(
             self._sort_result_items(scores)[:normalized_result_size], search_query
+        )
+
+
+    def warmup_search_cache(
+        self,
+        model_id: ModelId,
+        search_text: str = "An image a cat.",
+        aesthetic_model_name: str = "original",
+    ) -> ResultImageItemList:
+        """起動時に代表的なテキスト検索を実行し、検索に必要なデータをキャッシュする。
+
+        実際のユーザー検索と同じ経路で埋め込みバックエンド、FAISSインデックス、
+        画像メタデータ、平均ベクトルを読み込むことで、初回検索時の待ち時間を
+        アプリケーション起動時に前倒しする。
+        """
+
+        self._logger.info(
+            "起動時検索キャッシュを作成します: model_id=%s search_text=%s aesthetic_model_name=%s",
+            model_id,
+            search_text,
+            aesthetic_model_name,
+        )
+        return self.search_text(
+            model_id=model_id,
+            text=UploadText(search_text),
+            aesthetic_quality_beta=0.0,
+            aesthetic_quality_range_min=0.0,
+            aesthetic_quality_range_max=10.0,
+            aesthetic_model_name=aesthetic_model_name,
+            result_size=1,
         )
 
     # ===================================================================
@@ -218,6 +268,7 @@ class Usecase:
         mean_centering=True, mean_vector=None
     ) -> list[ResultImageItem]:
         self._logger.info("query_features shape: %s", query_features.shape)
+        self._ensure_query_dimension(query_features, index, mean_vector)
 
         # コピーして float32 を保証(faiss.normalize_L2 は in-place + float32 必須)
         q_features = query_features.copy().astype(np.float32)
@@ -227,7 +278,12 @@ class Usecase:
 
         # ② Mean centering(後段で再正規化しない!)
         if mean_centering:
-            if mean_vector is not None and mean_vector.size == query_features.shape[-1]:
+            if mean_vector is not None:
+                if mean_vector.size != query_features.shape[-1]:
+                    raise ValueError(
+                        f"Mean vector dimension mismatch: mean vector has {mean_vector.size} "
+                        f"dimensions, but query has {query_features.shape[-1]}."
+                    )
                 self._logger.info("Applying mean centering to query features.")
                 q_features = q_features - mean_vector.reshape(1, -1).astype(np.float32)
             else:
@@ -323,21 +379,13 @@ class Usecase:
     ) -> ResultImageItemList:
         """文字列から検索する"""
 
-        # モデルの読み込み
-        model: Model = self._accessor.load_model(model_id)
-
         # テキストの埋め込みを計算
-        tokenizer: Tokenizer = self._accessor.load_tokenizer(model_id)
-        features = (
-            model.model_obj[0]
-            .encode_text(tokenizer.tokenizer_obj([text.text]))
-            .to("cpu")
-            .detach()
-            .numpy()
-            .copy()
-        )
+        backend = self._accessor.load_embedding_backend(model_id)
+        features = backend.encode_text(text.text)
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
+        mean_vector = self._accessor.get_mean_meta_vector(model_id)
+        self._ensure_query_dimension(features, index, mean_vector)
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
@@ -373,22 +421,13 @@ class Usecase:
     ) -> ResultImageItemList:
         """画像から検索する"""
 
-        # モデルの読み込み
-        model_obj: Model = self._accessor.load_model(model_id)
-        model, _, preprocess = (
-            model_obj.model_obj[0],
-            model_obj.model_obj[1],
-            model_obj.model_obj[2],
-        )
+        backend = self._accessor.load_embedding_backend(model_id)
 
         # 選択した画像のmetaを結合する
         temp = []
         for select_image_id in id_list:
-            # テキストの埋め込みを計算
             load_image = self._repository.load_image(select_image_id).to_ptl_image()
-            image = preprocess(load_image).unsqueeze(0).to("cpu")
-            meta = model.encode_image(image).to("cpu").detach().numpy().copy()
-            temp.append(meta)
+            temp.append(backend.encode_image(load_image))
 
         # クエリベクトルの平均を計算
         batch = np.vstack(temp)
@@ -460,18 +499,11 @@ class Usecase:
     ) -> ResultImageItemList:
         """アップロードされた画像から検索する"""
 
-        # モデルの読み込み
-        model_obj: Model = self._accessor.load_model(model_id)
-        model, _, preprocess = (
-            model_obj.model_obj[0],
-            model_obj.model_obj[1],
-            model_obj.model_obj[2],
-        )
+        backend = self._accessor.load_embedding_backend(model_id)
 
         # アップロードされた画像を前処理
         load_image = Image(binary=image.binary, content_type=image.content_type).to_ptl_image()
-        image_tensor = preprocess(load_image).unsqueeze(0).to("cpu")
-        features = model.encode_image(image_tensor).to("cpu").detach().numpy().copy()
+        features = backend.encode_image(load_image)
 
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, "original")
@@ -499,11 +531,20 @@ class Usecase:
     ) -> ResultImageItemList:
         """乱数から検索する"""
 
+<<<<<<< HEAD
         # 単位超球面（Unit hypersphere）上から一様にベクトルをサンプリング
         features: np.ndarray = np.random.normal(0, 1, [1, 768]).astype(np.float32)
 
+=======
+>>>>>>> a58619967598e25cec1f80703a15249ed73521b8
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
+        mean_vector = self._accessor.get_mean_meta_vector(model_id)
+        dimension = self._get_index_dimension(index, mean_vector)
+
+        # 単位超球面（Unit hypersphere）上から一様にベクトルをサンプリング
+        # similarity_evalの副作用で正規化されるため、ここでは正規化せずに生の乱数を渡す。
+        features: np.ndarray = np.random.normal(0, 1, [1, dimension]).astype(np.float32)
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
@@ -512,7 +553,7 @@ class Usecase:
             result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=True,
-            mean_vector=self._accessor.get_mean_meta_vector(model_id),
+            mean_vector=mean_vector,
         )
         scores = self.apply_aesthetic_quality_filter(
             model_id,
@@ -537,9 +578,13 @@ class Usecase:
         """クエリから検索する"""
 
         features = self.parse_search_query(search_query)
+        if features is None:
+            raise ValueError("Invalid search query vector format.")
 
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
+        mean_vector = self._accessor.get_mean_meta_vector(model_id)
+        self._ensure_query_dimension(features, index, mean_vector)
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
@@ -548,7 +593,7 @@ class Usecase:
             result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=True,
-            mean_vector=self._accessor.get_mean_meta_vector(model_id),
+            mean_vector=mean_vector,
         )
 
         scores: list[ResultImageItem] = self.apply_aesthetic_quality_filter(
@@ -575,28 +620,22 @@ class Usecase:
     ) -> ResultImageItemList:
         """クエリにstrengthの強さ分テキストの特徴を足してから検索する"""
 
-        # モデルの読み込み
-        model: Model = self._accessor.load_model(model_id)
-
-        # テキストの埋め込みを計算
-        tokenizer: Tokenizer = self._accessor.load_tokenizer(model_id)
+        backend = self._accessor.load_embedding_backend(model_id)
 
         query_features = self.parse_search_query(search_query)
+        if query_features is None:
+            raise ValueError("Invalid search query vector format.")
 
-        text_features = (
-            model.model_obj[0]
-            .encode_text(tokenizer.tokenizer_obj([text.text]))
-            .to("cpu")
-            .detach()
-            .numpy()
-            .copy()
-        )
-
-        faiss.normalize_L2(text_features)
-        features = query_features + text_features * strength
+        text_features = backend.encode_text(text.text)
 
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
+        mean_vector = self._accessor.get_mean_meta_vector(model_id)
+        self._ensure_query_dimension(query_features, index, mean_vector)
+        self._ensure_query_dimension(text_features, index, mean_vector)
+
+        faiss.normalize_L2(text_features)
+        features = query_features + text_features * strength
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
@@ -605,7 +644,7 @@ class Usecase:
             result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=True,
-            mean_vector=self._accessor.get_mean_meta_vector(model_id),
+            mean_vector=mean_vector,
         )
 
         scores: list[ResultImageItem] = self.apply_aesthetic_quality_filter(
