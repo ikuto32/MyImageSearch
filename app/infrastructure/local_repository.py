@@ -15,6 +15,12 @@ from typing import List, Sequence
 import concurrent.futures
 import zipfile
 
+from app.infrastructure.model_metadata import (
+    default_model_dir_name,
+    has_search_index,
+    read_model_metadata,
+)
+
 import tqdm
 
 from app.domain.domain_object import (
@@ -50,12 +56,14 @@ class LocalRepository(Repository):
     def __init__(
         self,
         image_dir_path: pathlib.Path,
+        meta_dir_path: pathlib.Path | None = None,
         *,
         scan_timeout_sec: float = _SCAN_TIMEOUT_SEC,
         scan_parallelism: int = _PARALLEL,
     ) -> None:
         self._logger = logging.getLogger(__name__)
         self._image_dir_path: pathlib.Path = image_dir_path
+        self._meta_dir_path: pathlib.Path = meta_dir_path or pathlib.Path('./clip_meta')
         self._id_to_path: dict[ImageId, pathlib.Path] = {}
         self._scan_timeout_sec = scan_timeout_sec
         self._scan_parallelism = scan_parallelism
@@ -314,20 +322,53 @@ class LocalRepository(Repository):
 
     @cache
     def load_all_model_item(self) -> list[ModelItem]:
-        """open_clip の事前学習モデル一覧を取得し、キャッシュ済みのModelItemに変換する。
+        """利用可能な検索モデル一覧を返す。
 
-        - ``open_clip.list_pretrained()`` が返す (モデル名, データセット) のペアを ``ModelItem`` にマッピングする。
-        - 結果は ``functools.cache`` によりメモ化され、同一プロセス内で再計算を避ける。
-        - 戻り値は ``ModelItem`` オブジェクトのリスト。
+        open_clip が提供する事前学習モデルに加えて、meta_dir 配下に
+        ``metafiles.index`` と ``sqlite_image_meta.db`` を持つインデックス
+        ディレクトリを検出し、UI で選択可能な ModelItem として追加する。
+        ``model_meta.json`` がある場合は、Qwen などの repo ID を安全な
+        ディレクトリ名へ変換したインデックスから元の ModelId と表示名を復元する。
         """
 
-        items: list[ModelItem] = [
-            ModelItem(
+        items_by_key: dict[tuple[str, str], ModelItem] = {}
+
+        for model_name, dataset in open_clip.list_pretrained():
+            item = ModelItem(
                 ModelId(model_name, dataset), ModelName(f"{model_name}-{dataset}")
             )
-            for (model_name, dataset) in open_clip.list_pretrained()
-        ]
-        return items
+            items_by_key[(model_name, dataset)] = item
+
+        for index_dir in self._iter_search_index_dirs():
+            item = self._model_item_from_index_dir(index_dir)
+            items_by_key[(item.id.model_name, item.id.pretrained)] = item
+
+        return sorted(
+            items_by_key.values(),
+            key=lambda item: item.display_name.name.lower(),
+        )
+
+    def _iter_search_index_dirs(self) -> list[pathlib.Path]:
+        if not self._meta_dir_path.is_dir():
+            return []
+        return sorted(
+            (path for path in self._meta_dir_path.iterdir() if has_search_index(path)),
+            key=lambda path: path.name.lower(),
+        )
+
+    def _model_item_from_index_dir(self, index_dir: pathlib.Path) -> ModelItem:
+        metadata = read_model_metadata(index_dir)
+        if metadata is not None:
+            return metadata.to_model_item()
+
+        model_name, separator, pretrained = index_dir.name.rpartition("-")
+        if not separator:
+            model_name = index_dir.name
+            pretrained = ""
+        return ModelItem(
+            ModelId(model_name, pretrained),
+            ModelName(default_model_dir_name(ModelId(model_name, pretrained))),
+        )
 
     @cache
     def load_image(self, image_id: ImageId) -> Image:

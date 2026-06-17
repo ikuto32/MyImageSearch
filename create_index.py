@@ -25,6 +25,11 @@ import faiss
 import huggingface_hub
 import numpy as np
 import open_clip
+
+from app.infrastructure.model_metadata import (
+    SearchModelMetadata,
+    write_model_metadata,
+)
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -1249,11 +1254,22 @@ def safe_model_dir_name(value: str) -> str:
 def create_search_model_meta_dir(args):
     if args.search_backend == "open_clip":
         model_dir_name = f"{args.search_model_name}-{args.search_model_pretrained}"
+        metadata = SearchModelMetadata(
+            model_name=args.search_model_name,
+            pretrained=args.search_model_pretrained,
+            display_name=model_dir_name,
+        )
     else:
         model_dir_name = safe_model_dir_name(args.search_model_id)
-    search_model_meta_dir = f"{args.meta_dir}/{model_dir_name}"
-    os.makedirs(search_model_meta_dir, exist_ok=True)
-    return search_model_meta_dir
+        metadata = SearchModelMetadata(
+            model_name=args.search_model_id,
+            pretrained="",
+            display_name=args.search_model_id,
+        )
+    search_model_meta_dir = pathlib.Path(args.meta_dir) / model_dir_name
+    search_model_meta_dir.mkdir(parents=True, exist_ok=True)
+    write_model_metadata(search_model_meta_dir, metadata)
+    return str(search_model_meta_dir)
 
 
 def configure_torch_backends():
