@@ -1,7 +1,7 @@
 
 import ast
 import logging
-from flask import Flask, request, make_response, send_file
+from flask import Flask, request, make_response, send_file, abort
 
 import pathlib
 import json
@@ -80,10 +80,12 @@ def resource(target: str):
 
     # ビューの指定をしている。
     pwd = pathlib.Path(__file__).parent
-    base_path = pwd / 'view'
+    base_path = (pwd / "view").resolve()
     full_path = (base_path / target).resolve()
-    if not str(full_path).startswith(str(base_path.resolve())):
-        raise Exception("Access to the specified file is not allowed.")
+    if not full_path.is_relative_to(base_path):
+        abort(403)
+    if not full_path.is_file():
+        abort(404)
     with open(full_path, encoding="UTF-8") as f:
         text = f.read()
 
