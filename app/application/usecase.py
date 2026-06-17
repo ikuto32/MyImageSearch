@@ -125,6 +125,36 @@ class Usecase:
             self._sort_result_items(scores)[:normalized_result_size], search_query
         )
 
+
+    def warmup_search_cache(
+        self,
+        model_id: ModelId,
+        search_text: str = "An image a cat.",
+        aesthetic_model_name: str = "original",
+    ) -> ResultImageItemList:
+        """起動時に代表的なテキスト検索を実行し、検索に必要なデータをキャッシュする。
+
+        実際のユーザー検索と同じ経路で埋め込みバックエンド、FAISSインデックス、
+        画像メタデータ、平均ベクトルを読み込むことで、初回検索時の待ち時間を
+        アプリケーション起動時に前倒しする。
+        """
+
+        self._logger.info(
+            "起動時検索キャッシュを作成します: model_id=%s search_text=%s aesthetic_model_name=%s",
+            model_id,
+            search_text,
+            aesthetic_model_name,
+        )
+        return self.search_text(
+            model_id=model_id,
+            text=UploadText(search_text),
+            aesthetic_quality_beta=0.0,
+            aesthetic_quality_range_min=0.0,
+            aesthetic_quality_range_max=10.0,
+            aesthetic_model_name=aesthetic_model_name,
+            result_size=1,
+        )
+
     # ===================================================================
 
     def get_all_image_item(self) -> list[ImageItem]:
