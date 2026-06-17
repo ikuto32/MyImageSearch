@@ -183,7 +183,10 @@ def get_requested_image_ids() -> list[ImageId] | None:
 def get_small_image(id: str):
     """画像IDから縮小画像を返す"""
 
-    img = usecase.get_small_image(ImageId(id))
+    try:
+        img = usecase.get_small_image(ImageId(id))
+    except ValueError:
+        abort(404)
     response = make_response(img.binary)
     response.headers.set('Content-Type', img.content_type)
     return response
@@ -193,7 +196,10 @@ def get_small_image(id: str):
 def get_original_image(id: str):
     """画像IDからオリジナル画像を返す"""
 
-    img = usecase.get_image(ImageId(id))
+    try:
+        img = usecase.get_image(ImageId(id))
+    except ValueError:
+        abort(404)
     response = make_response(img.binary)
     response.headers.set('Content-Type', img.content_type)
     return response
