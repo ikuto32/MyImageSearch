@@ -10,6 +10,7 @@ import pandas as pd
 import tqdm
 import faiss
 import open_clip
+import torch
 
 from app.domain.domain_object import (
     ImageId,
@@ -21,6 +22,117 @@ from app.domain.domain_object import (
     Tokenizer,
 )
 from app.application.accessor import Accessor
+from app.application.embedding_backend import SearchEmbeddingBackend, to_float32_2d_array
+
+
+class OpenClipEmbeddingBackend(SearchEmbeddingBackend):
+    """既存のOpenCLIP検索エンコーダをSearchEmbeddingBackendとして扱う。"""
+
+    def __init__(self, model_name: str, pretrained: str) -> None:
+        self.model, _, self.preprocess = open_clip.create_model_and_transforms(
+            model_name,
+            pretrained=pretrained,
+        )
+        self.model.eval()
+        self.tokenizer = open_clip.get_tokenizer(model_name)
+
+    def encode_text(self, text: str) -> np.ndarray:
+        with torch.no_grad():
+            return to_float32_2d_array(self.model.encode_text(self.tokenizer([text])))
+
+    def encode_image(self, image) -> np.ndarray:
+        with torch.no_grad():
+            image_tensor = self.preprocess(image).unsqueeze(0).to("cpu")
+            return to_float32_2d_array(self.model.encode_image(image_tensor))
+
+
+class QwenEmbeddingBackend(SearchEmbeddingBackend):
+    """Hugging FaceのQwen系埋め込みモデルを使う検索エンコーダ。"""
+
+    def __init__(self, model_id: str) -> None:
+        from transformers import AutoModel, AutoProcessor
+
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float16 if self.device.startswith("cuda") else torch.float32
+        self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        self.model = AutoModel.from_pretrained(
+            model_id,
+            torch_dtype=dtype,
+            trust_remote_code=True,
+        ).to(self.device)
+        self.model.eval()
+
+    def _move_inputs_to_device(self, inputs):
+        if isinstance(inputs, dict):
+            return {
+                key: value.to(self.device) if torch.is_tensor(value) else value
+                for key, value in inputs.items()
+            }
+        return inputs.to(self.device) if torch.is_tensor(inputs) else inputs
+
+    def _structured_text_inputs(self, text: str):
+        message = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+        if hasattr(self.processor, "apply_chat_template"):
+            try:
+                prompt = self.processor.apply_chat_template(
+                    message,
+                    tokenize=False,
+                    add_generation_prompt=False,
+                )
+                return self.processor(text=[prompt], padding=True, return_tensors="pt")
+            except Exception:
+                pass
+        return self.processor(text=[text], padding=True, return_tensors="pt")
+
+    def _structured_image_inputs(self, image):
+        message = [{"role": "user", "content": [{"type": "image", "image": image}]}]
+        if hasattr(self.processor, "apply_chat_template"):
+            try:
+                prompt = self.processor.apply_chat_template(
+                    message,
+                    tokenize=False,
+                    add_generation_prompt=False,
+                )
+                return self.processor(text=[prompt], images=[image], padding=True, return_tensors="pt")
+            except Exception:
+                pass
+        return self.processor(images=image, return_tensors="pt")
+
+    def _pool_outputs(self, outputs):
+        for attr in ("image_embeds", "text_embeds", "pooler_output"):
+            value = getattr(outputs, attr, None)
+            if value is not None:
+                return value
+        hidden = getattr(outputs, "last_hidden_state", None)
+        if hidden is None and isinstance(outputs, (tuple, list)) and outputs:
+            hidden = outputs[0]
+        if hidden is None:
+            raise RuntimeError("Qwen embedding model did not return embeddings.")
+        return hidden.mean(dim=1)
+
+    def encode_text(self, text: str) -> np.ndarray:
+        with torch.no_grad():
+            inputs = self._move_inputs_to_device(self._structured_text_inputs(text))
+            outputs = self.model(**inputs, return_dict=True)
+            return to_float32_2d_array(self._pool_outputs(outputs))
+
+    def encode_image(self, image) -> np.ndarray:
+        with torch.no_grad():
+            inputs = self._move_inputs_to_device(self._structured_image_inputs(image))
+            outputs = self.model(**inputs, return_dict=True)
+            return to_float32_2d_array(self._pool_outputs(outputs))
+
+
+def _is_qwen_model(model_id: ModelId) -> bool:
+    return "qwen" in model_id.model_name.lower() or "qwen" in model_id.pretrained.lower()
+
+
+def _hf_model_name(model_id: ModelId) -> str:
+    if "/" in model_id.model_name or not model_id.pretrained:
+        return model_id.model_name
+    if "/" in model_id.pretrained:
+        return model_id.pretrained
+    return model_id.model_name
 
 
 class LocalAccessor(Accessor):
@@ -50,6 +162,15 @@ class LocalAccessor(Accessor):
     def load_tokenizer(self, model_id: ModelId) -> Tokenizer:
         """model_id.model_nameに対応するopen_clipトークナイザを生成し、@cacheで同一インスタンスを再利用する。"""
         return Tokenizer(open_clip.get_tokenizer(model_id.model_name))
+
+
+    @cache
+    def load_embedding_backend(self, model_id: ModelId) -> SearchEmbeddingBackend:
+        """ModelIdからOpenCLIPまたはQwenの検索埋め込みバックエンドを返す。"""
+
+        if _is_qwen_model(model_id):
+            return QwenEmbeddingBackend(_hf_model_name(model_id))
+        return OpenClipEmbeddingBackend(model_id.model_name, model_id.pretrained)
 
     @cache
     def load_index_with_metadata(
