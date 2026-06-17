@@ -48,25 +48,87 @@ Image.MAX_IMAGE_PIXELS = 268_435_456
 # 共通ヘルパー
 # =========================
 
-def safe_collate(batch):
-    """Custom collate that bundles search, metadata, and tagger inputs."""
+QWEN_VARIABLE_IMAGE_KEYS = {
+    "pixel_values",
+    "pixel_values_videos",
+    "image_grid_thw",
+    "video_grid_thw",
+}
 
-    batch = [b for b in batch if b is not None]
+
+def _tensor_shapes_differ(values: list[Any]) -> bool:
+    tensor_shapes = [tuple(value.shape) for value in values if torch.is_tensor(value)]
+    return bool(tensor_shapes) and any(shape != tensor_shapes[0] for shape in tensor_shapes[1:])
+
+
+def _is_variable_length_qwen_inputs(search_inputs: list[Any]) -> bool:
+    """Return True for per-image Qwen processor dicts that cannot use default_collate."""
+
+    if not search_inputs or not all(isinstance(item, dict) for item in search_inputs):
+        return False
+
+    common_keys = set(search_inputs[0])
+    if not common_keys.intersection(QWEN_VARIABLE_IMAGE_KEYS):
+        return False
+
+    return any(
+        _tensor_shapes_differ([item[key] for item in search_inputs if key in item])
+        for key in common_keys
+    )
+
+
+def _pad_tensors_to_common_shape(values: list[torch.Tensor]) -> torch.Tensor:
+    """Pad tensors with zeros to the per-dimension max shape, then stack."""
+
+    max_shape = tuple(max(value.shape[dim] for value in values) for dim in range(values[0].ndim))
+    padded_values = []
+    for value in values:
+        padded = value.new_full(max_shape, 0)
+        slices = tuple(slice(0, size) for size in value.shape)
+        padded[slices] = value
+        padded_values.append(padded)
+    return torch.stack(padded_values, dim=0)
+
+
+def _collate_qwen_processor_inputs(search_inputs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Collate Qwen processor output dictionaries, padding variable tensor fields."""
+
+    collated: dict[str, Any] = {}
+    keys = search_inputs[0].keys()
+    for key in keys:
+        values = [item[key] for item in search_inputs]
+        if all(torch.is_tensor(value) for value in values):
+            collated[key] = (
+                _pad_tensors_to_common_shape(values)
+                if _tensor_shapes_differ(values)
+                else default_collate(values)
+            )
+        else:
+            collated[key] = default_collate(values)
+    return collated
+
+
+def _collate_search_inputs(search_inputs: list[Any]):
+    if _is_variable_length_qwen_inputs(search_inputs):
+        return _collate_qwen_processor_inputs(search_inputs)
+    return default_collate(search_inputs)
+
+
+def safe_collate(batch):
+    """Collate search, metadata, index, and tagger inputs safely."""
+
+    batch = [item for item in batch if item is not None]
     if not batch:
         return None
 
-    search_inputs = [b[0] for b in batch]
-    metadata_inputs = [b[1] for b in batch]
-    indices = [b[2] for b in batch]
-    wd_inputs = [b[3] for b in batch]
-    z3d_inputs = [b[4] for b in batch]
+    search_inputs, metadata_inputs, indices, wd_inputs, z3d_inputs = zip(*batch)
 
     return (
-        default_collate(search_inputs),
-        default_collate(metadata_inputs) if metadata_inputs[0] is not None else None,
-        default_collate(indices),
-        default_collate(wd_inputs),
-        default_collate(z3d_inputs),
+        _collate_search_inputs(list(search_inputs)),
+        _collate_optional(list(metadata_inputs)),
+        default_collate(list(indices)),
+        _collate_optional(list(wd_inputs)),
+        _collate_optional(list(z3d_inputs)),
     )
 
 
@@ -1201,6 +1263,19 @@ class OpenClipEmbeddingBackend(SearchEmbeddingBackend):
         return self.model.encode_text(tokens)
 
 
+class QwenVlImagePreprocess:
+    """Picklable image transform for Qwen VL search inputs.
+
+    Qwen preprocessing is intentionally deferred to the main-process batch
+    path because the processor owns non-trivial model state and may not be
+    picklable under multiprocessing spawn. DataLoader workers only return
+    lightweight PIL images.
+    """
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        return image.copy()
+
+
 class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
     """Qwen3-VL-Embedding を使う検索エンコーダ。"""
 
@@ -1221,10 +1296,7 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
 
     @property
     def preprocess(self):
-        def _preprocess(image: Image.Image):
-            return self.processor(images=image, return_tensors="pt")
-
-        return _preprocess
+        return QwenVlImagePreprocess()
 
     def _move_inputs_to_device(self, inputs):
         if isinstance(inputs, dict):
@@ -1544,6 +1616,17 @@ def extract_image_features(
                 batched_wd_inputs,
                 batched_z3d_inputs,
             ) = batch
+
+            if (
+                isinstance(batched_image_input, list)
+                and batched_image_input
+                and isinstance(batched_image_input[0], Image.Image)
+            ):
+                batched_image_input = search_model.processor(
+                    images=batched_image_input,
+                    padding=True,
+                    return_tensors="pt",
+                )
 
             batched_image_input = _to_device(batched_image_input, device)
             batched_metadata_input = _to_device(batched_metadata_input, device)
