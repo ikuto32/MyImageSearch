@@ -68,6 +68,43 @@ class Usecase:
 
         return self._accessor.load_index_with_metadata(model_id, aesthetic_model_name)
 
+    def _normalize_result_size(self, result_size: int | None) -> int:
+        """検索結果件数の上限を安全な正整数に正規化する。"""
+
+        try:
+            if result_size is None:
+                return 2048
+
+            return max(1, int(result_size))
+        except (TypeError, ValueError):
+            return 2048
+
+    def _sort_result_items(
+        self, scores: list[ResultImageItem]
+    ) -> list[ResultImageItem]:
+        """検索結果をスコア降順、同点時は名前昇順で整列する。"""
+
+        return sorted(
+            scores,
+            key=lambda result: (
+                -float(result.score.score),
+                result.item.display_name.name,
+            ),
+        )
+
+    def _finalize_result(
+        self,
+        scores: list[ResultImageItem],
+        search_query: str,
+        result_size: int | None,
+    ) -> ResultImageItemList:
+        """JSON変換前の検索結果を整列し、指定件数に切り詰める。"""
+
+        normalized_result_size = self._normalize_result_size(result_size)
+        return ResultImageItemList(
+            self._sort_result_items(scores)[:normalized_result_size], search_query
+        )
+
     # ===================================================================
 
     def get_all_image_item(self) -> list[ImageItem]:
@@ -121,11 +158,18 @@ class Usecase:
             "aesthetic_quality": 0.0,
         }
 
-    def get_rating_list(self, model_id: ModelId) -> dict[ImageId, str]:
-        """画像のrating一覧を取得する"""
+    def get_rating_list(
+        self, model_id: ModelId, image_ids: list[ImageId] | None = None
+    ) -> dict[ImageId, str]:
+        """指定された画像IDに限定してrating一覧を取得する"""
 
         _, items = self._get_index_and_items(model_id, "original")
-        return {item.id: item.rating for item in items}
+        target_ids = set(image_ids) if image_ids is not None else None
+        return {
+            item.id: item.rating
+            for item in items
+            if target_ids is None or item.id in target_ids
+        }
 
     # ===================================================================
 
@@ -275,6 +319,7 @@ class Usecase:
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
         aesthetic_model_name: str,
+        result_size: int | None = None,
     ) -> ResultImageItemList:
         """文字列から検索する"""
 
@@ -298,6 +343,7 @@ class Usecase:
         scores: list[ResultImageItem] = self.similarity_eval(
             item_list=item_list,
             index=index,
+            result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=False,  # CLIPのテキスト特徴は中心化しない
             mean_vector=self._accessor.get_mean_meta_vector(model_id),
@@ -311,7 +357,9 @@ class Usecase:
             aesthetic_quality_range_max,
             aesthetic_model_name,
         )
-        return ResultImageItemList(scores, self.format_search_query(features))
+
+        return self._finalize_result(scores, self.format_search_query(features.copy()), result_size)
+
 
     def search_image(
         self,
@@ -321,6 +369,7 @@ class Usecase:
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
         aesthetic_model_name: str,
+        result_size: int | None = None,
     ) -> ResultImageItemList:
         """画像から検索する"""
 
@@ -353,6 +402,7 @@ class Usecase:
         scores: list[ResultImageItem] = self.similarity_eval(
             item_list=item_list,
             index=index,
+            result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=True,  # CLIPの画像特徴は中心化する
             mean_vector=self._accessor.get_mean_meta_vector(model_id),
@@ -366,7 +416,7 @@ class Usecase:
             aesthetic_quality_range_max,
             aesthetic_model_name,
         )
-        return ResultImageItemList(scores, self.format_search_query(features))
+        return self._finalize_result(scores, self.format_search_query(features), result_size)
 
     def search_name(
         self,
@@ -377,6 +427,7 @@ class Usecase:
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
         aesthetic_model_name: str,
+        result_size: int | None = None,
     ) -> ResultImageItemList:
         """文字列から名前検索する"""
 
@@ -402,10 +453,10 @@ class Usecase:
             aesthetic_quality_range_max,
             aesthetic_model_name,
         )
-        return ResultImageItemList(scores, "")
+        return self._finalize_result(scores, "", result_size)
 
     def search_upload_image(
-        self, model_id: ModelId, image: UploadImage
+        self, model_id: ModelId, image: UploadImage, result_size: int | None = None
     ) -> ResultImageItemList:
         """アップロードされた画像から検索する"""
 
@@ -429,12 +480,13 @@ class Usecase:
         scores: list[ResultImageItem] = self.similarity_eval(
             item_list=item_list,
             index=index,
+            result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=True,
             mean_vector=self._accessor.get_mean_meta_vector(model_id),
         )
 
-        return ResultImageItemList(scores, self.format_search_query(features))
+        return self._finalize_result(scores, self.format_search_query(features), result_size)
 
     def search_random(
         self,
@@ -443,6 +495,7 @@ class Usecase:
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
         aesthetic_model_name: str,
+        result_size: int | None = None,
     ) -> ResultImageItemList:
         """乱数から検索する"""
 
@@ -456,6 +509,7 @@ class Usecase:
         scores: list[ResultImageItem] = self.similarity_eval(
             item_list=item_list,
             index=index,
+            result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=True,
             mean_vector=self._accessor.get_mean_meta_vector(model_id),
@@ -468,7 +522,7 @@ class Usecase:
             aesthetic_quality_range_max,
             aesthetic_model_name,
         )
-        return ResultImageItemList(scores, self.format_search_query(features))
+        return self._finalize_result(scores, self.format_search_query(features), result_size)
 
     def search_query(
         self,
@@ -478,6 +532,7 @@ class Usecase:
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
         aesthetic_model_name: str,
+        result_size: int | None = None,
     ) -> ResultImageItemList:
         """クエリから検索する"""
 
@@ -490,6 +545,7 @@ class Usecase:
         scores: list[ResultImageItem] = self.similarity_eval(
             item_list=item_list,
             index=index,
+            result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=True,
             mean_vector=self._accessor.get_mean_meta_vector(model_id),
@@ -503,7 +559,7 @@ class Usecase:
             aesthetic_quality_range_max,
             aesthetic_model_name,
         )
-        return ResultImageItemList(scores, self.format_search_query(features))
+        return self._finalize_result(scores, self.format_search_query(features), result_size)
 
     def add_text_features(
         self,
@@ -515,6 +571,7 @@ class Usecase:
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
         aesthetic_model_name: str,
+        result_size: int | None = None,
     ) -> ResultImageItemList:
         """クエリにstrengthの強さ分テキストの特徴を足してから検索する"""
 
@@ -545,6 +602,7 @@ class Usecase:
         scores: list[ResultImageItem] = self.similarity_eval(
             item_list=item_list,
             index=index,
+            result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=True,
             mean_vector=self._accessor.get_mean_meta_vector(model_id),
@@ -558,7 +616,7 @@ class Usecase:
             aesthetic_quality_range_max,
             aesthetic_model_name
         )
-        return ResultImageItemList(scores, self.format_search_query(features))
+        return self._finalize_result(scores, self.format_search_query(features), result_size)
 
 
     def search_tags(
@@ -570,6 +628,7 @@ class Usecase:
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
         aesthetic_model_name: str,
+        result_size: int | None = None,
     ) -> ResultImageItemList:
         """文字列からタグ検索する"""
 
@@ -595,7 +654,7 @@ class Usecase:
             aesthetic_quality_range_max,
             aesthetic_model_name,
         )
-        return ResultImageItemList(scores, "")
+        return self._finalize_result(scores, "", result_size)
 
     def search_style_cluster(
         self,
@@ -606,6 +665,7 @@ class Usecase:
         aesthetic_quality_range_min: float,
         aesthetic_quality_range_max: float,
         aesthetic_model_name: str,
+        result_size: int | None = None,
     ) -> ResultImageItemList:
         """style_cluster を文字列検索する"""
 
@@ -631,7 +691,7 @@ class Usecase:
             aesthetic_quality_range_max,
             aesthetic_model_name,
         )
-        return ResultImageItemList(scores, "")
+        return self._finalize_result(scores, "", result_size)
 
     def get_images_zip(self, id_list):
         """指定された画像IDからZIPバッファを生成する。
