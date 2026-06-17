@@ -48,6 +48,72 @@ Image.MAX_IMAGE_PIXELS = 268_435_456
 # 共通ヘルパー
 # =========================
 
+QWEN_VARIABLE_IMAGE_KEYS = {
+    "pixel_values",
+    "pixel_values_videos",
+    "image_grid_thw",
+    "video_grid_thw",
+}
+
+
+def _tensor_shapes_differ(values: list[Any]) -> bool:
+    tensor_shapes = [tuple(value.shape) for value in values if torch.is_tensor(value)]
+    return bool(tensor_shapes) and any(shape != tensor_shapes[0] for shape in tensor_shapes[1:])
+
+
+def _is_variable_length_qwen_inputs(search_inputs: list[Any]) -> bool:
+    """Return True for per-image Qwen processor dicts that cannot use default_collate."""
+
+    if not search_inputs or not all(isinstance(item, dict) for item in search_inputs):
+        return False
+
+    common_keys = set(search_inputs[0])
+    if not common_keys.intersection(QWEN_VARIABLE_IMAGE_KEYS):
+        return False
+
+    return any(
+        _tensor_shapes_differ([item[key] for item in search_inputs if key in item])
+        for key in common_keys
+    )
+
+
+def _pad_tensors_to_common_shape(values: list[torch.Tensor]) -> torch.Tensor:
+    """Pad tensors with zeros to the per-dimension max shape, then stack."""
+
+    max_shape = tuple(max(value.shape[dim] for value in values) for dim in range(values[0].ndim))
+    padded_values = []
+    for value in values:
+        padded = value.new_full(max_shape, 0)
+        slices = tuple(slice(0, size) for size in value.shape)
+        padded[slices] = value
+        padded_values.append(padded)
+    return torch.stack(padded_values, dim=0)
+
+
+def _collate_qwen_processor_inputs(search_inputs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Collate Qwen processor output dictionaries, padding variable tensor fields."""
+
+    collated: dict[str, Any] = {}
+    keys = search_inputs[0].keys()
+    for key in keys:
+        values = [item[key] for item in search_inputs]
+        if all(torch.is_tensor(value) for value in values):
+            collated[key] = (
+                _pad_tensors_to_common_shape(values)
+                if _tensor_shapes_differ(values)
+                else default_collate(values)
+            )
+        else:
+            collated[key] = default_collate(values)
+    return collated
+
+
+def _collate_search_inputs(search_inputs: list[Any]):
+    if _is_variable_length_qwen_inputs(search_inputs):
+        return _collate_qwen_processor_inputs(search_inputs)
+    return default_collate(search_inputs)
+
+
 def safe_collate(batch):
     """Custom collate that bundles search, metadata, and tagger inputs."""
 
@@ -62,7 +128,7 @@ def safe_collate(batch):
     z3d_inputs = [b[4] for b in batch]
 
     return (
-        default_collate(search_inputs),
+        _collate_search_inputs(search_inputs),
         default_collate(metadata_inputs) if metadata_inputs[0] is not None else None,
         default_collate(indices),
         default_collate(wd_inputs),
