@@ -111,7 +111,15 @@ def _collate_qwen_processor_inputs(search_inputs: list[dict[str, Any]]) -> dict[
 def _collate_search_inputs(search_inputs: list[Any]):
     if _is_variable_length_qwen_inputs(search_inputs):
         return _collate_qwen_processor_inputs(search_inputs)
+    if search_inputs and all(isinstance(item, Image.Image) for item in search_inputs):
+        return search_inputs
     return default_collate(search_inputs)
+
+
+def _collate_optional(values: list[Any]):
+    if all(value is None for value in values):
+        return None
+    return default_collate(values)
 
 
 def safe_collate(batch):
