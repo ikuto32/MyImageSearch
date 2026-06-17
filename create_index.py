@@ -115,24 +115,20 @@ def _collate_search_inputs(search_inputs: list[Any]):
 
 
 def safe_collate(batch):
-    """Custom collate that bundles search, metadata, and tagger inputs."""
+    """Collate search, metadata, index, and tagger inputs safely."""
 
-    batch = [b for b in batch if b is not None]
+    batch = [item for item in batch if item is not None]
     if not batch:
         return None
 
-    search_inputs = [b[0] for b in batch]
-    metadata_inputs = [b[1] for b in batch]
-    indices = [b[2] for b in batch]
-    wd_inputs = [b[3] for b in batch]
-    z3d_inputs = [b[4] for b in batch]
+    search_inputs, metadata_inputs, indices, wd_inputs, z3d_inputs = zip(*batch)
 
     return (
-        _collate_search_inputs(search_inputs),
-        default_collate(metadata_inputs) if metadata_inputs[0] is not None else None,
-        default_collate(indices),
-        default_collate(wd_inputs),
-        default_collate(z3d_inputs),
+        _collate_search_inputs(list(search_inputs)),
+        _collate_optional(list(metadata_inputs)),
+        default_collate(list(indices)),
+        _collate_optional(list(wd_inputs)),
+        _collate_optional(list(z3d_inputs)),
     )
 
 
@@ -1267,6 +1263,19 @@ class OpenClipEmbeddingBackend(SearchEmbeddingBackend):
         return self.model.encode_text(tokens)
 
 
+class QwenVlImagePreprocess:
+    """Picklable image transform for Qwen VL search inputs.
+
+    Qwen preprocessing is intentionally deferred to the main-process batch
+    path because the processor owns non-trivial model state and may not be
+    picklable under multiprocessing spawn. DataLoader workers only return
+    lightweight PIL images.
+    """
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        return image.copy()
+
+
 class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
     """Qwen3-VL-Embedding を使う検索エンコーダ。"""
 
@@ -1287,10 +1296,7 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
 
     @property
     def preprocess(self):
-        def _preprocess(image: Image.Image):
-            return self.processor(images=image, return_tensors="pt")
-
-        return _preprocess
+        return QwenVlImagePreprocess()
 
     def _move_inputs_to_device(self, inputs):
         if isinstance(inputs, dict):
@@ -1610,6 +1616,17 @@ def extract_image_features(
                 batched_wd_inputs,
                 batched_z3d_inputs,
             ) = batch
+
+            if (
+                isinstance(batched_image_input, list)
+                and batched_image_input
+                and isinstance(batched_image_input[0], Image.Image)
+            ):
+                batched_image_input = search_model.processor(
+                    images=batched_image_input,
+                    padding=True,
+                    return_tensors="pt",
+                )
 
             batched_image_input = _to_device(batched_image_input, device)
             batched_metadata_input = _to_device(batched_metadata_input, device)
