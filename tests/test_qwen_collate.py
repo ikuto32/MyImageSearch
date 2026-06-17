@@ -12,8 +12,11 @@ def _install_dummy_modules():
     pil_mod = types.ModuleType("PIL")
     pil_image_mod = types.ModuleType("PIL.Image")
     pil_image_file_mod = types.ModuleType("PIL.ImageFile")
+    class FakePilImage:
+        pass
+
     pil_image_mod.MAX_IMAGE_PIXELS = None
-    pil_image_mod.Image = object
+    pil_image_mod.Image = FakePilImage
     pil_image_mod.LANCZOS = 1
     pil_mod.Image = pil_image_mod
     pil_mod.ImageFile = pil_image_file_mod
@@ -108,6 +111,8 @@ def _install_dummy_modules():
 
     def fake_default_collate(batch):
         first = batch[0]
+        if isinstance(first, FakePilImage):
+            raise AssertionError("PIL images should bypass default_collate")
         if isinstance(first, FakeTensor):
             shapes = [item.shape for item in batch]
             if any(shape != shapes[0] for shape in shapes[1:]):
@@ -202,6 +207,21 @@ class QwenCollateTests(unittest.TestCase):
         self.assertIs(internal, features)
         self.assertEqual(features.shape, (2, 1))
         self.assertEqual(seen["pixel_values"].shape, (2, 3, 2))
+
+
+    def test_pil_image_inputs_bypass_default_collate(self):
+        tensor = create_index.torch.FakeTensor
+        images = [create_index.Image.Image(), create_index.Image.Image()]
+        samples = [
+            (images[0], None, 0, tensor([1]), tensor([2])),
+            (images[1], None, 1, tensor([3]), tensor([4])),
+        ]
+
+        search_batch, _, _, _, _ = safe_collate(samples)
+
+        self.assertIsInstance(search_batch, list)
+        self.assertEqual(search_batch, images)
+        self.assertTrue(all(isinstance(item, create_index.Image.Image) for item in search_batch))
 
     def test_openclip_tensor_inputs_stay_on_default_collate_path(self):
         tensor = create_index.torch.FakeTensor
