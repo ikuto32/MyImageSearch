@@ -531,12 +531,6 @@ class Usecase:
     ) -> ResultImageItemList:
         """乱数から検索する"""
 
-<<<<<<< HEAD
-        # 単位超球面（Unit hypersphere）上から一様にベクトルをサンプリング
-        features: np.ndarray = np.random.normal(0, 1, [1, 768]).astype(np.float32)
-
-=======
->>>>>>> a58619967598e25cec1f80703a15249ed73521b8
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
         mean_vector = self._accessor.get_mean_meta_vector(model_id)
