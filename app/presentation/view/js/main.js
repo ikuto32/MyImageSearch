@@ -30,6 +30,7 @@ const app = Vue.createApp({
             resultSize: 2048,
             model_name: "ViT-L-14",
             pretrained: "openai",
+            modelItems: [],
             search_query: "",
             showedItemIndex: 0,
             aesthetic_quality_beta: 0.00,
@@ -108,6 +109,18 @@ const app = Vue.createApp({
             this.onModelChange()
         }
     },
+    computed:{
+        modelNameItems() {
+            const names = this.modelItems.map(item => item.model_name)
+            return [...new Set([this.model_name, ...names])]
+        },
+        pretrainedItems() {
+            const values = this.modelItems
+                .filter(item => item.model_name === this.model_name)
+                .map(item => item.pretrained)
+            return [...new Set([this.pretrained, ...values])]
+        },
+    },
     methods:{
 
         /**
@@ -115,8 +128,16 @@ const app = Vue.createApp({
          */
         init() {
 
+            this.loadModelItems()
             this.initBuffer()
             .then(() => this.initImage())
+        },
+
+        loadModelItems() {
+            return repository.getModelItems()
+            .then(items => {
+                this.modelItems = items
+            })
         },
 
         onModelChange(){

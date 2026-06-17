@@ -19,7 +19,7 @@ def main():
 
     accessor: LocalAccessor = LocalAccessor(meta_dir_path)
 
-    repository: LocalRepository = LocalRepository(image_dir_path)
+    repository: LocalRepository = LocalRepository(image_dir_path, meta_dir_path)
     startup_model_id = ModelId("ViT-L-14", "openai")
 
     in_usecase: usecase.Usecase = usecase.Usecase(

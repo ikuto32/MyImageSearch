@@ -23,6 +23,12 @@ from app.domain.domain_object import (
 )
 from app.application.accessor import Accessor
 from app.application.embedding_backend import SearchEmbeddingBackend, to_float32_2d_array
+from app.infrastructure.model_metadata import (
+    default_model_dir_name,
+    has_search_index,
+    read_model_metadata,
+    safe_model_dir_name,
+)
 
 
 class OpenClipEmbeddingBackend(SearchEmbeddingBackend):
@@ -140,13 +146,42 @@ class LocalAccessor(Accessor):
 
     def __init__(self, meta_dir_path) -> None:
         self._logger = logging.getLogger(__name__)
-        self._meta_dir_path = meta_dir_path
+        self._meta_dir_path = pathlib.Path(meta_dir_path)
         self._id_to_path: Dict[ImageId, pathlib.Path] = {}
+
+    def _search_model_meta_dir(self, model_id: ModelId) -> pathlib.Path:
+        """Return the index directory for a ModelId, including metadata-backed safe names."""
+        candidates = [
+            self._meta_dir_path / default_model_dir_name(model_id),
+            self._meta_dir_path / safe_model_dir_name(model_id.model_name),
+        ]
+        for candidate in candidates:
+            metadata = read_model_metadata(candidate)
+            if metadata is not None and (
+                metadata.model_name,
+                metadata.pretrained,
+            ) == (model_id.model_name, model_id.pretrained):
+                return candidate
+            if metadata is None and candidate.exists():
+                return candidate
+
+        if self._meta_dir_path.is_dir():
+            for index_dir in self._meta_dir_path.iterdir():
+                if not has_search_index(index_dir):
+                    continue
+                metadata = read_model_metadata(index_dir)
+                if metadata is not None and (
+                    metadata.model_name,
+                    metadata.pretrained,
+                ) == (model_id.model_name, model_id.pretrained):
+                    return index_dir
+
+        return candidates[0]
 
     def load_image_feature(self, model_id: ModelId, image_id: ImageId) -> np.ndarray:
         """meta_dir配下のmodel-pretrained/image_id.npyから画像特徴量を読み込み、毎回np.loadで返す（キャッシュ無し）。"""
         return np.load(
-            f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/{image_id}.npy"
+            str(self._search_model_meta_dir(model_id) / f"{image_id}.npy")
         )
 
     @cache
@@ -178,11 +213,11 @@ class LocalAccessor(Accessor):
     ) -> Tuple[Any, List[ImageItem]]:
         """meta_dir/model-pretrainedのFAISS indexとSQLiteメタを読み込み、画像パス順のImageItemリストとindexをタプルで返す（@cacheで結果共有）。"""
         index = faiss.read_index(
-            f'{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/{"metafiles.index"}'
+            str(self._search_model_meta_dir(model_id) / "metafiles.index")
         )
 
         con: sqlite3.Connection = sqlite3.connect(
-            f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/sqlite_image_meta.db",
+            str(self._search_model_meta_dir(model_id) / "sqlite_image_meta.db"),
             isolation_level="DEFERRED",
         )
         result: pd.DataFrame = pd.read_sql_query(
@@ -281,7 +316,7 @@ class LocalAccessor(Accessor):
         """ModelIdからimage meta全体の平均ベクトルを取得する。"""
 
         mean_vector = np.load(
-                f"{self._meta_dir_path}/{model_id.model_name}-{model_id.pretrained}/metafiles.index.mean.npy"
-            )
+            str(self._search_model_meta_dir(model_id) / "metafiles.index.mean.npy")
+        )
 
         return mean_vector
