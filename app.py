@@ -25,6 +25,7 @@ def main():
     in_usecase: usecase.Usecase = usecase.Usecase(
         repository, accessor, startup_model_id
     )
+    in_usecase.warmup_search_cache(startup_model_id)
     start_app(in_usecase)
 
 
