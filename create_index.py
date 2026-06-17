@@ -49,19 +49,21 @@ Image.MAX_IMAGE_PIXELS = 268_435_456
 # =========================
 
 def safe_collate(batch):
-    """Custom collate that also bundles tagger preprocessed arrays."""
+    """Custom collate that bundles search, metadata, and tagger inputs."""
 
     batch = [b for b in batch if b is not None]
     if not batch:
         return None
 
-    image_inputs = [b[0] for b in batch]
-    indices = [b[1] for b in batch]
-    wd_inputs = [b[2] for b in batch]
-    z3d_inputs = [b[3] for b in batch]
+    search_inputs = [b[0] for b in batch]
+    metadata_inputs = [b[1] for b in batch]
+    indices = [b[2] for b in batch]
+    wd_inputs = [b[3] for b in batch]
+    z3d_inputs = [b[4] for b in batch]
 
     return (
-        default_collate(image_inputs),
+        default_collate(search_inputs),
+        default_collate(metadata_inputs) if metadata_inputs[0] is not None else None,
         default_collate(indices),
         default_collate(wd_inputs),
         default_collate(z3d_inputs),
@@ -167,10 +169,12 @@ class DirImageIterable(IterableDataset):
         transform=None,
         *,
         wd_target_size: int,
+        metadata_transform=None,
     ):
         self.images_dir = images_dir
         self.img_list = list(img_list)
         self.transform = transform
+        self.metadata_transform = metadata_transform
         self.wd_target_size = wd_target_size
 
     def _open_rgb(self, path: str):
@@ -227,14 +231,22 @@ class DirImageIterable(IterableDataset):
                     print(f"[DirImageIterable] tag preprocessing failed: {path} in {worker_id} -> {e}")
                     continue
 
+                search_img = img
+                metadata_img = None
                 if self.transform is not None:
                     try:
-                        img = self.transform(img)
+                        search_img = self.transform(img)
                     except Exception as e:
-                        print(f"[DirImageIterable] transform failed: {path} in {worker_id} -> {e}")
+                        print(f"[DirImageIterable] search transform failed: {path} in {worker_id} -> {e}")
+                        continue
+                if self.metadata_transform is not None:
+                    try:
+                        metadata_img = self.metadata_transform(img)
+                    except Exception as e:
+                        print(f"[DirImageIterable] metadata transform failed: {path} in {worker_id} -> {e}")
                         continue
                 try:
-                    yield img, idx, wd_arr, z3d_arr
+                    yield search_img, metadata_img, idx, wd_arr, z3d_arr
                 except Exception as e:
                     print(f"[DirImageIterable] yield failed: {path} in {worker_id} -> {e}")
                     continue
@@ -844,6 +856,14 @@ def parse_arguments():
         default=16384,
         help="recalc-aesthetic モード時の DB フェッチ・更新バッチサイズ (default: 16384)",
     )
+    parser.add_argument(
+        "--disable-clip-metadata",
+        action="store_true",
+        help=(
+            "検索バックエンドと別に 768 次元 OpenCLIP メタデータ特徴量を生成せず、"
+            "aesthetic/style メタデータを NULL/空で保存する。主に Qwen インデックス用。"
+        ),
+    )
 
     return parser.parse_args()
 
@@ -1054,10 +1074,18 @@ def init_db(cur: sqlite3.Cursor):
             style_cluster text,
             rating text,
             image_tags text,
-            time_stamp_ISO text
+            time_stamp_ISO text,
+            search_embedding_model text,
+            metadata_embedding_model text
         )
         """
     )
+    cur.execute("ALTER TABLE image_meta ADD COLUMN search_embedding_model text") if not _column_exists(cur, "image_meta", "search_embedding_model") else None
+    cur.execute("ALTER TABLE image_meta ADD COLUMN metadata_embedding_model text") if not _column_exists(cur, "image_meta", "metadata_embedding_model") else None
+
+
+def _column_exists(cur: sqlite3.Cursor, table_name: str, column_name: str) -> bool:
+    return any(row[1] == column_name for row in cur.execute(f"PRAGMA table_info({table_name})"))
 
 
 def load_image_meta_from_db(
@@ -1290,6 +1318,34 @@ def get_device():
     return device
 
 
+def search_embedding_model_label(args) -> str:
+    if args.search_backend == "open_clip":
+        return f"open_clip:{args.search_model_name}:{args.search_model_pretrained}"
+    return f"{args.search_backend}:{args.search_model_id}"
+
+
+def metadata_embedding_model_label(args) -> str | None:
+    if args.disable_clip_metadata:
+        return None
+    return "open_clip:ViT-L-14:openai"
+
+
+def load_metadata_embedding_backend(args, device) -> OpenClipEmbeddingBackend | None:
+    if args.disable_clip_metadata:
+        return None
+    return OpenClipEmbeddingBackend("ViT-L-14", "openai", device)
+
+
+def _to_device(batch, device):
+    if batch is None:
+        return None
+    if isinstance(batch, dict):
+        return {k: _to_device(v, device) for k, v in batch.items()}
+    if torch.is_tensor(batch):
+        return batch.to(device, non_blocking=True)
+    return batch
+
+
 def load_search_embedding_backend(args, device) -> SearchEmbeddingBackend:
     if args.search_backend == "open_clip":
         return OpenClipEmbeddingBackend(
@@ -1469,6 +1525,7 @@ def extract_image_features(
     pony_scorer,
     style_cluster,
     tagging_service,
+    metadata_model=None,
 ):
 
     processed_count = 0
@@ -1482,30 +1539,41 @@ def extract_image_features(
 
             (
                 batched_image_input,
+                batched_metadata_input,
                 batched_image_index,
                 batched_wd_inputs,
                 batched_z3d_inputs,
-            ) = batch  # (B, C, H, W), (B,), (B, H, H, 3), (B, 448, 448, 3)
+            ) = batch
 
-            batched_image_input = batched_image_input.to(device, non_blocking=True)
+            batched_image_input = _to_device(batched_image_input, device)
+            batched_metadata_input = _to_device(batched_metadata_input, device)
             try:
                 (
-                    internal_features_tensor,
-                    image_features_tensor,
+                    _search_internal_features_tensor,
+                    search_features_tensor,
                 ) = search_model.encode_image_with_internal(batched_image_input)
 
-                denom = image_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
-                image_features_tensor = (image_features_tensor / denom).contiguous()
-                # 2) 美的評価とスタイルクラスタリングもバッチで
-                aesthetic_dtype = next(aesthetic_model.parameters()).dtype
-                image_features_tensor = image_features_tensor.to(dtype=aesthetic_dtype)
-                aesthetic_scores = aesthetic_model.score_batch(image_features_tensor).squeeze(-1).cpu().numpy()  # (B,)
+                search_denom = search_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+                search_features_tensor = (search_features_tensor / search_denom).contiguous()
 
-                pony_scores = pony_scorer.score_batch(image_features_tensor)  # (B,)
-
-                cluster_ids, _cluster_dists = style_cluster.get_cluster_batch(
-                    internal_features_tensor
-                )  # cluster_ids: list[str], len=B
+                if aesthetic_model is not None and batched_metadata_input is not None:
+                    _metadata_internal_features_tensor, metadata_features_tensor = metadata_model.encode_image_with_internal(
+                        batched_metadata_input
+                    )
+                    metadata_denom = metadata_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+                    metadata_features_tensor = (metadata_features_tensor / metadata_denom).contiguous()
+                    aesthetic_dtype = next(aesthetic_model.parameters()).dtype
+                    metadata_features_for_scores = metadata_features_tensor.to(dtype=aesthetic_dtype)
+                    aesthetic_scores = aesthetic_model.score_batch(metadata_features_for_scores).squeeze(-1).cpu().numpy()
+                    pony_scores = pony_scorer.score_batch(metadata_features_for_scores)
+                    cluster_ids, _cluster_dists = style_cluster.get_cluster_batch(
+                        metadata_features_for_scores
+                    )
+                else:
+                    batch_size = int(search_features_tensor.shape[0])
+                    aesthetic_scores = [None] * batch_size
+                    pony_scores = [None] * batch_size
+                    cluster_ids = [None] * batch_size
 
                 # 3) タグ付けもバッチで
                 if args.use_existing_tags:
@@ -1535,7 +1603,7 @@ def extract_image_features(
 
 
                 batched_new_search_meta = (
-                    image_features_tensor.detach().cpu().float().numpy()
+                    search_features_tensor.detach().cpu().float().numpy()
                 )
 
                 params = []
@@ -1573,12 +1641,14 @@ def extract_image_features(
                             image_id,
                             image_path,
                             new_search_meta_bytes,
-                            float(aesthetic_score),
-                            float(pony_aesthetic_score),
+                            float(aesthetic_score) if aesthetic_score is not None else None,
+                            float(pony_aesthetic_score) if pony_aesthetic_score is not None else None,
                             claster,
                             rating,
                             image_tags,
                             time_stamp_ISO,
+                            search_embedding_model_label(args),
+                            metadata_embedding_model_label(args),
                         )
                     )
 
@@ -1593,8 +1663,10 @@ def extract_image_features(
                                 style_cluster,
                                 rating,
                                 image_tags,
-                                time_stamp_ISO
-                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                time_stamp_ISO,
+                                search_embedding_model,
+                                metadata_embedding_model
+                            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             on conflict(image_id) do update set
                                 meta=excluded.meta,
                                 aesthetic_quality=excluded.aesthetic_quality,
@@ -1602,7 +1674,9 @@ def extract_image_features(
                                 style_cluster=excluded.style_cluster,
                                 rating=excluded.rating,
                                 image_tags=excluded.image_tags,
-                                time_stamp_ISO=excluded.time_stamp_ISO""",
+                                time_stamp_ISO=excluded.time_stamp_ISO,
+                                search_embedding_model=excluded.search_embedding_model,
+                                metadata_embedding_model=excluded.metadata_embedding_model""",
                         params,
                     )
 
@@ -2137,38 +2211,45 @@ def main():
         print("load_model")
 
         search_model = load_search_embedding_backend(args, device)
+        metadata_model = load_metadata_embedding_backend(args, device)
         eval_transform = search_model.preprocess
+        metadata_transform = metadata_model.preprocess if metadata_model is not None else None
 
-        aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
-        style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
-        style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
+        if args.disable_clip_metadata:
+            aesthetic_model = None
+            pony_scorer = None
+            style_cluster = None
+        else:
+            aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
+            style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
+            style_checkpoint_centers_arg = getattr(args, "style_checkpoint_centers", None)
 
-        aesthetic_checkpoint = ensure_asset_path(
-            aesthetic_checkpoint_arg,
-            AESTHETIC_CHECKPOINT_FILENAME,
-            "aesthetic checkpoint",
-        )
-        style_checkpoint_model = ensure_asset_path(
-            style_checkpoint_model_arg,
-            STYLE_MODEL_FILENAME,
-            "style classifier checkpoint",
-        )
-        style_checkpoint_centers = ensure_asset_path(
-            style_checkpoint_centers_arg,
-            STYLE_CENTERS_FILENAME,
-            "style cluster centers",
-        )
+            aesthetic_checkpoint = ensure_asset_path(
+                aesthetic_checkpoint_arg,
+                AESTHETIC_CHECKPOINT_FILENAME,
+                "aesthetic checkpoint",
+            )
+            style_checkpoint_model = ensure_asset_path(
+                style_checkpoint_model_arg,
+                STYLE_MODEL_FILENAME,
+                "style classifier checkpoint",
+            )
+            style_checkpoint_centers = ensure_asset_path(
+                style_checkpoint_centers_arg,
+                STYLE_CENTERS_FILENAME,
+                "style cluster centers",
+            )
 
-        aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
-        aesthetic_model = aesthetic_model.to(device)
-        aesthetic_model.eval()
+            aesthetic_model = get_aesthetic_model(args.aesthetic_model_path, clip_model="vit_l_14")
+            aesthetic_model = aesthetic_model.to(device)
+            aesthetic_model.eval()
 
-        pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
-        style_cluster = StyleCluster(
-            device=device,
-            checkpoint_model=style_checkpoint_model,
-            checkpoint_centers=style_checkpoint_centers,
-        )
+            pony_scorer = PonyAestheticScorer(device=device, checkpoint=aesthetic_checkpoint)
+            style_cluster = StyleCluster(
+                device=device,
+                checkpoint_model=style_checkpoint_model,
+                checkpoint_centers=style_checkpoint_centers,
+            )
         if args.use_existing_tags:
             tagging_service = None
             wd_target_size = 448  # タグ付けを行わない場合でも前処理の形を維持
@@ -2236,6 +2317,7 @@ def main():
                     target_paths,
                     transform=eval_transform,
                     wd_target_size=wd_target_size,
+                    metadata_transform=metadata_transform,
                 )
                 loader = DataLoader(
                     dataset,
@@ -2256,6 +2338,7 @@ def main():
                         pony_scorer,
                         style_cluster,
                         tagging_service,
+                        metadata_model,
                     )
                     T = False
                 except Exception:
