@@ -68,6 +68,28 @@ class Usecase:
 
         return self._accessor.load_index_with_metadata(model_id, aesthetic_model_name)
 
+
+    def _get_index_dimension(self, index, mean_vector: np.ndarray | None = None) -> int:
+        """読み込んだFAISS indexまたは平均ベクトルから検索次元を取得する。"""
+
+        index_dim = getattr(index, "d", None)
+        if index_dim is not None:
+            return int(index_dim)
+        if mean_vector is not None:
+            return int(mean_vector.size)
+        raise ValueError("Unable to determine search embedding dimension from index or mean vector.")
+
+    def _ensure_query_dimension(self, query_features: np.ndarray, index, mean_vector: np.ndarray | None = None) -> None:
+        """クエリ次元とインデックス次元が一致することを検証する。"""
+
+        expected_dim = self._get_index_dimension(index, mean_vector)
+        actual_dim = int(query_features.shape[-1])
+        if actual_dim != expected_dim:
+            raise ValueError(
+                f"Query embedding dimension mismatch: query has {actual_dim} dimensions, "
+                f"but the FAISS index expects {expected_dim}."
+            )
+
     def _normalize_result_size(self, result_size: int | None) -> int:
         """検索結果件数の上限を安全な正整数に正規化する。"""
 
@@ -227,10 +249,16 @@ class Usecase:
             list[ResultImageItem]: 距離に基づき生成した結果リスト。インデックス外参照が発生したIDはスキップし、`traceback`を標準出力へ表示する。
         """
         self._logger.info("query_features shape: %s", query_features.shape)
+        self._ensure_query_dimension(query_features, index, mean_vector)
 
         # Mean Centering
         if mean_centering:
-            if mean_vector is not None and mean_vector.size == query_features.shape[-1]:
+            if mean_vector is not None:
+                if mean_vector.size != query_features.shape[-1]:
+                    raise ValueError(
+                        f"Mean vector dimension mismatch: mean vector has {mean_vector.size} "
+                        f"dimensions, but query has {query_features.shape[-1]}."
+                    )
                 self._logger.info("Applying mean centering to query features.")
                 query_features = query_features.copy() - mean_vector.reshape(1, -1)
 
@@ -343,6 +371,8 @@ class Usecase:
         )
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
+        mean_vector = self._accessor.get_mean_meta_vector(model_id)
+        self._ensure_query_dimension(features, index, mean_vector)
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
@@ -500,12 +530,14 @@ class Usecase:
     ) -> ResultImageItemList:
         """乱数から検索する"""
 
-        # 単位超球面（Unit hypersphere）上から一様にベクトルをサンプリング
-        # similarity_evalの副作用で正規化されるため、ここでは正規化せずに生の乱数を渡す。
-        features: np.ndarray = np.random.normal(0, 1, [1, 768]).astype(np.float32)
-
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
+        mean_vector = self._accessor.get_mean_meta_vector(model_id)
+        dimension = self._get_index_dimension(index, mean_vector)
+
+        # 単位超球面（Unit hypersphere）上から一様にベクトルをサンプリング
+        # similarity_evalの副作用で正規化されるため、ここでは正規化せずに生の乱数を渡す。
+        features: np.ndarray = np.random.normal(0, 1, [1, dimension]).astype(np.float32)
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
@@ -514,7 +546,7 @@ class Usecase:
             result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=True,
-            mean_vector=self._accessor.get_mean_meta_vector(model_id),
+            mean_vector=mean_vector,
         )
         scores = self.apply_aesthetic_quality_filter(
             model_id,
@@ -539,9 +571,13 @@ class Usecase:
         """クエリから検索する"""
 
         features = self.parse_search_query(search_query)
+        if features is None:
+            raise ValueError("Invalid search query vector format.")
 
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
+        mean_vector = self._accessor.get_mean_meta_vector(model_id)
+        self._ensure_query_dimension(features, index, mean_vector)
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
@@ -550,7 +586,7 @@ class Usecase:
             result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=True,
-            mean_vector=self._accessor.get_mean_meta_vector(model_id),
+            mean_vector=mean_vector,
         )
 
         scores: list[ResultImageItem] = self.apply_aesthetic_quality_filter(
@@ -584,6 +620,8 @@ class Usecase:
         tokenizer: Tokenizer = self._accessor.load_tokenizer(model_id)
 
         query_features = self.parse_search_query(search_query)
+        if query_features is None:
+            raise ValueError("Invalid search query vector format.")
 
         text_features = (
             model.model_obj[0]
@@ -594,11 +632,14 @@ class Usecase:
             .copy()
         )
 
-        faiss.normalize_L2(text_features)
-        features = query_features + text_features * strength
-
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
+        mean_vector = self._accessor.get_mean_meta_vector(model_id)
+        self._ensure_query_dimension(query_features, index, mean_vector)
+        self._ensure_query_dimension(text_features, index, mean_vector)
+
+        faiss.normalize_L2(text_features)
+        features = query_features + text_features * strength
 
         # 類似度を計算する
         scores: list[ResultImageItem] = self.similarity_eval(
@@ -607,7 +648,7 @@ class Usecase:
             result_size=self._normalize_result_size(result_size),
             query_features=features,
             mean_centering=True,
-            mean_vector=self._accessor.get_mean_meta_vector(model_id),
+            mean_vector=mean_vector,
         )
 
         scores: list[ResultImageItem] = self.apply_aesthetic_quality_filter(
