@@ -488,9 +488,39 @@ class StyleCluster:
         except Exception as e:
             print(f"Failed to load style cluster centers: {e}")
 
+    def _prepare_style_features(self, features: torch.Tensor | np.ndarray, *, batched: bool):
+        if not torch.is_tensor(features):
+            features = torch.from_numpy(features)
+
+        expected_ndim = 2 if batched else 1
+        if features.ndim != expected_ndim:
+            shape_label = "(N, D)" if batched else "(D,)"
+            raise ValueError(
+                f"Style features must have shape {shape_label}, "
+                f"got {tuple(features.shape)}"
+            )
+
+        expected_dim = int(self.cluster_centers.shape[1])
+        actual_dim = int(features.shape[1] if batched else features.shape[0])
+        if actual_dim != expected_dim:
+            raise ValueError(
+                "Style feature dimension mismatch: "
+                f"features={actual_dim}, "
+                f"cluster_centers={expected_dim}. "
+                "Use OpenCLIP pre-projection/internal features "
+                "for style clustering."
+            )
+
+        return features.to(
+            device=self.cluster_centers.device,
+            dtype=self.cluster_centers.dtype,
+            non_blocking=True,
+        )
+
     @torch.no_grad()
-    def get_cluster(self, features):
-        """指定されたfeaturesからスタイルクラスタID（文字列）を返す"""
+    def get_cluster(self, features: torch.Tensor | np.ndarray):
+        """指定された単一のstyle features (D,) からスタイルクラスタIDを返す。"""
+        features = self._prepare_style_features(features, batched=False)
         distances = torch.norm(self.cluster_centers - features, dim=1)
         min_index = torch.argmin(distances).item()
         distance = distances[min_index]
@@ -504,10 +534,7 @@ class StyleCluster:
         features: (N, D)
         return: (cluster_id_list, distance_ndarray)
         """
-        if not torch.is_tensor(features):
-            features = torch.from_numpy(features)
-
-        features = features.to(self.device)  # (N,D)
+        features = self._prepare_style_features(features, batched=True)
         # (N, num_centers) の距離行列
         # cdist は多少重いけど、python for で回すより遥かに速い
         distances = torch.cdist(features, self.cluster_centers)  # (N, C)
@@ -1681,24 +1708,61 @@ def extract_image_features(
                 search_denom = search_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
                 search_features_tensor = (search_features_tensor / search_denom).contiguous()
 
-                if aesthetic_model is not None and batched_metadata_input is not None:
-                    _metadata_internal_features_tensor, metadata_features_tensor = metadata_model.encode_image_with_internal(
-                        batched_metadata_input
+                batch_size = int(search_features_tensor.shape[0])
+                needs_metadata_features = (
+                    batched_metadata_input is not None
+                    and metadata_model is not None
+                    and (
+                        aesthetic_model is not None
+                        or pony_scorer is not None
+                        or style_cluster is not None
                     )
-                    metadata_denom = metadata_features_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
-                    metadata_features_tensor = (metadata_features_tensor / metadata_denom).contiguous()
-                    aesthetic_dtype = next(aesthetic_model.parameters()).dtype
-                    metadata_features_for_scores = metadata_features_tensor.to(dtype=aesthetic_dtype)
-                    aesthetic_scores = aesthetic_model.score_batch(metadata_features_for_scores).squeeze(-1).cpu().numpy()
-                    pony_scores = pony_scorer.score_batch(metadata_features_for_scores)
-                    cluster_ids, _cluster_dists = style_cluster.get_cluster_batch(
-                        metadata_features_for_scores
-                    )
-                else:
-                    batch_size = int(search_features_tensor.shape[0])
-                    aesthetic_scores = [None] * batch_size
-                    pony_scores = [None] * batch_size
-                    cluster_ids = [None] * batch_size
+                )
+                aesthetic_scores = [None] * batch_size
+                pony_scores = [None] * batch_size
+                cluster_ids = [None] * batch_size
+
+                if needs_metadata_features:
+                    (
+                        metadata_internal_features_tensor,
+                        metadata_projected_features_tensor,
+                    ) = metadata_model.encode_image_with_internal(batched_metadata_input)
+
+                    metadata_features_for_scores = None
+                    if aesthetic_model is not None or pony_scorer is not None:
+                        # Projected OpenCLIP features are used by aesthetic/Pony scorers.
+                        projected_norm = metadata_projected_features_tensor.norm(
+                            dim=-1,
+                            keepdim=True,
+                        ).clamp_min(1e-12)
+                        metadata_features_for_scores = (
+                            metadata_projected_features_tensor / projected_norm
+                        ).contiguous()
+
+                    if aesthetic_model is not None:
+                        aesthetic_dtype = next(aesthetic_model.parameters()).dtype
+                        aesthetic_features = metadata_features_for_scores.to(dtype=aesthetic_dtype)
+                        aesthetic_scores = (
+                            aesthetic_model
+                            .score_batch(aesthetic_features)
+                            .squeeze(-1)
+                            .cpu()
+                            .numpy()
+                        )
+
+                    if pony_scorer is not None:
+                        pony_scores = pony_scorer.score_batch(metadata_features_for_scores)
+
+                    if style_cluster is not None:
+                        # Pre-projection/internal OpenCLIP features are used for style clustering.
+                        style_features = metadata_internal_features_tensor.to(
+                            device=style_cluster.cluster_centers.device,
+                            dtype=style_cluster.cluster_centers.dtype,
+                            non_blocking=True,
+                        )
+                        cluster_ids, _cluster_dists = style_cluster.get_cluster_batch(
+                            style_features
+                        )
 
                 # 3) タグ付けもバッチで
                 if args.use_existing_tags:
