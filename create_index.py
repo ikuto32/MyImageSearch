@@ -873,8 +873,8 @@ def parse_arguments():
     parser.add_argument(
         "--style_checkpoint_centers", help="style_checkpoint_centers", default=STYLE_REPO
     )
-    parser.add_argument("--batch_size", help="batch size", type=int, default=32)
-    parser.add_argument("--num_workers", help="data loader workers", type=int, default=8)
+    parser.add_argument("--batch_size", help="batch size", type=int, default=1)
+    parser.add_argument("--num_workers", help="data loader workers", type=int, default=2)
     parser.add_argument("--nlist", help="centroid size", type=int, default=64)
     parser.add_argument(
         "--pq-m",
