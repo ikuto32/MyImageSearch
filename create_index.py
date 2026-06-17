@@ -5,6 +5,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import datetime
+from collections.abc import Mapping
 from dataclasses import dataclass
 import gc
 import hashlib
@@ -64,7 +65,7 @@ def _tensor_shapes_differ(values: list[Any]) -> bool:
 def _is_variable_length_qwen_inputs(search_inputs: list[Any]) -> bool:
     """Return True for per-image Qwen processor dicts that cannot use default_collate."""
 
-    if not search_inputs or not all(isinstance(item, dict) for item in search_inputs):
+    if not search_inputs or not all(isinstance(item, Mapping) for item in search_inputs):
         return False
 
     common_keys = set(search_inputs[0])
@@ -90,7 +91,7 @@ def _pad_tensors_to_common_shape(values: list[torch.Tensor]) -> torch.Tensor:
     return torch.stack(padded_values, dim=0)
 
 
-def _collate_qwen_processor_inputs(search_inputs: list[dict[str, Any]]) -> dict[str, Any]:
+def _collate_qwen_processor_inputs(search_inputs: list[Mapping[str, Any]]) -> dict[str, Any]:
     """Collate Qwen processor output dictionaries, padding variable tensor fields."""
 
     collated: dict[str, Any] = {}
@@ -1343,12 +1344,7 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
         return inputs
 
     def _move_inputs_to_device(self, inputs):
-        if isinstance(inputs, dict):
-            return {
-                key: value.to(self.device) if torch.is_tensor(value) else value
-                for key, value in inputs.items()
-            }
-        return inputs.to(self.device) if torch.is_tensor(inputs) else inputs
+        return _to_device(inputs, self.device)
 
     def _pool_outputs(self, outputs) -> torch.Tensor:
         for attr in ("image_embeds", "text_embeds", "pooler_output"):
@@ -1373,7 +1369,7 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
 
     @torch.no_grad()
     def encode_image_with_internal(self, image_inputs):
-        if isinstance(image_inputs, dict):
+        if isinstance(image_inputs, Mapping):
             image_inputs = {
                 key: value.squeeze(1) if torch.is_tensor(value) and value.ndim > 1 and value.shape[1] == 1 else value
                 for key, value in image_inputs.items()
@@ -1453,12 +1449,18 @@ def load_metadata_embedding_backend(args, device) -> OpenClipEmbeddingBackend | 
 
 
 def _to_device(batch, device):
+    """Recursively move tensors and mapping-like processor outputs to a device."""
+
     if batch is None:
         return None
-    if isinstance(batch, dict):
-        return {k: _to_device(v, device) for k, v in batch.items()}
     if torch.is_tensor(batch):
-        return batch.to(device, non_blocking=True)
+        return batch.to(device=device, non_blocking=True)
+    if isinstance(batch, Mapping):
+        return {key: _to_device(value, device) for key, value in batch.items()}
+    if isinstance(batch, tuple):
+        return tuple(_to_device(value, device) for value in batch)
+    if isinstance(batch, list):
+        return [_to_device(value, device) for value in batch]
     return batch
 
 
