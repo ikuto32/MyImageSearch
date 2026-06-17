@@ -19,6 +19,17 @@ function normalizeResultSize(resultSize) {
 }
 
 
+
+/**
+ * 利用可能な検索モデル一覧を取得する。
+ *
+ * @return {Promise<{model_name:string, pretrained:string}[]>}
+ */
+export async function getModelItems() {
+
+    return axios.get(`/model_item`).then(res => res.data)
+}
+
 /**
  * 画像項目のIDから画像のURLを取得する
  * 

@@ -19,12 +19,13 @@ def main():
 
     accessor: LocalAccessor = LocalAccessor(meta_dir_path)
 
-    repository: LocalRepository = LocalRepository(image_dir_path)
+    repository: LocalRepository = LocalRepository(image_dir_path, meta_dir_path)
     startup_model_id = ModelId("ViT-L-14", "openai")
 
     in_usecase: usecase.Usecase = usecase.Usecase(
         repository, accessor, startup_model_id
     )
+    in_usecase.warmup_search_cache(startup_model_id)
     start_app(in_usecase)
 
 
