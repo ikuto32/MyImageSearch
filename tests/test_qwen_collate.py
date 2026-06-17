@@ -204,11 +204,13 @@ class QwenCollateTests(unittest.TestCase):
         samples = [
             ({
                 "input_ids": tensor([101, 102]),
+                "attention_mask": tensor([1, 1]),
                 "pixel_values": tensor([[1, 2], [3, 4]]),
                 "image_grid_thw": tensor([[1, 1, 2]]),
             }, None, 0, tensor([1]), tensor([2])),
             ({
                 "input_ids": tensor([201, 202]),
+                "attention_mask": tensor([1, 1]),
                 "pixel_values": tensor([[5, 6], [7, 8], [9, 10]]),
                 "image_grid_thw": tensor([[1, 1, 3]]),
             }, None, 1, tensor([3]), tensor([4])),
@@ -245,6 +247,38 @@ class QwenCollateTests(unittest.TestCase):
         self.assertEqual(seen["pixel_values"].shape, (2, 3, 2))
         self.assertEqual(seen["image_grid_thw"].shape, (2, 3))
 
+    def test_prepare_image_inputs_adds_prompt_tokens_and_images(self):
+        tensor = create_index.torch.FakeTensor
+        images = [create_index.Image.Image(), create_index.Image.Image()]
+        calls = {}
+
+        class FakeProcessor:
+            def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+                calls["messages"] = messages
+                calls["tokenize"] = tokenize
+                calls["add_generation_prompt"] = add_generation_prompt
+                return "<chat><image>Represent this image for retrieval."
+
+            def __call__(self, **kwargs):
+                calls["processor_kwargs"] = kwargs
+                return {
+                    "input_ids": tensor([[1, 2], [1, 2]]),
+                    "attention_mask": tensor([[1, 1], [1, 1]]),
+                    "pixel_values": tensor([[3, 4], [5, 6]]),
+                    "image_grid_thw": tensor([[1, 1, 2], [1, 1, 2]]),
+                }
+
+        backend = QwenVlEmbeddingBackend.__new__(QwenVlEmbeddingBackend)
+        backend.processor = FakeProcessor()
+
+        inputs = backend.prepare_image_inputs(images)
+
+        self.assertIn("input_ids", inputs)
+        self.assertIn("pixel_values", inputs)
+        self.assertEqual(calls["processor_kwargs"]["images"], images)
+        self.assertEqual(calls["processor_kwargs"]["text"], ["<chat><image>Represent this image for retrieval."] * 2)
+        self.assertFalse(calls["tokenize"])
+        self.assertFalse(calls["add_generation_prompt"])
 
     def test_pil_image_inputs_bypass_default_collate(self):
         tensor = create_index.torch.FakeTensor
