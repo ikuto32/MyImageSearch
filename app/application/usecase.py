@@ -740,8 +740,12 @@ class Usecase:
         for image_id_str in tqdm.tqdm(id_list):
             image_id = ImageId(image_id_str)  # ImageId型に変換
             try:
-                image_with_name: tuple[Image, ImageName] = self._repository.load_image(image_id), self._repository.get_image_name(image_id)
-                images_with_names.append(image_with_name)
+                image = self._repository.load_image(image_id)
+                image_name = self._repository.get_image_name(image_id)
+                if image is None:
+                    self._logger.warning("画像IDの読み込み結果がNoneのためスキップ: %s", image_id)
+                    continue
+                images_with_names.append((image, image_name))
             except (ValueError, FileNotFoundError) as e:
                 self._logger.warning("画像IDが無効のためスキップ: %s", e)
 

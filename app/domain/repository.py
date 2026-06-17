@@ -17,11 +17,19 @@ class Repository(metaclass=ABCMeta):
 
     @abstractmethod
     def load_image(self, image_id: ImageId) -> Image:
+        """画像IDに対応するオリジナル画像を返す。
+
+        未知の画像IDは ``None`` ではなく ``ValueError`` などの明示的な例外で表現する。
+        """
 
         pass
 
     @abstractmethod
     def load_small_image(self, image_id: ImageId) -> Image:
+        """画像IDに対応する縮小画像を返す。
+
+        未知の画像IDは ``None`` ではなく ``ValueError`` などの明示的な例外で表現する。
+        """
 
         pass
 

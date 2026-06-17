@@ -1,7 +1,7 @@
 
 import ast
 import logging
-from flask import Flask, request, make_response, send_file
+from flask import Flask, request, make_response, send_file, send_from_directory, abort
 
 import pathlib
 import json
@@ -80,15 +80,11 @@ def resource(target: str):
 
     # ビューの指定をしている。
     pwd = pathlib.Path(__file__).parent
-    base_path = pwd / 'view'
-    full_path = (base_path / target).resolve()
-    if not str(full_path).startswith(str(base_path.resolve())):
-        raise Exception("Access to the specified file is not allowed.")
-    with open(full_path, encoding="UTF-8") as f:
-        text = f.read()
-
-    response = make_response(text)
-    response.headers.set('Content-Type', mimetypes.guess_type(target)[0])
+    base_path = (pwd / "view").resolve()
+    response = send_from_directory(str(base_path), target)
+    content_type = mimetypes.guess_type(target)[0]
+    if content_type is not None:
+        response.headers.set('Content-Type', content_type)
     return response
 
 
@@ -119,40 +115,60 @@ def get_image_item(id: str):
     return from_image_item_to_json(usecase.get_image_item(ImageId(id)))
 
 
-@app.route("/image_meta/<model_name>/<pretrained>/<id>")
-def get_image_metadata(model_name: str, pretrained: str, id: str):
+@app.route("/image_meta/<id>", methods=["GET", "POST"])
+def get_image_metadata(id: str):
     """画像のメタデータ（タグやratingなど）を返す"""
 
-    model_id: ModelId = ModelId(model_name, pretrained)
+    model_id = get_requested_model_id()
     return json.dumps(usecase.get_image_metadata(model_id, ImageId(id)))
 
 
-@app.route("/image_ratings/<model_name>/<pretrained>", methods=["GET", "POST"])
-def get_image_ratings(model_name: str, pretrained: str):
+@app.route("/image_ratings", methods=["GET", "POST"])
+def get_image_ratings():
     """指定された画像IDに限定してrating一覧を返す"""
 
-    model_id: ModelId = ModelId(model_name, pretrained)
+    model_id = get_requested_model_id()
     image_ids = get_requested_image_ids()
     ratings: dict[ImageId, str] = usecase.get_rating_list(model_id, image_ids)
     rating_dict = {image_id.id: rating for image_id, rating in ratings.items()}
     return json.dumps(rating_dict)
 
 
+def get_request_params() -> dict:
+    """query string またはJSON bodyのparamsからAPIパラメータを取り出す"""
+
+    json_obj = request.get_json(silent=True) or {}
+    body_params = json_obj.get("params", json_obj)
+    return body_params if request.method == "POST" else request.args
+
+
+def get_requested_model_id() -> ModelId:
+    """リクエストパラメータから検索モデルIDを取り出す"""
+
+    params = get_request_params()
+    model_name = params.get("model_name")
+    pretrained = params.get("pretrained", "")
+    if model_name is None:
+        abort(400, description="model_name is required")
+    return ModelId(model_name, pretrained or "")
+
+
 def get_requested_image_ids() -> list[ImageId] | None:
     """rating取得リクエストから対象画像IDリストを取り出す"""
 
+    params = get_request_params()
     if request.method == "POST":
-        json_obj = request.get_json(silent=True) or {}
-        params = json_obj.get("params", {})
         id_text_list = params.get("id") or params.get("ids")
     else:
         id_text_list = request.args.getlist("id") or request.args.getlist("ids")
         if not id_text_list:
-            ids_text = request.args.get("ids")
+            ids_text = params.get("ids")
             id_text_list = ids_text.split(",") if ids_text else None
 
     if id_text_list is None:
         return None
+    if isinstance(id_text_list, str):
+        id_text_list = [id_text_list]
 
     return [ImageId(item_id) for item_id in id_text_list if item_id]
 
@@ -161,7 +177,10 @@ def get_requested_image_ids() -> list[ImageId] | None:
 def get_small_image(id: str):
     """画像IDから縮小画像を返す"""
 
-    img = usecase.get_small_image(ImageId(id))
+    try:
+        img = usecase.get_small_image(ImageId(id))
+    except ValueError:
+        abort(404)
     response = make_response(img.binary)
     response.headers.set('Content-Type', img.content_type)
     return response
@@ -171,7 +190,10 @@ def get_small_image(id: str):
 def get_original_image(id: str):
     """画像IDからオリジナル画像を返す"""
 
-    img = usecase.get_image(ImageId(id))
+    try:
+        img = usecase.get_image(ImageId(id))
+    except ValueError:
+        abort(404)
     response = make_response(img.binary)
     response.headers.set('Content-Type', img.content_type)
     return response
