@@ -765,7 +765,14 @@ def parse_arguments():
         default="Qwen/Qwen3-VL-Embedding-2B",
     )
     parser.add_argument(
-        "--search_model_out_dim", help="search_model_out_dim", type=int, default=768
+        "--search_model_out_dim",
+        help=(
+            "Optional output embedding dimension. If omitted, the dimension is "
+            "inferred from the first generated/stored embedding. Qwen MRL models "
+            "are truncated to this size when specified."
+        ),
+        type=int,
+        default=None,
     )
 
     parser.add_argument(
@@ -781,7 +788,14 @@ def parse_arguments():
     parser.add_argument("--batch_size", help="batch size", type=int, default=32)
     parser.add_argument("--num_workers", help="data loader workers", type=int, default=8)
     parser.add_argument("--nlist", help="centroid size", type=int, default=64)
-    parser.add_argument("--M", help="M", type=int, default=768)
+    parser.add_argument(
+        "--pq-m",
+        "--M",
+        dest="pq_m",
+        help="FAISS IVFPQ PQ subvector count (not embedding dimension).",
+        type=int,
+        default=64,
+    )
     parser.add_argument("--bits_per_code", help="bits_per_code", type=int, default=8)
     parser.add_argument(
         "--metas_faiss_index_file_name",
@@ -1092,11 +1106,11 @@ def load_image_meta_from_db(
         cur.execute(f"DROP TABLE IF EXISTS \"{temp_table}\"")
 
 
-def createIndex(n_centroids, M, bits_per_code, dim) -> faiss.IndexIVFPQ:
+def createIndex(n_centroids, pq_m, bits_per_code, dim) -> faiss.IndexIVFPQ:
 
     quantizer = faiss.IndexFlatIP(dim)
     index = faiss.IndexIVFPQ(
-        quantizer, dim, n_centroids, M, bits_per_code, faiss.METRIC_INNER_PRODUCT
+        quantizer, dim, n_centroids, pq_m, bits_per_code, faiss.METRIC_INNER_PRODUCT
     )
 
     return index
@@ -1157,11 +1171,12 @@ class OpenClipEmbeddingBackend(SearchEmbeddingBackend):
 class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
     """Qwen3-VL-Embedding を使う検索エンコーダ。"""
 
-    def __init__(self, model_id: str, device: str):
+    def __init__(self, model_id: str, device: str, output_dim: int | None = None):
         from transformers import AutoModel, AutoProcessor
 
         self.device = device
         self.model_id = model_id
+        self.output_dim = output_dim
         dtype = torch.float16 if device.startswith("cuda") else torch.float32
         self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
         self.model = AutoModel.from_pretrained(
@@ -1198,6 +1213,15 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
             raise RuntimeError("Qwen VL embedding model did not return embeddings.")
         return hidden.mean(dim=1)
 
+    def _apply_output_dim(self, features: torch.Tensor) -> torch.Tensor:
+        if self.output_dim is None:
+            return features
+        if features.shape[-1] < self.output_dim:
+            raise ValueError(
+                f"Requested output dimension {self.output_dim} exceeds model dimension {features.shape[-1]}."
+            )
+        return features[..., : self.output_dim].contiguous()
+
     @torch.no_grad()
     def encode_image_with_internal(self, image_inputs):
         if isinstance(image_inputs, dict):
@@ -1207,7 +1231,7 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
             }
         image_inputs = self._move_inputs_to_device(image_inputs)
         outputs = self.model(**image_inputs, return_dict=True)
-        features = self._pool_outputs(outputs)
+        features = self._apply_output_dim(self._pool_outputs(outputs))
         return features, features
 
     @torch.no_grad()
@@ -1215,7 +1239,7 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
         inputs = self.processor(text=texts, padding=True, return_tensors="pt")
         inputs = self._move_inputs_to_device(inputs)
         outputs = self.model(**inputs, return_dict=True)
-        return self._pool_outputs(outputs)
+        return self._apply_output_dim(self._pool_outputs(outputs))
 
 
 def safe_model_dir_name(value: str) -> str:
@@ -1258,7 +1282,7 @@ def load_search_embedding_backend(args, device) -> SearchEmbeddingBackend:
             device,
         )
     if args.search_backend == "qwen_vl":
-        return QwenVlEmbeddingBackend(args.search_model_id, device)
+        return QwenVlEmbeddingBackend(args.search_model_id, device, args.search_model_out_dim)
     raise ValueError(f"Unknown search backend: {args.search_backend}")
 
 
@@ -1290,12 +1314,16 @@ def filter_valid_image_meta(args, result, image_id_to_path):
     valid_meta_count = 0
     has_existing_metas = False
     uncreated_image_paths = []
-    expected_bytes = args.search_model_out_dim * np.dtype(np.float32).itemsize
+    expected_bytes = (
+        args.search_model_out_dim * np.dtype(np.float32).itemsize
+        if args.search_model_out_dim is not None
+        else None
+    )
 
     for image_id, meta in tqdm.tqdm(result, total=len(image_id_to_path)):
         if meta is not None:
             meta_view = memoryview(meta)
-            if meta_view.nbytes == expected_bytes:
+            if expected_bytes is None or meta_view.nbytes == expected_bytes:
                 valid_meta_count += 1
                 has_existing_metas = True
                 continue
@@ -1303,6 +1331,34 @@ def filter_valid_image_meta(args, result, image_id_to_path):
         uncreated_image_paths.append(image_id_to_path[image_id])
 
     return ImageMetaFilterStats(valid_meta_count, has_existing_metas), uncreated_image_paths
+
+
+def infer_meta_dimension(con: sqlite3.Connection) -> int | None:
+    """保存済みmeta BLOBからfloat32埋め込み次元を推定する。"""
+    row = con.execute(
+        "SELECT meta FROM image_meta WHERE meta IS NOT NULL LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    meta_size = memoryview(row[0]).nbytes
+    item_size = np.dtype(np.float32).itemsize
+    if meta_size % item_size != 0:
+        raise ValueError(f"Invalid meta byte size for float32 vector: {meta_size}")
+    return meta_size // item_size
+
+
+def resolve_embedding_dimension(args, con: sqlite3.Connection) -> int:
+    """CLI指定または保存済みmetaから現在の埋め込み次元を決定する。"""
+    if args.search_model_out_dim is not None:
+        return int(args.search_model_out_dim)
+    inferred = infer_meta_dimension(con)
+    if inferred is None:
+        raise ValueError(
+            "Embedding dimension is unknown because no embeddings were generated or stored."
+        )
+    args.search_model_out_dim = inferred
+    print(f"Inferred search_model_out_dim={inferred}")
+    return inferred
 
 
 def collect_orphan_db_records(
@@ -1481,6 +1537,9 @@ def extract_image_features(
                         tagging_results,
                     )
                 ):
+                    if args.search_model_out_dim is None:
+                        args.search_model_out_dim = int(new_search_meta.shape[0])
+                        print(f"Detected search_model_out_dim={args.search_model_out_dim}")
                     if new_search_meta.shape[0] != args.search_model_out_dim:
                         print(f"{new_search_meta.shape[0]} != {args.search_model_out_dim}")
                         continue
@@ -1878,8 +1937,8 @@ def compute_mean_vector(
 
 def stream_build_faiss(
     db_path: str,
-    nlist: int, M: int, bits_per_code: int,
-    d: int,                       # args.search_model_out_dim
+    nlist: int, pq_m: int, bits_per_code: int,
+    d: int,
     out_index_path: str,
     batch_size: int = 50_000,     # メモリに合わせて調整
     train_samples: int = 2_000_000, # 訓練に使う最大サンプル数（d次元×この件数だけ常駐）
@@ -1903,6 +1962,11 @@ def stream_build_faiss(
         np.save(mean_vec_path, mean_vec)
         print(f"Saved mean vector to {mean_vec_path}")
 
+        metadata_path = out_index_path + ".meta.json"
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump({"embedding_dim": d, "pq_m": pq_m}, f, ensure_ascii=False, indent=2)
+        print(f"Saved index metadata to {metadata_path}")
+
         # -------- パス1: 訓練 --------
         train_buf = collect_train_samples_algL(con, d, train_samples, batch_size, total=total)
 
@@ -1910,7 +1974,7 @@ def stream_build_faiss(
         train_buf -= mean_vec
         faiss.normalize_L2(train_buf)
 
-        index = createIndex(nlist, M, bits_per_code, d)  # 既存関数を利用
+        index = createIndex(nlist, pq_m, bits_per_code, d)  # 既存関数を利用
         print(f"train {train_buf.shape}")
         index.train(train_buf)
         del train_buf  # 訓練後は解放
@@ -1998,12 +2062,13 @@ def main():
             init_db(cur)
 
             recalc_batch = getattr(args, "recalc_aesthetic_batch_size", 16384)
+            embedding_dim = resolve_embedding_dimension(args, con)
             recalc_aesthetic_scores(
                 con,
                 aesthetic_model,
                 pony_scorer,
                 device,
-                out_dim=args.search_model_out_dim,
+                out_dim=embedding_dim,
                 batch_size=recalc_batch,
             )
 
@@ -2016,9 +2081,9 @@ def main():
         stream_build_faiss(
             search_model_meta_dir,
             args.nlist,
-            args.M,
+            args.pq_m,
             args.bits_per_code,
-            args.search_model_out_dim,
+            embedding_dim,
             f"{search_model_meta_dir}/{args.metas_faiss_index_file_name}",
             batch_size=100_000,
             train_samples=2_000_000,
@@ -2215,7 +2280,13 @@ def main():
 
     del con, cur
 
-    stream_build_faiss(search_model_meta_dir, args.nlist, args.M, args.bits_per_code, args.search_model_out_dim,
+    con = connect_db(search_model_meta_dir)
+    try:
+        embedding_dim = resolve_embedding_dimension(args, con)
+    finally:
+        con.close()
+
+    stream_build_faiss(search_model_meta_dir, args.nlist, args.pq_m, args.bits_per_code, embedding_dim,
         f"{search_model_meta_dir}/{args.metas_faiss_index_file_name}", batch_size=100_000, train_samples=2_000_000
     )
 
