@@ -13,10 +13,8 @@ from app.domain.domain_object import (
     Image,
     ImageName,
     ImageTags,
-    Model,
     ResultImageItemList,
     Score,
-    Tokenizer,
     UploadImage,
     ModelItem,
     ModelId,
@@ -356,19 +354,9 @@ class Usecase:
     ) -> ResultImageItemList:
         """文字列から検索する"""
 
-        # モデルの読み込み
-        model: Model = self._accessor.load_model(model_id)
-
         # テキストの埋め込みを計算
-        tokenizer: Tokenizer = self._accessor.load_tokenizer(model_id)
-        features = (
-            model.model_obj[0]
-            .encode_text(tokenizer.tokenizer_obj([text.text]))
-            .to("cpu")
-            .detach()
-            .numpy()
-            .copy()
-        )
+        backend = self._accessor.load_embedding_backend(model_id)
+        features = backend.encode_text(text.text)
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
         mean_vector = self._accessor.get_mean_meta_vector(model_id)
@@ -406,22 +394,13 @@ class Usecase:
     ) -> ResultImageItemList:
         """画像から検索する"""
 
-        # モデルの読み込み
-        model_obj: Model = self._accessor.load_model(model_id)
-        model, _, preprocess = (
-            model_obj.model_obj[0],
-            model_obj.model_obj[1],
-            model_obj.model_obj[2],
-        )
+        backend = self._accessor.load_embedding_backend(model_id)
 
         # 選択した画像のmetaを結合する
         temp = []
         for select_image_id in id_list:
-            # テキストの埋め込みを計算
             load_image = self._repository.load_image(select_image_id).to_ptl_image()
-            image = preprocess(load_image).unsqueeze(0).to("cpu")
-            meta = model.encode_image(image).to("cpu").detach().numpy().copy()
-            temp.append(meta)
+            temp.append(backend.encode_image(load_image))
 
         # クエリベクトルの平均を計算
         features: np.ndarray = np.vstack(temp).mean(axis=0).reshape(1, -1)
@@ -491,18 +470,11 @@ class Usecase:
     ) -> ResultImageItemList:
         """アップロードされた画像から検索する"""
 
-        # モデルの読み込み
-        model_obj: Model = self._accessor.load_model(model_id)
-        model, _, preprocess = (
-            model_obj.model_obj[0],
-            model_obj.model_obj[1],
-            model_obj.model_obj[2],
-        )
+        backend = self._accessor.load_embedding_backend(model_id)
 
         # アップロードされた画像を前処理
         load_image = Image(binary=image.binary, content_type=image.content_type).to_ptl_image()
-        image_tensor = preprocess(load_image).unsqueeze(0).to("cpu")
-        features = model.encode_image(image_tensor).to("cpu").detach().numpy().copy()
+        features = backend.encode_image(load_image)
 
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, "original")
@@ -613,24 +585,13 @@ class Usecase:
     ) -> ResultImageItemList:
         """クエリにstrengthの強さ分テキストの特徴を足してから検索する"""
 
-        # モデルの読み込み
-        model: Model = self._accessor.load_model(model_id)
-
-        # テキストの埋め込みを計算
-        tokenizer: Tokenizer = self._accessor.load_tokenizer(model_id)
+        backend = self._accessor.load_embedding_backend(model_id)
 
         query_features = self.parse_search_query(search_query)
         if query_features is None:
             raise ValueError("Invalid search query vector format.")
 
-        text_features = (
-            model.model_obj[0]
-            .encode_text(tokenizer.tokenizer_obj([text.text]))
-            .to("cpu")
-            .detach()
-            .numpy()
-            .copy()
-        )
+        text_features = backend.encode_text(text.text)
 
         # indexを読み込み
         index, item_list = self._get_index_and_items(model_id, aesthetic_model_name)
