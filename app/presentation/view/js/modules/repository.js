@@ -73,7 +73,12 @@ export async function getItem(itemId) {
 
 export async function getImageMetadata(modelName, pretrained, itemId) {
 
-    return axios.get(`/image_meta/${modelName}/${pretrained}/${itemId}`).then(res => res.data)
+    return axios.get(`/image_meta/${itemId}`, {
+        params: {
+            model_name: modelName,
+            pretrained: pretrained
+        }
+    }).then(res => res.data)
 }
 
 export async function getImageRatings(modelName, pretrained, itemIds = []) {
@@ -84,11 +89,13 @@ export async function getImageRatings(modelName, pretrained, itemIds = []) {
 
     const payload = {
         params:{
-            id: itemIds
+            model_name: modelName,
+            pretrained: pretrained,
+            ids: itemIds
         }
     }
 
-    return axios.post(`/image_ratings/${modelName}/${pretrained}`, payload).then(res => res.data)
+    return axios.post(`/image_ratings`, payload).then(res => res.data)
 }
 
 
