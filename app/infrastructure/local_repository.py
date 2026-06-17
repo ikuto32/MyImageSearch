@@ -383,7 +383,7 @@ class LocalRepository(Repository):
 
         if relative_path is None:
             self._logger.warning("指定されたImageIdが存在しません: %s", image_id)
-            return None
+            raise ValueError(f"指定されたImageIdが存在しません: {image_id}")
 
         path: pathlib.Path = self._image_dir_path / relative_path
         binary: bytes = path.read_bytes()
@@ -405,7 +405,7 @@ class LocalRepository(Repository):
 
         if relative_path is None:
             self._logger.warning("指定されたImageIdが存在しません: %s", image_id)
-            return None
+            raise ValueError(f"指定されたImageIdが存在しません: {image_id}")
 
         path: pathlib.Path = self._image_dir_path / relative_path
 
