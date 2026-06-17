@@ -18,7 +18,6 @@ import typing
 from typing import Any, Iterable
 import csv
 import uuid
-import types
 import time
 import threading
 
@@ -51,13 +50,13 @@ def safe_collate(batch):
     if not batch:
         return None
 
-    image_tensors = [b[0] for b in batch]
+    image_inputs = [b[0] for b in batch]
     indices = [b[1] for b in batch]
     wd_inputs = [b[2] for b in batch]
     z3d_inputs = [b[3] for b in batch]
 
     return (
-        default_collate(image_tensors),
+        default_collate(image_inputs),
         default_collate(indices),
         default_collate(wd_inputs),
         default_collate(z3d_inputs),
@@ -745,10 +744,25 @@ def parse_arguments():
         "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_rankingv2.pth"
     )
     parser.add_argument(
-        "--search_model_name", help="model_name", default="ViT-L-14"
+        "--search_backend",
+        choices=("open_clip", "qwen_vl"),
+        default="open_clip",
+        help="Search embedding backend to use.",
     )
     parser.add_argument(
-        "--search_model_pretrained", help="pretrained", default="openai"
+        "--search_model_name",
+        help="OpenCLIP model_name (used only with --search_backend open_clip)",
+        default="ViT-L-14",
+    )
+    parser.add_argument(
+        "--search_model_pretrained",
+        help="OpenCLIP pretrained tag (used only with --search_backend open_clip)",
+        default="openai",
+    )
+    parser.add_argument(
+        "--search_model_id",
+        help="Hugging Face model ID for non-OpenCLIP backends.",
+        default="Qwen/Qwen3-VL-Embedding-2B",
     )
     parser.add_argument(
         "--search_model_out_dim", help="search_model_out_dim", type=int, default=768
@@ -1088,8 +1102,132 @@ def createIndex(n_centroids, M, bits_per_code, dim) -> faiss.IndexIVFPQ:
     return index
 
 
+class SearchEmbeddingBackend:
+    """検索用の画像・テキスト埋め込みバックエンド共通インターフェース。"""
+
+    @property
+    def preprocess(self):
+        raise NotImplementedError
+
+    @torch.no_grad()
+    def encode_image_with_internal(self, image_inputs):
+        raise NotImplementedError
+
+    @torch.no_grad()
+    def encode_text(self, texts: list[str]) -> torch.Tensor:
+        raise NotImplementedError
+
+
+class OpenClipEmbeddingBackend(SearchEmbeddingBackend):
+    """既存の OpenCLIP ベース検索エンコーダ。"""
+
+    def __init__(self, model_name: str, pretrained: str, device: str):
+        self.device = device
+        self.model, _, self._preprocess = open_clip.create_model_and_transforms(
+            model_name,
+            pretrained=pretrained,
+            device=device,
+            jit=False,
+        )
+        self.model.eval()
+        self.tokenizer = open_clip.get_tokenizer(model_name)
+
+    @property
+    def preprocess(self):
+        return self._preprocess
+
+    @torch.no_grad()
+    def encode_image_with_internal(self, pixel_values: torch.Tensor):
+        visual = self.model.visual
+        x = visual._embeds(pixel_values)
+        x = visual.transformer(x)
+        pooled, _tokens = visual._pool(x)
+
+        internal_features = pooled
+        proj = getattr(visual, "proj", None)
+        projected_features = pooled @ proj if proj is not None else pooled
+        return internal_features, projected_features
+
+    @torch.no_grad()
+    def encode_text(self, texts: list[str]) -> torch.Tensor:
+        tokens = self.tokenizer(texts).to(self.device)
+        return self.model.encode_text(tokens)
+
+
+class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
+    """Qwen3-VL-Embedding を使う検索エンコーダ。"""
+
+    def __init__(self, model_id: str, device: str):
+        from transformers import AutoModel, AutoProcessor
+
+        self.device = device
+        self.model_id = model_id
+        dtype = torch.float16 if device.startswith("cuda") else torch.float32
+        self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        self.model = AutoModel.from_pretrained(
+            model_id,
+            torch_dtype=dtype,
+            trust_remote_code=True,
+        ).to(device)
+        self.model.eval()
+
+    @property
+    def preprocess(self):
+        def _preprocess(image: Image.Image):
+            return self.processor(images=image, return_tensors="pt")
+
+        return _preprocess
+
+    def _move_inputs_to_device(self, inputs):
+        if isinstance(inputs, dict):
+            return {
+                key: value.to(self.device) if torch.is_tensor(value) else value
+                for key, value in inputs.items()
+            }
+        return inputs.to(self.device) if torch.is_tensor(inputs) else inputs
+
+    def _pool_outputs(self, outputs) -> torch.Tensor:
+        for attr in ("image_embeds", "text_embeds", "pooler_output"):
+            value = getattr(outputs, attr, None)
+            if value is not None:
+                return value
+        hidden = getattr(outputs, "last_hidden_state", None)
+        if hidden is None and isinstance(outputs, (tuple, list)) and outputs:
+            hidden = outputs[0]
+        if hidden is None:
+            raise RuntimeError("Qwen VL embedding model did not return embeddings.")
+        return hidden.mean(dim=1)
+
+    @torch.no_grad()
+    def encode_image_with_internal(self, image_inputs):
+        if isinstance(image_inputs, dict):
+            image_inputs = {
+                key: value.squeeze(1) if torch.is_tensor(value) and value.ndim > 1 and value.shape[1] == 1 else value
+                for key, value in image_inputs.items()
+            }
+        image_inputs = self._move_inputs_to_device(image_inputs)
+        outputs = self.model(**image_inputs, return_dict=True)
+        features = self._pool_outputs(outputs)
+        return features, features
+
+    @torch.no_grad()
+    def encode_text(self, texts: list[str]) -> torch.Tensor:
+        inputs = self.processor(text=texts, padding=True, return_tensors="pt")
+        inputs = self._move_inputs_to_device(inputs)
+        outputs = self.model(**inputs, return_dict=True)
+        return self._pool_outputs(outputs)
+
+
+def safe_model_dir_name(value: str) -> str:
+    return value.replace("/", "--").replace("\\", "--").replace(":", "_")
+
+
 def create_search_model_meta_dir(args):
-    search_model_meta_dir = f"{args.meta_dir}/{args.search_model_name}-{args.search_model_pretrained}"
+    if args.search_backend == "open_clip":
+        model_dir_name = f"{args.search_model_name}-{args.search_model_pretrained}"
+    else:
+        model_dir_name = safe_model_dir_name(args.search_model_id)
+    search_model_meta_dir = f"{args.meta_dir}/{model_dir_name}"
     os.makedirs(search_model_meta_dir, exist_ok=True)
     return search_model_meta_dir
 
@@ -1112,38 +1250,16 @@ def get_device():
     return device
 
 
-def load_clip_model(args, device):
-    search_model, _, eval_transform = open_clip.create_model_and_transforms(
-        args.search_model_name,
-        pretrained=args.search_model_pretrained,
-        device=device,
-        jit=False,
-    )
-    search_model.eval()
-    attach_visual_feature_helper(search_model)
-    return search_model, eval_transform
-
-
-def attach_visual_feature_helper(search_model):
-    def encode_image_with_internal(self, pixel_values: torch.Tensor):
-        visual = self.visual
-        x = visual._embeds(pixel_values)
-        x = visual.transformer(x)
-        pooled, tokens = visual._pool(x)
-
-        internal_features = pooled
-        proj = getattr(visual, "proj", None)
-
-        if proj is not None:
-            projected_features = pooled @ proj
-        else:
-            projected_features = pooled
-
-        return internal_features, projected_features
-
-    search_model.encode_image_with_internal = types.MethodType(
-        encode_image_with_internal, search_model
-    )
+def load_search_embedding_backend(args, device) -> SearchEmbeddingBackend:
+    if args.search_backend == "open_clip":
+        return OpenClipEmbeddingBackend(
+            args.search_model_name,
+            args.search_model_pretrained,
+            device,
+        )
+    if args.search_backend == "qwen_vl":
+        return QwenVlEmbeddingBackend(args.search_model_id, device)
+    raise ValueError(f"Unknown search backend: {args.search_backend}")
 
 
 def create_image_id_index(file_list):
@@ -1939,7 +2055,8 @@ def main():
         # モデルの読み込み
         print("load_model")
 
-        search_model, eval_transform = load_clip_model(args, device)
+        search_model = load_search_embedding_backend(args, device)
+        eval_transform = search_model.preprocess
 
         aesthetic_checkpoint_arg = getattr(args, "aesthetic_checkpoint", None)
         style_checkpoint_model_arg = getattr(args, "style_checkpoint_model", None)
