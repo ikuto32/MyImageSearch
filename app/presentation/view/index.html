@@ -77,6 +77,14 @@
                                 v-model="features_strength"
                                 thumb-label
                                 ></v-slider>
+                            <v-text-field
+                            v-model.number="resultSize"
+                            label="result size"
+                            type="number"
+                            min="1"
+                            hint="検索結果の最大件数（モバイルでは小さめ推奨）"
+                            persistent-hint
+                            ></v-text-field>
                             <v-autocomplete
                             v-model="model_name"
                             label="model_name"

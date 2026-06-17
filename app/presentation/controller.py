@@ -23,6 +23,18 @@ usecase: Usecase = None
 logger = logging.getLogger(__name__)
 
 
+def get_result_size(params: dict | None, default: int = 2048) -> int:
+    """APIリクエストから検索結果件数の上限を取得する。"""
+
+    if params is None:
+        return default
+
+    try:
+        return max(1, int(params.get("result_size", default)))
+    except (TypeError, ValueError):
+        return default
+
+
 def start_app(in_usecase: Usecase):
     """エントリーポイント"""
 
@@ -83,7 +95,7 @@ def resource(target: str):
 # ------------------------------------------------------------
 
 
-DEFAULT_IMAGE_ITEM_PAGE_SIZE = 10000
+DEFAULT_IMAGE_ITEM_PAGE_SIZE = 60
 
 
 @app.route("/image_item")
@@ -115,14 +127,34 @@ def get_image_metadata(model_name: str, pretrained: str, id: str):
     return json.dumps(usecase.get_image_metadata(model_id, ImageId(id)))
 
 
-@app.route("/image_ratings/<model_name>/<pretrained>")
+@app.route("/image_ratings/<model_name>/<pretrained>", methods=["GET", "POST"])
 def get_image_ratings(model_name: str, pretrained: str):
-    """画像のrating一覧を返す"""
+    """指定された画像IDに限定してrating一覧を返す"""
 
     model_id: ModelId = ModelId(model_name, pretrained)
-    ratings: dict[ImageId, str] = usecase.get_rating_list(model_id)
+    image_ids = get_requested_image_ids()
+    ratings: dict[ImageId, str] = usecase.get_rating_list(model_id, image_ids)
     rating_dict = {image_id.id: rating for image_id, rating in ratings.items()}
     return json.dumps(rating_dict)
+
+
+def get_requested_image_ids() -> list[ImageId] | None:
+    """rating取得リクエストから対象画像IDリストを取り出す"""
+
+    if request.method == "POST":
+        json_obj = request.get_json(silent=True) or {}
+        params = json_obj.get("params", {})
+        id_text_list = params.get("id") or params.get("ids")
+    else:
+        id_text_list = request.args.getlist("id") or request.args.getlist("ids")
+        if not id_text_list:
+            ids_text = request.args.get("ids")
+            id_text_list = ids_text.split(",") if ids_text else None
+
+    if id_text_list is None:
+        return None
+
+    return [ImageId(item_id) for item_id in id_text_list if item_id]
 
 
 @app.route("/image/<id>/small")
@@ -166,7 +198,8 @@ def search_text():
         aesthetic_quality_range,
         aesthetic_model_name,
     )
-    result = usecase.search_text(model_id, UploadText(text), aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
+    result_size = get_result_size(args)
+    result = usecase.search_text(model_id, UploadText(text), aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name, result_size)
     return from_result_to_json(result)
 
 
@@ -190,7 +223,8 @@ def search_image():
     # IDのリストを取得する。
     id_text_list: list[str] = json_obj["id"]
     id_list: list[ImageId] = list(map(ImageId, id_text_list))
-    result = usecase.search_image(model_id, id_list, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
+    result_size = get_result_size(json_obj)
+    result = usecase.search_image(model_id, id_list, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name, result_size)
     return from_result_to_json(result)
 
 
@@ -215,7 +249,8 @@ def search_name():
         aesthetic_quality_range,
         aesthetic_model_name,
     )
-    result = usecase.search_name(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
+    result_size = get_result_size(args)
+    result = usecase.search_name(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name, result_size)
     return from_result_to_json(result)
 
 
@@ -235,7 +270,8 @@ def search_upload_image():
     binary = base64.b64decode(base64_text)
     image: UploadImage = UploadImage(binary, content_type)
 
-    result = usecase.search_upload_image(model_id, image)
+    result_size = get_result_size(json_obj)
+    result = usecase.search_upload_image(model_id, image, result_size)
     return from_result_to_json(result)
 
 
@@ -257,7 +293,8 @@ def search_random():
     aesthetic_model_name = json_obj["aesthetic_model_name"]
 
     # IDのリストを取得する。
-    result = usecase.search_random(model_id, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
+    result_size = get_result_size(json_obj)
+    result = usecase.search_random(model_id, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name, result_size)
     return from_result_to_json(result)
 
 
@@ -281,7 +318,8 @@ def search_query():
     aesthetic_model_name = json_obj["aesthetic_model_name"]
 
     # IDのリストを取得する。
-    result = usecase.search_query(model_id, search_query, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
+    result_size = get_result_size(json_obj)
+    result = usecase.search_query(model_id, search_query, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name, result_size)
     return from_result_to_json(result)
 
 
@@ -309,7 +347,8 @@ def add_text_features():
     aesthetic_model_name = json_obj["aesthetic_model_name"]
 
     # IDのリストを取得する。
-    result = usecase.add_text_features(model_id, UploadText(text), search_query, strength, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
+    result_size = get_result_size(json_obj)
+    result = usecase.add_text_features(model_id, UploadText(text), search_query, strength, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name, result_size)
     return from_result_to_json(result)
 
 
@@ -334,7 +373,8 @@ def search_tags():
     aesthetic_model_name = json_obj["aesthetic_model_name"]
 
     # IDのリストを取得する。
-    result = usecase.search_tags(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
+    result_size = get_result_size(json_obj)
+    result = usecase.search_tags(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name, result_size)
     return from_result_to_json(result)
 
 
@@ -355,7 +395,8 @@ def search_style_cluster():
 
     aesthetic_model_name = json_obj["aesthetic_model_name"]
 
-    result = usecase.search_style_cluster(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name)
+    result_size = get_result_size(json_obj)
+    result = usecase.search_style_cluster(model_id, UploadText(text), is_regexp, aesthetic_quality_beta, aesthetic_quality_range[0], aesthetic_quality_range[1], aesthetic_model_name, result_size)
     return from_result_to_json(result)
 
 @app.route("/download_images_zip", methods=["POST"])

@@ -11,6 +11,13 @@ import { fileToBase64 } from "./util.js"
  * @typedef {{item:ImageItem, score:number}} ResultItem
  */
 
+const DEFAULT_RESULT_SIZE = 2048
+
+function normalizeResultSize(resultSize) {
+    const normalized = Number.parseInt(resultSize, 10)
+    return Number.isFinite(normalized) && normalized > 0 ? normalized : DEFAULT_RESULT_SIZE
+}
+
 
 /**
  * 画像項目のIDから画像のURLを取得する
@@ -32,11 +39,11 @@ export function getImageOriginalUrl(itemId) {
  * ページ指定で画像項目の一覧を取得する
  *
  * @param {number} page 0始まりのページ番号
- * @param {number} pageSize 取得する件数（デフォルトは1万件）
+ * @param {number} pageSize 取得する件数（デフォルトは初期表示分）
  *
  * @return {Promise<ImageItem[]>}
  */
-export async function getImageItemsByPage(page = 0, pageSize = 10000) {
+export async function getImageItemsByPage(page = 0, pageSize = 60) {
 
     return axios.get(`/image_item`, { params: { page: page, size: pageSize } }).then(res => res.data)
 }
@@ -58,9 +65,19 @@ export async function getImageMetadata(modelName, pretrained, itemId) {
     return axios.get(`/image_meta/${modelName}/${pretrained}/${itemId}`).then(res => res.data)
 }
 
-export async function getImageRatings(modelName, pretrained) {
+export async function getImageRatings(modelName, pretrained, itemIds = []) {
 
-    return axios.get(`/image_ratings/${modelName}/${pretrained}`).then(res => res.data)
+    if(itemIds.length === 0) {
+        return Promise.resolve({})
+    }
+
+    const payload = {
+        params:{
+            id: itemIds
+        }
+    }
+
+    return axios.post(`/image_ratings/${modelName}/${pretrained}`, payload).then(res => res.data)
 }
 
 
@@ -74,7 +91,7 @@ export async function getImageRatings(modelName, pretrained) {
  * 
  * @return {Promise<ResultItem[]>}
  */
-export async function searchText(modelName, pretrained, text, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name) {
+export async function searchText(modelName, pretrained, text, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
 
     let payload = {
 
@@ -84,7 +101,8 @@ export async function searchText(modelName, pretrained, text, aesthetic_quality_
             text : text,
             aesthetic_quality_beta: aesthetic_quality_beta,
             aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name
+            aesthetic_model_name: aesthetic_model_name,
+            result_size: normalizeResultSize(resultSize)
         }
     }
 
@@ -101,7 +119,7 @@ export async function searchText(modelName, pretrained, text, aesthetic_quality_
  * 
  * @return {Promise<ResultItem[]>}
  */
-export async function searchImage(modelName, pretrained, itemId_list, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name) {
+export async function searchImage(modelName, pretrained, itemId_list, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
 
     let payload = {
 
@@ -111,7 +129,8 @@ export async function searchImage(modelName, pretrained, itemId_list, aesthetic_
             id : itemId_list,
             aesthetic_quality_beta: aesthetic_quality_beta,
             aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name
+            aesthetic_model_name: aesthetic_model_name,
+            result_size: normalizeResultSize(resultSize)
         }
     }
 
@@ -127,7 +146,7 @@ export async function searchImage(modelName, pretrained, itemId_list, aesthetic_
  *
  * @return {Promise<ResultItem[]>}
  */
-export async function searchName(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name) {
+export async function searchName(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
 
     let payload = {
 
@@ -138,7 +157,8 @@ export async function searchName(modelName, pretrained, itemId_list, is_regexp, 
             is_regexp : is_regexp.toString(),
             aesthetic_quality_beta: aesthetic_quality_beta,
             aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name
+            aesthetic_model_name: aesthetic_model_name,
+            result_size: normalizeResultSize(resultSize)
         }
     }
 
@@ -155,7 +175,7 @@ export async function searchName(modelName, pretrained, itemId_list, is_regexp, 
  * 
  * @return {Promise<ResultItem[]>}
  */
-export async function searchRandom(modelName, pretrained, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name) {
+export async function searchRandom(modelName, pretrained, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
 
     let payload = {
 
@@ -164,7 +184,8 @@ export async function searchRandom(modelName, pretrained, aesthetic_quality_beta
             pretrained: pretrained,
             aesthetic_quality_beta: aesthetic_quality_beta,
             aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name
+            aesthetic_model_name: aesthetic_model_name,
+            result_size: normalizeResultSize(resultSize)
         }
     }
 
@@ -181,7 +202,7 @@ export async function searchRandom(modelName, pretrained, aesthetic_quality_beta
  * 
  * @return {Promise<ResultItem[]>}
  */
-export async function searchQuery(modelName, pretrained, search_query, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name) {
+export async function searchQuery(modelName, pretrained, search_query, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
 
     let payload = {
 
@@ -191,7 +212,8 @@ export async function searchQuery(modelName, pretrained, search_query, aesthetic
             search_query: search_query,
             aesthetic_quality_beta: aesthetic_quality_beta,
             aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name
+            aesthetic_model_name: aesthetic_model_name,
+            result_size: normalizeResultSize(resultSize)
         }
     }
 
@@ -207,7 +229,7 @@ export async function searchQuery(modelName, pretrained, search_query, aesthetic
  * 
  * @return {Promise<ResultItem[]>}
  */
-export async function addTextFeatures(modelName, pretrained, text, search_query, features_strength, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name) {
+export async function addTextFeatures(modelName, pretrained, text, search_query, features_strength, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
 
     let payload = {
 
@@ -219,7 +241,8 @@ export async function addTextFeatures(modelName, pretrained, text, search_query,
             features_strength: features_strength,
             aesthetic_quality_beta: aesthetic_quality_beta,
             aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name
+            aesthetic_model_name: aesthetic_model_name,
+            result_size: normalizeResultSize(resultSize)
         }
     }
 
@@ -235,7 +258,7 @@ export async function addTextFeatures(modelName, pretrained, text, search_query,
  * 
  * @return {Promise<ResultItem[]>}
  */
-export async function searchTags(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name) {
+export async function searchTags(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
 
     let payload = {
 
@@ -246,7 +269,8 @@ export async function searchTags(modelName, pretrained, itemId_list, is_regexp, 
             is_regexp : is_regexp.toString(),
             aesthetic_quality_beta: aesthetic_quality_beta,
             aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name
+            aesthetic_model_name: aesthetic_model_name,
+            result_size: normalizeResultSize(resultSize)
         }
     }
 
@@ -263,7 +287,7 @@ export async function searchTags(modelName, pretrained, itemId_list, is_regexp, 
  *
  * @return {Promise<ResultItem[]>}
  */
-export async function searchStyleCluster(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name) {
+export async function searchStyleCluster(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
 
     let payload = {
 
@@ -274,7 +298,8 @@ export async function searchStyleCluster(modelName, pretrained, itemId_list, is_
             is_regexp : is_regexp.toString(),
             aesthetic_quality_beta: aesthetic_quality_beta,
             aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name
+            aesthetic_model_name: aesthetic_model_name,
+            result_size: normalizeResultSize(resultSize)
         }
     }
 
@@ -289,14 +314,15 @@ export async function searchStyleCluster(modelName, pretrained, itemId_list, is_
  * @param {File} file
  * @returns {Promise<ResultItem[]>}
  */
-export async function searchUploadImage(modelName, pretrained, file) {
+export async function searchUploadImage(modelName, pretrained, file, resultSize = DEFAULT_RESULT_SIZE) {
     const dataUrl = await fileToBase64(file)
     let payload = {
         params:{
             model_name: modelName,
             pretrained: pretrained,
             base64: dataUrl.split(',')[1],
-            content_type: file.type
+            content_type: file.type,
+            result_size: normalizeResultSize(resultSize)
         }
     }
     return axios.post("/search/uploadimage", payload).then(res => res.data)
