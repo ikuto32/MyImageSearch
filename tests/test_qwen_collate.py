@@ -280,6 +280,134 @@ class QwenCollateTests(unittest.TestCase):
         self.assertFalse(calls["tokenize"])
         self.assertFalse(calls["add_generation_prompt"])
 
+
+    def test_qwen_backend_configures_processor_max_pixels(self):
+        calls = {}
+
+        class FakeImageProcessor:
+            def __init__(self):
+                self.min_pixels = 3136
+                self.max_pixels = None
+                self.size = {"longest_edge": 999999, "shortest_edge": 28}
+
+        class FakeProcessor:
+            def __init__(self):
+                self.image_processor = FakeImageProcessor()
+
+        fake_processor = FakeProcessor()
+
+        class FakeAutoProcessor:
+            @staticmethod
+            def from_pretrained(model_id, trust_remote_code=True):
+                calls["processor_model_id"] = model_id
+                calls["processor_trust_remote_code"] = trust_remote_code
+                return fake_processor
+
+        class FakeParameter:
+            device = "cpu"
+            dtype = "float32"
+
+        class FakeConfig:
+            _attn_implementation = None
+            use_cache = None
+            text_config = None
+            vision_config = None
+
+        class FakeModel:
+            config = FakeConfig()
+
+            def to(self, device):
+                calls["device"] = device
+                return self
+
+            def eval(self):
+                calls["eval"] = True
+                return self
+
+            def parameters(self):
+                return iter([FakeParameter()])
+
+        class FakeAutoModel:
+            @staticmethod
+            def from_pretrained(model_id, torch_dtype=None, trust_remote_code=True):
+                calls["model_id"] = model_id
+                calls["torch_dtype"] = torch_dtype
+                calls["model_trust_remote_code"] = trust_remote_code
+                return FakeModel()
+
+        transformers_mod = types.ModuleType("transformers")
+        transformers_mod.AutoProcessor = FakeAutoProcessor
+        transformers_mod.AutoModel = FakeAutoModel
+        old_transformers = sys.modules.get("transformers")
+        sys.modules["transformers"] = transformers_mod
+        try:
+            backend = QwenVlEmbeddingBackend("fake-qwen", "cpu", output_dim=128, max_pixels=123456)
+        finally:
+            if old_transformers is None:
+                del sys.modules["transformers"]
+            else:
+                sys.modules["transformers"] = old_transformers
+
+        self.assertIs(backend.processor, fake_processor)
+        self.assertEqual(fake_processor.image_processor.max_pixels, 123456)
+        self.assertEqual(fake_processor.image_processor.size["longest_edge"], 123456)
+        self.assertEqual(fake_processor.image_processor.size["shortest_edge"], 28)
+        self.assertEqual(calls["processor_model_id"], "fake-qwen")
+        self.assertEqual(calls["model_id"], "fake-qwen")
+
+    def test_qwen_max_pixels_cli_default_custom_and_validation(self):
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = ["create_index.py"]
+            args = create_index.parse_arguments()
+            self.assertEqual(args.qwen_max_pixels, 262144)
+
+            sys.argv = ["create_index.py", "--qwen-max-pixels", "131072"]
+            args = create_index.parse_arguments()
+            self.assertEqual(args.qwen_max_pixels, 131072)
+
+            sys.argv = ["create_index.py", "--qwen-max-pixels", "0"]
+            with self.assertRaises(SystemExit):
+                create_index.parse_arguments()
+        finally:
+            sys.argv = original_argv
+
+    def test_load_search_embedding_backend_passes_qwen_max_pixels_only_to_qwen(self):
+        original_qwen = create_index.QwenVlEmbeddingBackend
+        original_openclip = create_index.OpenClipEmbeddingBackend
+        seen = {}
+
+        class FakeQwenBackend:
+            def __init__(self, model_id, device, output_dim=None, max_pixels=262144):
+                seen["qwen"] = (model_id, device, output_dim, max_pixels)
+
+        class FakeOpenClipBackend:
+            def __init__(self, model_name, pretrained, device):
+                seen["open_clip"] = (model_name, pretrained, device)
+
+        create_index.QwenVlEmbeddingBackend = FakeQwenBackend
+        create_index.OpenClipEmbeddingBackend = FakeOpenClipBackend
+        try:
+            qwen_args = types.SimpleNamespace(
+                search_backend="qwen_vl",
+                search_model_id="fake-qwen",
+                search_model_out_dim=64,
+                qwen_max_pixels=777,
+            )
+            create_index.load_search_embedding_backend(qwen_args, "cpu")
+            self.assertEqual(seen["qwen"], ("fake-qwen", "cpu", 64, 777))
+
+            open_clip_args = types.SimpleNamespace(
+                search_backend="open_clip",
+                search_model_name="ViT-L-14",
+                search_model_pretrained="openai",
+            )
+            create_index.load_search_embedding_backend(open_clip_args, "cpu")
+            self.assertEqual(seen["open_clip"], ("ViT-L-14", "openai", "cpu"))
+        finally:
+            create_index.QwenVlEmbeddingBackend = original_qwen
+            create_index.OpenClipEmbeddingBackend = original_openclip
+
     def test_pil_image_inputs_bypass_default_collate(self):
         tensor = create_index.torch.FakeTensor
         images = [create_index.Image.Image(), create_index.Image.Image()]
