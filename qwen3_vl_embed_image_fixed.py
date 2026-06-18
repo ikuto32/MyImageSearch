@@ -21,7 +21,8 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from qwen_vl_utils.vision_process import process_vision_info
-from transformers import AutoModel, AutoProcessor
+import transformers
+from transformers import AutoProcessor
 
 
 DEFAULT_MODEL_ID = "Qwen/Qwen3-VL-Embedding-2B"
@@ -334,7 +335,7 @@ def main() -> int:
             padding_side="right",
             trust_remote_code=True,
         )
-        model = AutoModel.from_pretrained(
+        model = transformers.Qwen3VLModel.from_pretrained(
             args.model,
             dtype=dtype,
             attn_implementation=args.attention,
