@@ -1329,6 +1329,30 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
             trust_remote_code=True,
         ).to(device)
         self.model.eval()
+        self.print_qwen_runtime_config(self.model)
+
+    def print_qwen_runtime_config(self, model) -> None:
+        print("model class:", type(model).__name__)
+        print("parameter device:", next(model.parameters()).device)
+        print("parameter dtype:", next(model.parameters()).dtype)
+
+        for name, config in (
+            ("root", model.config),
+            ("text", getattr(model.config, "text_config", None)),
+            ("vision", getattr(model.config, "vision_config", None)),
+        ):
+            if config is None:
+                continue
+
+            print(
+                f"{name} attention:",
+                getattr(config, "_attn_implementation", None),
+            )
+
+        print(
+            "use_cache:",
+            getattr(model.config, "use_cache", None),
+        )
 
     @property
     def preprocess(self):
@@ -1745,9 +1769,10 @@ def extract_image_features(
                         aesthetic_scores = (
                             aesthetic_model
                             .score_batch(aesthetic_features)
-                            .squeeze(-1)
+                            .detach()
                             .cpu()
                             .numpy()
+                            .reshape(-1)
                         )
 
                     if pony_scorer is not None:
