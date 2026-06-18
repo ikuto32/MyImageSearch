@@ -56,12 +56,13 @@ class QwenEmbeddingBackend(SearchEmbeddingBackend):
     """Hugging FaceのQwen系埋め込みモデルを使う検索エンコーダ。"""
 
     def __init__(self, model_id: str) -> None:
-        from transformers import AutoModel, AutoProcessor
+        import transformers
+        from transformers import AutoProcessor
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = torch.float16 if self.device.startswith("cuda") else torch.float32
         self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-        self.model = AutoModel.from_pretrained(
+        self.model = transformers.Qwen3VLModel.from_pretrained(
             model_id,
             torch_dtype=dtype,
             trust_remote_code=True,

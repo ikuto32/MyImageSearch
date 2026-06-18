@@ -1341,7 +1341,8 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
         output_dim: int | None = None,
         max_pixels: int = 262144,
     ):
-        from transformers import AutoModel, AutoProcessor
+        import transformers
+        from transformers import AutoProcessor
 
         self.device = device
         self.model_id = model_id
@@ -1351,7 +1352,7 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
         self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
         self.configure_processor_image_limits(self.processor, self.max_pixels)
         self.print_qwen_processor_config(self.processor)
-        self.model = AutoModel.from_pretrained(
+        self.model = transformers.Qwen3VLModel.from_pretrained(
             model_id,
             torch_dtype=dtype,
             trust_remote_code=True,
