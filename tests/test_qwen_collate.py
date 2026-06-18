@@ -327,7 +327,7 @@ class QwenCollateTests(unittest.TestCase):
             def parameters(self):
                 return iter([FakeParameter()])
 
-        class FakeAutoModel:
+        class FakeQwen3VLModel:
             @staticmethod
             def from_pretrained(model_id, torch_dtype=None, trust_remote_code=True):
                 calls["model_id"] = model_id
@@ -337,7 +337,7 @@ class QwenCollateTests(unittest.TestCase):
 
         transformers_mod = types.ModuleType("transformers")
         transformers_mod.AutoProcessor = FakeAutoProcessor
-        transformers_mod.AutoModel = FakeAutoModel
+        transformers_mod.Qwen3VLModel = FakeQwen3VLModel
         old_transformers = sys.modules.get("transformers")
         sys.modules["transformers"] = transformers_mod
         try:
