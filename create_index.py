@@ -846,6 +846,15 @@ def get_aesthetic_model(path_to_model, clip_model="vit_l_14"):
     return m
 
 
+def positive_int(value: str) -> int:
+    """Argparse type that accepts only positive integers."""
+
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
@@ -888,6 +897,16 @@ def parse_arguments():
         ),
         type=int,
         default=2048,
+    )
+    parser.add_argument(
+        "--qwen-max-pixels",
+        dest="qwen_max_pixels",
+        help=(
+            "Maximum image pixels for Qwen VL preprocessing. Used only with "
+            "--search_backend qwen_vl. Default is 262144 (512x512 equivalent)."
+        ),
+        type=positive_int,
+        default=262144,
     )
 
     parser.add_argument(
@@ -1315,14 +1334,23 @@ class QwenVlImagePreprocess:
 class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
     """Qwen3-VL-Embedding を使う検索エンコーダ。"""
 
-    def __init__(self, model_id: str, device: str, output_dim: int | None = None):
+    def __init__(
+        self,
+        model_id: str,
+        device: str,
+        output_dim: int | None = None,
+        max_pixels: int = 262144,
+    ):
         from transformers import AutoModel, AutoProcessor
 
         self.device = device
         self.model_id = model_id
         self.output_dim = output_dim
+        self.max_pixels = self._validate_max_pixels(max_pixels)
         dtype = torch.float16 if device.startswith("cuda") else torch.float32
         self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        self.configure_processor_image_limits(self.processor, self.max_pixels)
+        self.print_qwen_processor_config(self.processor)
         self.model = AutoModel.from_pretrained(
             model_id,
             torch_dtype=dtype,
@@ -1330,6 +1358,28 @@ class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
         ).to(device)
         self.model.eval()
         self.print_qwen_runtime_config(self.model)
+
+    @staticmethod
+    def _validate_max_pixels(max_pixels: int) -> int:
+        if not isinstance(max_pixels, int) or isinstance(max_pixels, bool) or max_pixels <= 0:
+            raise ValueError("max_pixels must be a positive integer.")
+        return max_pixels
+
+    @classmethod
+    def configure_processor_image_limits(cls, processor, max_pixels: int) -> None:
+        max_pixels = cls._validate_max_pixels(max_pixels)
+        image_processor = getattr(processor, "image_processor", None)
+        if image_processor is None:
+            raise RuntimeError("Qwen VL processor does not expose image_processor.")
+        image_processor.max_pixels = max_pixels
+        size = getattr(image_processor, "size", None)
+        if isinstance(size, dict) and "longest_edge" in size:
+            size["longest_edge"] = max_pixels
+
+    def print_qwen_processor_config(self, processor) -> None:
+        image_processor = getattr(processor, "image_processor", None)
+        print("processor min_pixels:", getattr(image_processor, "min_pixels", None))
+        print("processor max_pixels:", getattr(image_processor, "max_pixels", None))
 
     def print_qwen_runtime_config(self, model) -> None:
         print("model class:", type(model).__name__)
@@ -1523,7 +1573,12 @@ def load_search_embedding_backend(args, device) -> SearchEmbeddingBackend:
             device,
         )
     if args.search_backend == "qwen_vl":
-        return QwenVlEmbeddingBackend(args.search_model_id, device, args.search_model_out_dim)
+        return QwenVlEmbeddingBackend(
+            args.search_model_id,
+            device,
+            args.search_model_out_dim,
+            max_pixels=args.qwen_max_pixels,
+        )
     raise ValueError(f"Unknown search backend: {args.search_backend}")
 
 
