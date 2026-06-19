@@ -1,3 +1,5 @@
+import base64
+import io
 import sys
 import types
 import unittest
@@ -8,12 +10,39 @@ def _install_dummy_modules():
     numpy_mod = types.ModuleType("numpy")
     numpy_mod.ndarray = object
     numpy_mod.float32 = "float32"
+    class FakeArray:
+        def __init__(self, data):
+            self.data = list(data)
+            self.shape = (len(self.data),)
+            self.ndim = 1
+            self.size = len(self.data)
+        def __getitem__(self, key):
+            return FakeArray(self.data[key]) if isinstance(key, slice) else self.data[key]
+        def astype(self, *_, **__):
+            return self
+    numpy_mod.asarray = lambda value, dtype=None: FakeArray(value)
+    numpy_mod.stack = lambda values: FakeStackedArray([value.data for value in values])
+    numpy_mod.isfinite = lambda array: types.SimpleNamespace(all=lambda: all(x == x and x not in (float("inf"), float("-inf")) for x in array.data))
 
     pil_mod = types.ModuleType("PIL")
     pil_image_mod = types.ModuleType("PIL.Image")
     pil_image_file_mod = types.ModuleType("PIL.ImageFile")
     class FakePilImage:
-        pass
+        def __init__(self, width=2, height=3, mode="RGB"):
+            self.size = (width, height)
+            self.mode = mode
+        def copy(self):
+            return FakePilImage(*self.size, mode=self.mode)
+        def convert(self, mode):
+            return FakePilImage(*self.size, mode=mode)
+        def save(self, buffer, format=None):
+            buffer.write(b"\x89PNG\r\n\x1a\n" + f"{self.size[0]}x{self.size[1]}:{self.mode}".encode("ascii"))
+    class FakeStackedArray:
+        def __init__(self, data):
+            self.data = data
+            self.shape = (len(data), len(data[0]) if data else 0)
+        def astype(self, *_, **__):
+            return self
 
     pil_image_mod.MAX_IMAGE_PIXELS = None
     pil_image_mod.Image = FakePilImage
@@ -32,7 +61,17 @@ def _install_dummy_modules():
         "pandas": types.ModuleType("pandas"),
         "tqdm": types.ModuleType("tqdm"),
         "onnxruntime": types.ModuleType("onnxruntime"),
+        "openai": types.ModuleType("openai"),
+        "openai.types": types.ModuleType("openai.types"),
+        "openai.types.create_embedding_response": types.ModuleType("openai.types.create_embedding_response"),
     }
+    class FakeOpenAI:
+        def __init__(self, *_, **__):
+            pass
+    for exc_name in ("APIConnectionError", "APITimeoutError", "APIStatusError"):
+        setattr(dummy_modules["openai"], exc_name, type(exc_name, (Exception,), {}))
+    dummy_modules["openai"].OpenAI = FakeOpenAI
+    dummy_modules["openai.types.create_embedding_response"].CreateEmbeddingResponse = object
 
     torch_mod = types.ModuleType("torch")
     torch_utils = types.ModuleType("torch.utils")
@@ -46,6 +85,8 @@ def _install_dummy_modules():
 
     class FakeTensor:
         def __init__(self, data):
+            if hasattr(data, "data"):
+                data = data.data
             self.data = data
             self._shape = self._infer_shape(data)
 
@@ -158,9 +199,14 @@ def _install_dummy_modules():
         def eval(self):
             return self
 
+    def fake_empty(shape, dtype=None):
+        rows, cols = shape
+        return FakeTensor([[0.0 for _ in range(cols)] for _ in range(rows)])
     torch_mod.FakeTensor = FakeTensor
     torch_mod.is_tensor = lambda value: isinstance(value, FakeTensor)
     torch_mod.stack = fake_stack
+    torch_mod.empty = fake_empty
+    torch_mod.from_numpy = lambda value: FakeTensor(value.data)
     torch_mod.no_grad = lambda fn=None: (fn if fn is not None else (lambda func: func))
     torch_mod.inference_mode = torch_mod.no_grad
     torch_mod.float16 = "float16"
@@ -198,240 +244,117 @@ import create_index
 from create_index import QwenVlEmbeddingBackend, safe_collate
 
 
-class QwenCollateTests(unittest.TestCase):
-    def test_qwen_processor_dicts_are_padded_before_encoding(self):
-        tensor = create_index.torch.FakeTensor
-        samples = [
-            ({
-                "input_ids": tensor([101, 102]),
-                "attention_mask": tensor([1, 1]),
-                "pixel_values": tensor([[1, 2], [3, 4]]),
-                "image_grid_thw": tensor([[1, 1, 2]]),
-            }, None, 0, tensor([1]), tensor([2])),
-            ({
-                "input_ids": tensor([201, 202]),
-                "attention_mask": tensor([1, 1]),
-                "pixel_values": tensor([[5, 6], [7, 8], [9, 10]]),
-                "image_grid_thw": tensor([[1, 1, 3]]),
-            }, None, 1, tensor([3]), tensor([4])),
-        ]
-
-        search_batch, _, _, _, _ = safe_collate(samples)
-
-        self.assertEqual(search_batch["input_ids"].shape, (2, 2))
-        self.assertEqual(search_batch["pixel_values"].shape, (2, 3, 2))
-        self.assertEqual(search_batch["pixel_values"].data[0][2], [0, 0])
-
+class QwenApiBackendTests(unittest.TestCase):
+    def _backend(self, output_dim=2):
         backend = QwenVlEmbeddingBackend.__new__(QwenVlEmbeddingBackend)
-        backend.device = "cpu"
-        backend.output_dim = None
-        seen = {}
+        backend.model_id = "fake-qwen"
+        backend.output_dim = output_dim
+        backend.api_base = "http://127.0.0.1:8000/v1"
+        backend.api_key = "EMPTY"
+        backend.timeout = 300.0
+        backend.max_retries = 2
+        backend.max_concurrency = 2
+        backend.instruction = "Represent the user's input."
+        backend._thread_local = types.SimpleNamespace()
+        return backend
 
-        class FakeModel:
-            def __call__(self, **kwargs):
-                provided_embedding_inputs = sum(
-                    key in kwargs and kwargs[key] is not None
-                    for key in ("input_ids", "inputs_embeds")
-                )
-                if provided_embedding_inputs != 1:
-                    raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
-                seen.update(kwargs)
-                return types.SimpleNamespace(pooler_output=tensor([[1.0], [2.0]]))
+    def test_api_base_normalization(self):
+        self.assertEqual(create_index.normalize_qwen_api_base("http://127.0.0.1:8000"), "http://127.0.0.1:8000/v1")
+        self.assertEqual(create_index.normalize_qwen_api_base("http://127.0.0.1:8000/v1"), "http://127.0.0.1:8000/v1")
+        self.assertEqual(create_index.normalize_qwen_api_base("http://127.0.0.1:8000/v1/"), "http://127.0.0.1:8000/v1")
+        with self.assertRaises(ValueError):
+            create_index.normalize_qwen_api_base("")
 
-        backend.model = FakeModel()
-        internal, features = backend.encode_image_with_internal(search_batch)
+    def test_data_url_shape_and_png(self):
+        image = create_index.Image.Image(4, 5, mode="L")
+        data_url = create_index.pil_image_to_data_url(image)
+        self.assertTrue(data_url.startswith("data:image/png;base64,"))
+        decoded = base64.b64decode(data_url.split(",", 1)[1])
+        self.assertTrue(decoded.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertIn(b"4x5:RGB", decoded)
 
-        self.assertIs(internal, features)
-        self.assertEqual(features.shape, (2, 1))
-        self.assertEqual(seen["input_ids"].shape, (2, 2))
-        self.assertEqual(seen["pixel_values"].shape, (2, 3, 2))
-        self.assertEqual(seen["image_grid_thw"].shape, (2, 3))
+    def test_image_messages_and_body(self):
+        backend = self._backend()
+        messages = backend._image_messages("data:image/png;base64,abc")
+        self.assertEqual([m["role"] for m in messages], ["system", "user", "assistant"])
+        self.assertEqual(messages[0]["content"][0]["text"], "Represent the user's input.")
+        self.assertEqual(messages[1]["content"][0]["image_url"]["url"], "data:image/png;base64,abc")
+        self.assertEqual(messages[1]["content"][1]["text"], "")
+        self.assertEqual(messages[2]["content"][0]["text"], "")
+        self.assertEqual(backend._embedding_body(messages), {
+            "model": "fake-qwen",
+            "messages": messages,
+            "encoding_format": "float",
+            "continue_final_message": True,
+            "add_special_tokens": True,
+        })
 
-    def test_prepare_image_inputs_adds_prompt_tokens_and_images(self):
-        tensor = create_index.torch.FakeTensor
-        images = [create_index.Image.Image(), create_index.Image.Image()]
-        calls = {}
+    def test_batch_encoding_keeps_order_and_truncates(self):
+        backend = self._backend(output_dim=2)
+        calls = []
+        embeddings = [[1, 2, 99], [3, 4, 99], [5, 6, 99]]
+        def fake_post(messages, *, index=None):
+            calls.append(index)
+            return backend._validate_embedding_response(types.SimpleNamespace(data=[types.SimpleNamespace(embedding=embeddings[index])]), index=index)
+        backend._post_embedding = fake_post
+        features = backend._encode_messages_batch([[{"i": i}] for i in range(3)])
+        self.assertEqual(calls, [0, 1, 2])
+        self.assertEqual(features.shape, (3, 2))
+        self.assertEqual(features.device, "cpu")
+        self.assertEqual(features.data, [[1, 2], [3, 4], [5, 6]])
+        internal, image_features = backend.encode_image_with_internal([create_index.Image.Image(), create_index.Image.Image(), create_index.Image.Image()])
+        self.assertEqual(internal.shape, image_features.shape)
 
-        class FakeProcessor:
-            def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
-                calls["messages"] = messages
-                calls["tokenize"] = tokenize
-                calls["add_generation_prompt"] = add_generation_prompt
-                return "<chat><image>Represent this image for retrieval."
+    def test_response_validation_errors(self):
+        backend = self._backend(output_dim=3)
+        with self.assertRaisesRegex(RuntimeError, "any data"):
+            backend._validate_embedding_response(types.SimpleNamespace(data=[]), index=0)
+        with self.assertRaisesRegex(RuntimeError, "empty"):
+            backend._validate_embedding_response(types.SimpleNamespace(data=[types.SimpleNamespace(embedding=[])]), index=0)
+        with self.assertRaisesRegex(RuntimeError, "smaller"):
+            backend._validate_embedding_response(types.SimpleNamespace(data=[types.SimpleNamespace(embedding=[1, 2])]), index=0)
+        with self.assertRaisesRegex(RuntimeError, "NaN or Inf"):
+            backend._validate_embedding_response(types.SimpleNamespace(data=[types.SimpleNamespace(embedding=[1, float("nan"), 3])]), index=0)
+        with self.assertRaisesRegex(RuntimeError, "NaN or Inf"):
+            backend._validate_embedding_response(types.SimpleNamespace(data=[types.SimpleNamespace(embedding=[1, float("inf"), 3])]), index=0)
+        with self.assertRaises(TypeError):
+            backend.encode_image_with_internal(["not-image"])
 
-            def __call__(self, **kwargs):
-                calls["processor_kwargs"] = kwargs
-                return {
-                    "input_ids": tensor([[1, 2], [1, 2]]),
-                    "attention_mask": tensor([[1, 1], [1, 1]]),
-                    "pixel_values": tensor([[3, 4], [5, 6]]),
-                    "image_grid_thw": tensor([[1, 1, 2], [1, 1, 2]]),
-                }
-
-        backend = QwenVlEmbeddingBackend.__new__(QwenVlEmbeddingBackend)
-        backend.processor = FakeProcessor()
-
-        inputs = backend.prepare_image_inputs(images)
-
-        self.assertIn("input_ids", inputs)
-        self.assertIn("pixel_values", inputs)
-        self.assertEqual(calls["processor_kwargs"]["images"], images)
-        self.assertEqual(calls["processor_kwargs"]["text"], ["<chat><image>Represent this image for retrieval."] * 2)
-        self.assertFalse(calls["tokenize"])
-        self.assertFalse(calls["add_generation_prompt"])
-
-
-    def test_qwen_backend_configures_processor_max_pixels(self):
-        calls = {}
-
-        class FakeImageProcessor:
-            def __init__(self):
-                self.min_pixels = 3136
-                self.max_pixels = None
-                self.size = {"longest_edge": 999999, "shortest_edge": 28}
-
-        class FakeProcessor:
-            def __init__(self):
-                self.image_processor = FakeImageProcessor()
-
-        fake_processor = FakeProcessor()
-
-        class FakeAutoProcessor:
-            @staticmethod
-            def from_pretrained(model_id, trust_remote_code=True):
-                calls["processor_model_id"] = model_id
-                calls["processor_trust_remote_code"] = trust_remote_code
-                return fake_processor
-
-        class FakeParameter:
-            device = "cpu"
-            dtype = "float32"
-
-        class FakeConfig:
-            _attn_implementation = None
-            use_cache = None
-            text_config = None
-            vision_config = None
-
-        class FakeModel:
-            config = FakeConfig()
-
-            def to(self, device):
-                calls["device"] = device
-                return self
-
-            def eval(self):
-                calls["eval"] = True
-                return self
-
-            def parameters(self):
-                return iter([FakeParameter()])
-
-        class FakeQwen3VLModel:
-            @staticmethod
-            def from_pretrained(model_id, torch_dtype=None, trust_remote_code=True):
-                calls["model_id"] = model_id
-                calls["torch_dtype"] = torch_dtype
-                calls["model_trust_remote_code"] = trust_remote_code
-                return FakeModel()
-
-        transformers_mod = types.ModuleType("transformers")
-        transformers_mod.AutoProcessor = FakeAutoProcessor
-        transformers_mod.Qwen3VLModel = FakeQwen3VLModel
-        old_transformers = sys.modules.get("transformers")
-        sys.modules["transformers"] = transformers_mod
-        try:
-            backend = QwenVlEmbeddingBackend("fake-qwen", "cpu", output_dim=128, max_pixels=123456)
-        finally:
-            if old_transformers is None:
-                del sys.modules["transformers"]
-            else:
-                sys.modules["transformers"] = old_transformers
-
-        self.assertIs(backend.processor, fake_processor)
-        self.assertEqual(fake_processor.image_processor.max_pixels, 123456)
-        self.assertEqual(fake_processor.image_processor.size["longest_edge"], 123456)
-        self.assertEqual(fake_processor.image_processor.size["shortest_edge"], 28)
-        self.assertEqual(calls["processor_model_id"], "fake-qwen")
-        self.assertEqual(calls["model_id"], "fake-qwen")
-
-    def test_qwen_max_pixels_cli_default_custom_and_validation(self):
-        original_argv = sys.argv[:]
-        try:
-            sys.argv = ["create_index.py"]
-            args = create_index.parse_arguments()
-            self.assertEqual(args.qwen_max_pixels, 262144)
-
-            sys.argv = ["create_index.py", "--qwen-max-pixels", "131072"]
-            args = create_index.parse_arguments()
-            self.assertEqual(args.qwen_max_pixels, 131072)
-
-            sys.argv = ["create_index.py", "--qwen-max-pixels", "0"]
-            with self.assertRaises(SystemExit):
-                create_index.parse_arguments()
-        finally:
-            sys.argv = original_argv
-
-    def test_load_search_embedding_backend_passes_qwen_max_pixels_only_to_qwen(self):
-        original_qwen = create_index.QwenVlEmbeddingBackend
-        original_openclip = create_index.OpenClipEmbeddingBackend
-        seen = {}
-
-        class FakeQwenBackend:
-            def __init__(self, model_id, device, output_dim=None, max_pixels=262144):
-                seen["qwen"] = (model_id, device, output_dim, max_pixels)
-
-        class FakeOpenClipBackend:
-            def __init__(self, model_name, pretrained, device):
-                seen["open_clip"] = (model_name, pretrained, device)
-
-        create_index.QwenVlEmbeddingBackend = FakeQwenBackend
-        create_index.OpenClipEmbeddingBackend = FakeOpenClipBackend
-        try:
-            qwen_args = types.SimpleNamespace(
-                search_backend="qwen_vl",
-                search_model_id="fake-qwen",
-                search_model_out_dim=64,
-                qwen_max_pixels=777,
-            )
-            create_index.load_search_embedding_backend(qwen_args, "cpu")
-            self.assertEqual(seen["qwen"], ("fake-qwen", "cpu", 64, 777))
-
-            open_clip_args = types.SimpleNamespace(
-                search_backend="open_clip",
-                search_model_name="ViT-L-14",
-                search_model_pretrained="openai",
-            )
-            create_index.load_search_embedding_backend(open_clip_args, "cpu")
-            self.assertEqual(seen["open_clip"], ("ViT-L-14", "openai", "cpu"))
-        finally:
-            create_index.QwenVlEmbeddingBackend = original_qwen
-            create_index.OpenClipEmbeddingBackend = original_openclip
+    def test_text_messages(self):
+        backend = self._backend()
+        messages = backend._text_messages("hello")
+        self.assertEqual(messages[1]["content"], [{"type": "text", "text": "hello"}])
 
     def test_pil_image_inputs_bypass_default_collate(self):
         tensor = create_index.torch.FakeTensor
         images = [create_index.Image.Image(), create_index.Image.Image()]
-        samples = [
-            (images[0], None, 0, tensor([1]), tensor([2])),
-            (images[1], None, 1, tensor([3]), tensor([4])),
-        ]
-
-        search_batch, _, _, _, _ = safe_collate(samples)
-
-        self.assertIsInstance(search_batch, list)
+        samples = [(images[0], None, 0, tensor([1]), tensor([2])), (images[1], None, 1, tensor([3]), tensor([4]))]
+        search_batch, metadata, indices, wd, z3d = safe_collate(samples)
         self.assertEqual(search_batch, images)
-        self.assertTrue(all(isinstance(item, create_index.Image.Image) for item in search_batch))
+        self.assertIsNone(metadata)
+        self.assertEqual(indices, [0, 1])
+        self.assertEqual(wd.shape, (2, 1))
+        self.assertEqual(z3d.shape, (2, 1))
 
     def test_openclip_tensor_inputs_stay_on_default_collate_path(self):
         tensor = create_index.torch.FakeTensor
-        samples = [
-            (tensor([[1, 2], [3, 4]]), None, 0, tensor([1]), tensor([2])),
-            (tensor([[5, 6], [7, 8]]), None, 1, tensor([3]), tensor([4])),
-        ]
-
+        samples = [(tensor([[1, 2], [3, 4]]), None, 0, tensor([1]), tensor([2])), (tensor([[5, 6], [7, 8]]), None, 1, tensor([3]), tensor([4]))]
         search_batch, _, _, _, _ = safe_collate(samples)
-
         self.assertEqual(search_batch.shape, (2, 2, 2))
+
+    def test_cli_defaults_and_backend_args(self):
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = ["create_index.py"]
+            args = create_index.parse_arguments()
+            self.assertIsNone(args.qwen_max_pixels)
+            self.assertEqual(args.qwen_api_base, "http://127.0.0.1:8000/v1")
+            self.assertEqual(args.qwen_api_key, "EMPTY")
+            self.assertEqual(args.qwen_api_timeout, 300.0)
+            self.assertEqual(args.qwen_api_max_retries, 2)
+            self.assertEqual(args.qwen_api_concurrency, 4)
+        finally:
+            sys.argv = original_argv
 
 
 if __name__ == "__main__":
