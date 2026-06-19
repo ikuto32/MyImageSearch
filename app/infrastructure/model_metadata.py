@@ -37,6 +37,19 @@ def default_model_dir_name(model_id: ModelId) -> str:
     return f"{model_id.model_name}-{model_id.pretrained}"
 
 
+def normalize_model_id(model_id: ModelId) -> ModelId:
+    """Normalize UI-supplied model IDs to the index layout used by create_index.py.
+
+    Non-OpenCLIP backends such as Qwen are stored by repository/model ID only
+    (for example ``Qwen--Qwen3-VL-Embedding-2B``) and do not have an OpenCLIP
+    pretrained tag. Older UI state can still submit ``pretrained="openai"``;
+    clear that stale value so lookups do not target ``Qwen/...-openai``.
+    """
+    if "/" in model_id.model_name and model_id.pretrained == "openai":
+        return ModelId(model_id.model_name, "")
+    return model_id
+
+
 def has_search_index(directory: pathlib.Path) -> bool:
     return (
         directory.is_dir()
