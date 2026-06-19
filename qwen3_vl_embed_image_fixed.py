@@ -1,37 +1,57 @@
 #!/usr/bin/env python
 """
-Standalone single-image inference for Qwen3-VL-Embedding.
+Single-image inference for Qwen3-VL-Embedding through a vLLM
+OpenAI-compatible HTTP API.
 
-Example:
-    uv run python qwen3_vl_embed_image.py "C:\\path\\to\\image.jpg"
-    uv run python qwen3_vl_embed_image.py image.jpg --max-pixels 262144 --output embedding.npy
+The vLLM server must be started with ``--runner pooling``.
+
+Examples:
+    uv run python qwen3_vl_embed_image_vllm_api.py image.jpg
+    uv run python qwen3_vl_embed_image_vllm_api.py image.jpg \
+        --warmup 1 --repeat 5 --output embedding.npy
+    uv run python qwen3_vl_embed_image_vllm_api.py "C:\\images\\1.png" \
+        --api-base http://127.0.0.1:8000/v1
+
+Image preprocessing options such as min_pixels, max_pixels, and max_model_len
+belong to the vLLM server process, not this client.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import io
 import json
+import mimetypes
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
-import torch.nn.functional as F
-from PIL import Image
-from qwen_vl_utils.vision_process import process_vision_info
-import transformers
-from transformers import AutoProcessor
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
+from openai.types.create_embedding_response import CreateEmbeddingResponse
+from PIL import Image, UnidentifiedImageError
 
 
 DEFAULT_MODEL_ID = "Qwen/Qwen3-VL-Embedding-2B"
 DEFAULT_INSTRUCTION = "Represent the user's input."
+DEFAULT_API_BASE = "http://127.0.0.1:8000/v1"
+SUPPORTED_DIRECT_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate a Qwen3-VL-Embedding vector for one local image."
+        description=(
+            "Generate a Qwen3-VL-Embedding vector for one local image by "
+            "calling a vLLM OpenAI-compatible API server."
+        )
     )
     parser.add_argument(
         "image_positional",
@@ -47,9 +67,25 @@ def parse_args() -> argparse.Namespace:
         help="Path to the input image. Overrides the positional path.",
     )
     parser.add_argument(
+        "--api-base",
+        default=os.environ.get("VLLM_API_BASE", DEFAULT_API_BASE),
+        help=(
+            "vLLM OpenAI-compatible API base URL. The /v1 suffix is added "
+            f"when omitted. Default: {DEFAULT_API_BASE}"
+        ),
+    )
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("VLLM_API_KEY", "EMPTY"),
+        help="API key configured on the vLLM server. Default: EMPTY.",
+    )
+    parser.add_argument(
         "--model",
-        default=DEFAULT_MODEL_ID,
-        help=f"Model ID or local model directory. Default: {DEFAULT_MODEL_ID}",
+        default=os.environ.get("VLLM_MODEL_ID", DEFAULT_MODEL_ID),
+        help=(
+            "Served model name exposed by vLLM. "
+            f"Default: {DEFAULT_MODEL_ID}"
+        ),
     )
     parser.add_argument(
         "--instruction",
@@ -57,56 +93,42 @@ def parse_args() -> argparse.Namespace:
         help="System instruction used when creating the embedding.",
     )
     parser.add_argument(
-        "--max-pixels",
-        type=int,
-        default=1_310_720,
-        help=(
-            "Maximum image pixels passed to Qwen preprocessing. "
-            "Use 262144 for a faster 512x512-equivalent test. "
-            "Default: 1310720."
-        ),
-    )
-    parser.add_argument(
-        "--min-pixels",
-        type=int,
-        default=4096,
-        help="Minimum image pixels. Default: 4096.",
-    )
-    parser.add_argument(
-        "--max-length",
-        type=int,
-        default=8192,
-        help="Maximum token sequence length. Default: 8192.",
-    )
-    parser.add_argument(
         "--output-dim",
         type=int,
         default=2048,
-        help="Output embedding dimension, from 64 to 2048. Default: 2048.",
-    )
-    parser.add_argument(
-        "--dtype",
-        choices=("float16", "bfloat16", "float32"),
-        default="float16",
-        help="Model dtype. Default: float16.",
-    )
-    parser.add_argument(
-        "--attention",
-        choices=("sdpa", "flash_attention_2", "eager"),
-        default="sdpa",
-        help="Attention implementation. Default: sdpa.",
+        help=(
+            "Output dimension after Matryoshka truncation and L2 "
+            "renormalization. For the 2B model: 64 to 2048. Default: 2048."
+        ),
     )
     parser.add_argument(
         "--warmup",
         type=int,
         default=0,
-        help="Number of unmeasured warm-up forwards. Default: 0.",
+        help="Number of unmeasured API inference requests. Default: 0.",
     )
     parser.add_argument(
         "--repeat",
         type=int,
         default=1,
-        help="Number of measured forwards. Default: 1.",
+        help="Number of measured API inference requests. Default: 1.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="Per-request timeout in seconds. Default: 300.",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=2,
+        help="Maximum automatic HTTP retries by the OpenAI client. Default: 2.",
+    )
+    parser.add_argument(
+        "--skip-server-check",
+        action="store_true",
+        help="Skip the initial GET /v1/models connectivity check.",
     )
     parser.add_argument(
         "--output",
@@ -128,43 +150,66 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_dtype(name: str, device: torch.device) -> torch.dtype:
-    mapping = {
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "float32": torch.float32,
+def normalize_api_base(api_base: str) -> str:
+    normalized = api_base.strip().rstrip("/")
+    if not normalized:
+        raise ValueError("--api-base must not be empty.")
+    if not normalized.endswith("/v1"):
+        normalized += "/v1"
+    return normalized
+
+
+def image_to_data_url(path: Path) -> tuple[str, dict[str, Any]]:
+    """Validate an image and encode it as a Data URL.
+
+    Common web image formats are sent without transcoding. Other Pillow-readable
+    formats are converted losslessly to PNG so the API server receives a format
+    with broad multimodal-loader support.
+    """
+    raw = path.read_bytes()
+
+    try:
+        with Image.open(io.BytesIO(raw)) as image:
+            image.load()
+            width, height = image.size
+            image_format = image.format
+            detected_mime = Image.MIME.get(image_format or "")
+
+            guessed_mime, _ = mimetypes.guess_type(path.name)
+            mime_type = detected_mime or guessed_mime or "application/octet-stream"
+
+            transcoded = mime_type not in SUPPORTED_DIRECT_MIME_TYPES
+            if transcoded:
+                converted = image.convert("RGB")
+                buffer = io.BytesIO()
+                converted.save(buffer, format="PNG", optimize=False)
+                raw = buffer.getvalue()
+                mime_type = "image/png"
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValueError(f"Unsupported or damaged image: {path}") from exc
+
+    encoded = base64.b64encode(raw).decode("ascii")
+    data_url = f"data:{mime_type};base64,{encoded}"
+    diagnostics = {
+        "width": width,
+        "height": height,
+        "source_format": image_format,
+        "sent_mime_type": mime_type,
+        "source_bytes": path.stat().st_size,
+        "sent_bytes": len(raw),
+        "data_url_chars": len(data_url),
+        "transcoded_to_png": transcoded,
     }
-    dtype = mapping[name]
-
-    if device.type == "cpu" and dtype == torch.float16:
-        print(
-            "Warning: float16 on CPU is not recommended; using float32 instead.",
-            file=sys.stderr,
-        )
-        return torch.float32
-
-    return dtype
+    return data_url, diagnostics
 
 
-def synchronize(device: torch.device) -> None:
-    if device.type == "cuda":
-        torch.cuda.synchronize(device)
-
-
-def format_bytes(value: int) -> str:
-    return f"{value / (1024 ** 3):.3f} GiB"
-
-
-def build_inputs(
-    processor: Any,
-    image: Image.Image,
+def build_messages(
     *,
+    image_data_url: str,
     instruction: str,
-    min_pixels: int,
-    max_pixels: int,
-    max_length: int,
-) -> dict[str, torch.Tensor]:
-    conversation = [
+) -> list[dict[str, Any]]:
+    """Build the Qwen3-VL-Embedding message layout used by vLLM."""
+    return [
         {
             "role": "system",
             "content": [{"type": "text", "text": instruction}],
@@ -173,105 +218,58 @@ def build_inputs(
             "role": "user",
             "content": [
                 {
-                    "type": "image",
-                    "image": image,
-                    "min_pixels": min_pixels,
-                    "max_pixels": max_pixels,
-                }
+                    "type": "image_url",
+                    "image_url": {"url": image_data_url},
+                },
+                {"type": "text", "text": ""},
             ],
         },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": ""}],
+        },
     ]
-    conversations = [conversation]
 
-    prompt = processor.apply_chat_template(
-        conversations,
-        add_generation_prompt=True,
-        tokenize=False,
+
+def create_chat_embedding(
+    client: OpenAI,
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+) -> CreateEmbeddingResponse:
+    """Call vLLM's multimodal extension of POST /v1/embeddings."""
+    return client.post(
+        "/embeddings",
+        cast_to=CreateEmbeddingResponse,
+        body={
+            "model": model,
+            "messages": messages,
+            "encoding_format": "float",
+            "continue_final_message": True,
+            "add_special_tokens": True,
+        },
     )
 
-    images, video_inputs, video_kwargs = process_vision_info(
-        conversations,
-        image_patch_size=16,
-        return_video_metadata=True,
-        return_video_kwargs=True,
-    )
 
-    if video_inputs is not None:
-        videos, video_metadata = zip(*video_inputs)
-        videos = list(videos)
-        video_metadata = list(video_metadata)
-    else:
-        videos = None
-        video_metadata = None
-
-    inputs = processor(
-        text=prompt,
-        images=images,
-        videos=videos,
-        video_metadata=video_metadata,
-        truncation=True,
-        max_length=max_length,
-        padding=True,
-        do_resize=False,
-        return_tensors="pt",
-        **video_kwargs,
-    )
-
-    return dict(inputs)
-
-
-def move_inputs(
-    inputs: dict[str, torch.Tensor],
-    device: torch.device,
-) -> dict[str, torch.Tensor]:
-    return {
-        key: value.to(device=device, non_blocking=True)
-        if torch.is_tensor(value)
-        else value
-        for key, value in inputs.items()
-    }
-
-
-def pool_last_valid_token(
-    last_hidden_state: torch.Tensor,
-    attention_mask: torch.Tensor,
-) -> torch.Tensor:
-    if last_hidden_state.ndim != 3:
+def truncate_and_normalize(
+    embedding_values: list[float],
+    output_dim: int,
+) -> np.ndarray:
+    raw = np.asarray(embedding_values, dtype=np.float32)
+    if raw.ndim != 1:
+        raise ValueError(f"Expected a 1-D embedding, got shape {raw.shape}.")
+    if raw.size < output_dim:
         raise ValueError(
-            "Expected last_hidden_state with shape (batch, sequence, hidden), "
-            f"got {tuple(last_hidden_state.shape)}"
-        )
-    if attention_mask.ndim != 2:
-        raise ValueError(
-            "Expected attention_mask with shape (batch, sequence), "
-            f"got {tuple(attention_mask.shape)}"
+            f"Server returned {raw.size} dimensions, fewer than "
+            f"--output-dim={output_dim}."
         )
 
-    last_from_end = attention_mask.flip(dims=[1]).argmax(dim=1)
-    columns = attention_mask.shape[1] - last_from_end - 1
-    rows = torch.arange(last_hidden_state.shape[0], device=last_hidden_state.device)
-    return last_hidden_state[rows, columns]
-
-
-def print_input_diagnostics(inputs: dict[str, torch.Tensor]) -> None:
-    print("\n=== Input diagnostics ===")
-    for key, value in inputs.items():
-        if torch.is_tensor(value):
-            print(
-                f"{key}: shape={tuple(value.shape)}, "
-                f"dtype={value.dtype}, device={value.device}"
-            )
-
-    grid = inputs.get("image_grid_thw")
-    if torch.is_tensor(grid):
-        grid_cpu = grid.detach().to("cpu", dtype=torch.int64)
-        visual_tokens = grid_cpu.prod(dim=-1) // 4
-        print(f"image_grid_thw: {grid_cpu.tolist()}")
-        print(f"estimated merged visual tokens: {visual_tokens.tolist()}")
-
-    input_ids = inputs.get("input_ids")
-    if torch.is_tensor(input_ids):
-        print(f"sequence length: {input_ids.shape[1]}")
+    embedding = np.ascontiguousarray(raw[:output_dim])
+    norm = float(np.linalg.norm(embedding))
+    if not np.isfinite(norm) or norm <= 0.0:
+        raise ValueError(f"Invalid embedding norm: {norm!r}.")
+    embedding /= norm
+    return embedding
 
 
 def save_embedding(path: Path, embedding: np.ndarray) -> None:
@@ -291,238 +289,182 @@ def save_embedding(path: Path, embedding: np.ndarray) -> None:
         )
 
 
-def main() -> int:
-    args = parse_args()
-    args.image = args.image_option or args.image_positional or Path("images/1.png")
+def format_bytes(value: int) -> str:
+    units = ("B", "KiB", "MiB", "GiB")
+    amount = float(value)
+    for unit in units:
+        if amount < 1024.0 or unit == units[-1]:
+            return f"{amount:.2f} {unit}"
+        amount /= 1024.0
+    raise AssertionError("unreachable")
 
-    if not args.image.is_file():
-        print(f"Image not found: {args.image}", file=sys.stderr)
-        return 2
 
-    if not 64 <= args.output_dim <= 2048:
-        print("--output-dim must be between 64 and 2048.", file=sys.stderr)
-        return 2
-
-    if args.min_pixels <= 0 or args.max_pixels < args.min_pixels:
+def print_api_error(exc: Exception) -> None:
+    if isinstance(exc, APIStatusError):
         print(
-            "--max-pixels must be greater than or equal to --min-pixels.",
+            f"API request failed: HTTP {exc.status_code}: {exc.message}",
             file=sys.stderr,
         )
-        return 2
+        try:
+            print(f"response: {exc.response.text}", file=sys.stderr)
+        except Exception:
+            pass
+    elif isinstance(exc, APITimeoutError):
+        print(f"API request timed out: {exc}", file=sys.stderr)
+    elif isinstance(exc, APIConnectionError):
+        print(f"Could not connect to the vLLM API server: {exc}", file=sys.stderr)
+    else:
+        print(f"Inference failed: {type(exc).__name__}: {exc}", file=sys.stderr)
 
+
+def main() -> int:
+    args = parse_args()
+    image_path = args.image_option or args.image_positional or Path("images/1.png")
+
+    if not image_path.is_file():
+        print(f"Image not found: {image_path}", file=sys.stderr)
+        return 2
+    if not 64 <= args.output_dim <= 2048:
+        print("--output-dim must be between 64 and 2048 for the 2B model.", file=sys.stderr)
+        return 2
     if args.repeat < 1 or args.warmup < 0:
         print("--repeat must be >= 1 and --warmup must be >= 0.", file=sys.stderr)
         return 2
+    if args.timeout <= 0:
+        print("--timeout must be greater than 0.", file=sys.stderr)
+        return 2
+    if args.max_retries < 0:
+        print("--max-retries must be >= 0.", file=sys.stderr)
+        return 2
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    dtype = resolve_dtype(args.dtype, device)
+    try:
+        api_base = normalize_api_base(args.api_base)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
-    print("=== Runtime ===")
-    print(f"torch: {torch.__version__}")
-    print(f"device: {device}")
-    if device.type == "cuda":
-        print(f"GPU: {torch.cuda.get_device_name(device)}")
-        print(f"compute capability: {torch.cuda.get_device_capability(device)}")
-        print(f"CUDA runtime: {torch.version.cuda}")
-    print(f"dtype: {dtype}")
-    print(f"attention: {args.attention}")
+    print("=== API client ===")
+    print(f"API base: {api_base}")
     print(f"model: {args.model}")
+    print(f"timeout: {args.timeout:.1f} s")
+    print(f"max retries: {args.max_retries}")
 
-    model_load_start = time.perf_counter()
+    encode_start = time.perf_counter()
     try:
-        processor = AutoProcessor.from_pretrained(
-            args.model,
-            padding_side="right",
-            trust_remote_code=True,
-        )
-        model = transformers.Qwen3VLModel.from_pretrained(
-            args.model,
-            dtype=dtype,
-            attn_implementation=args.attention,
-            trust_remote_code=True,
-        ).to(device)
-    except Exception as exc:
-        print(
-            f"Model loading failed: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
-        if args.attention == "flash_attention_2":
-            print(
-                "flash_attention_2 may not be installed or supported in this environment. "
-                "Retry with --attention sdpa.",
-                file=sys.stderr,
-            )
+        image_data_url, image_info = image_to_data_url(image_path)
+    except (OSError, ValueError) as exc:
+        print(f"Image loading failed: {exc}", file=sys.stderr)
         return 1
+    encode_seconds = time.perf_counter() - encode_start
 
-    model.eval()
-    synchronize(device)
-    model_load_seconds = time.perf_counter() - model_load_start
-
-    print("\n=== Model ===")
-    print(f"class: {type(model).__name__}")
-    print(f"parameter device: {next(model.parameters()).device}")
-    print(f"parameter dtype: {next(model.parameters()).dtype}")
-    print(
-        "root attention:",
-        getattr(model.config, "_attn_implementation", None),
-    )
-    text_config = getattr(model.config, "text_config", None)
-    vision_config = getattr(model.config, "vision_config", None)
-    if text_config is not None:
-        print(
-            "text attention:",
-            getattr(text_config, "_attn_implementation", None),
-        )
-    if vision_config is not None:
-        print(
-            "vision attention:",
-            getattr(vision_config, "_attn_implementation", None),
-        )
-    print(f"model load: {model_load_seconds:.3f} s")
-
-    image_load_start = time.perf_counter()
-    try:
-        with Image.open(args.image) as source:
-            image = source.convert("RGB").copy()
-    except Exception as exc:
-        print(
-            f"Image loading failed: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
-        return 1
-
-    image_load_seconds = time.perf_counter() - image_load_start
     print("\n=== Image ===")
-    print(f"path: {args.image.resolve()}")
-    print(f"size: {image.width}x{image.height}")
-    print(f"image load: {image_load_seconds:.3f} s")
-    print(f"min_pixels: {args.min_pixels}")
-    print(f"max_pixels: {args.max_pixels}")
+    print(f"path: {image_path.resolve()}")
+    print(f"size: {image_info['width']}x{image_info['height']}")
+    print(f"source format: {image_info['source_format']}")
+    print(f"sent MIME type: {image_info['sent_mime_type']}")
+    print(f"source bytes: {format_bytes(image_info['source_bytes'])}")
+    print(f"sent bytes: {format_bytes(image_info['sent_bytes'])}")
+    print(f"transcoded to PNG: {image_info['transcoded_to_png']}")
+    print(f"Data URL preparation: {encode_seconds:.3f} s")
 
-    preprocess_start = time.perf_counter()
-    try:
-        inputs_cpu = build_inputs(
-            processor,
-            image,
-            instruction=args.instruction,
-            min_pixels=args.min_pixels,
-            max_pixels=args.max_pixels,
-            max_length=args.max_length,
-        )
-    except Exception as exc:
-        print(
-            f"Preprocessing failed: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
-        return 1
+    messages = build_messages(
+        image_data_url=image_data_url,
+        instruction=args.instruction,
+    )
+    client = OpenAI(
+        base_url=api_base,
+        api_key=args.api_key,
+        timeout=args.timeout,
+        max_retries=args.max_retries,
+    )
 
-    preprocess_seconds = time.perf_counter() - preprocess_start
-
-    transfer_start = time.perf_counter()
-    inputs = move_inputs(inputs_cpu, device)
-    synchronize(device)
-    transfer_seconds = time.perf_counter() - transfer_start
-
-    print_input_diagnostics(inputs)
-    print(f"preprocess: {preprocess_seconds:.3f} s")
-    print(f"host-to-device: {transfer_seconds:.3f} s")
-
-    if device.type == "cuda":
-        torch.cuda.reset_peak_memory_stats(device)
-
-    def run_forward() -> torch.Tensor:
-        with torch.inference_mode():
-            outputs = model(
-                **inputs,
-                return_dict=True,
-                use_cache=False,
-                output_attentions=False,
-                output_hidden_states=False,
-            )
-            hidden = getattr(outputs, "last_hidden_state", None)
-            if hidden is None and isinstance(outputs, (tuple, list)) and outputs:
-                hidden = outputs[0]
-            if hidden is None:
-                raise RuntimeError(
-                    f"{type(outputs).__name__} did not return last_hidden_state."
+    if not args.skip_server_check:
+        try:
+            model_list = client.models.list()
+            served_models = [item.id for item in model_list.data]
+            print("\n=== Server ===")
+            print(f"served models: {served_models}")
+            if served_models and args.model not in served_models:
+                print(
+                    "Warning: --model is not present in GET /v1/models. "
+                    "Use the exact --served-model-name configured on the server.",
+                    file=sys.stderr,
                 )
-
-            embedding = pool_last_valid_token(
-                hidden,
-                inputs["attention_mask"],
-            )
-            embedding = embedding[..., : args.output_dim].contiguous()
-            embedding = F.normalize(embedding.float(), p=2, dim=-1)
-            return embedding
+        except Exception as exc:
+            print_api_error(exc)
+            return 1
 
     try:
         for index in range(args.warmup):
-            _ = run_forward()
-            synchronize(device)
+            _ = create_chat_embedding(
+                client,
+                model=args.model,
+                messages=messages,
+            )
             print(f"warmup {index + 1}/{args.warmup}: complete")
 
-        times: list[float] = []
-        embedding = None
-
+        elapsed_times: list[float] = []
+        response: CreateEmbeddingResponse | None = None
         for index in range(args.repeat):
-            synchronize(device)
-            forward_start = time.perf_counter()
-            embedding = run_forward()
-            synchronize(device)
-            elapsed = time.perf_counter() - forward_start
-            times.append(elapsed)
-            print(f"forward {index + 1}/{args.repeat}: {elapsed:.3f} s")
-
-        assert embedding is not None
+            started = time.perf_counter()
+            response = create_chat_embedding(
+                client,
+                model=args.model,
+                messages=messages,
+            )
+            elapsed = time.perf_counter() - started
+            elapsed_times.append(elapsed)
+            print(f"request {index + 1}/{args.repeat}: {elapsed:.3f} s")
     except Exception as exc:
-        print(
-            f"Forward failed: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
+        print_api_error(exc)
+        return 1
+    finally:
+        client.close()
+
+    if response is None or not response.data:
+        print("The server returned no embedding data.", file=sys.stderr)
         return 1
 
-    embedding_np = (
-        embedding[0]
-        .detach()
-        .to(device="cpu", dtype=torch.float32)
-        .numpy()
-    )
+    try:
+        embedding = truncate_and_normalize(
+            response.data[0].embedding,
+            args.output_dim,
+        )
+    except ValueError as exc:
+        print(f"Invalid embedding response: {exc}", file=sys.stderr)
+        return 1
 
     print("\n=== Result ===")
-    print(f"embedding shape: {embedding_np.shape}")
-    print(f"embedding dtype: {embedding_np.dtype}")
-    print(f"L2 norm: {np.linalg.norm(embedding_np):.8f}")
-    print(f"finite: {bool(np.isfinite(embedding_np).all())}")
-    print(f"forward mean: {np.mean(times):.3f} s")
-    print(f"forward min: {np.min(times):.3f} s")
-    print(f"forward max: {np.max(times):.3f} s")
+    print(f"embedding shape: {embedding.shape}")
+    print(f"embedding dtype: {embedding.dtype}")
+    print(f"L2 norm: {np.linalg.norm(embedding):.8f}")
+    print(f"finite: {bool(np.isfinite(embedding).all())}")
+    print(f"request mean: {np.mean(elapsed_times):.3f} s")
+    print(f"request min: {np.min(elapsed_times):.3f} s")
+    print(f"request max: {np.max(elapsed_times):.3f} s")
 
-    if device.type == "cuda":
-        print(
-            "peak CUDA allocated:",
-            format_bytes(torch.cuda.max_memory_allocated(device)),
-        )
-        print(
-            "peak CUDA reserved:",
-            format_bytes(torch.cuda.max_memory_reserved(device)),
-        )
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        total_tokens = getattr(usage, "total_tokens", None)
+        if prompt_tokens is not None:
+            print(f"prompt tokens: {prompt_tokens}")
+        if total_tokens is not None:
+            print(f"total tokens: {total_tokens}")
 
     if args.print_full:
         print("embedding:")
-        print(json.dumps(embedding_np.tolist()))
+        print(json.dumps(embedding.tolist()))
     else:
-        count = max(0, min(args.print_values, embedding_np.size))
+        count = max(0, min(args.print_values, embedding.size))
         print(f"first {count} values:")
-        print(np.array2string(embedding_np[:count], precision=8, separator=", "))
+        print(np.array2string(embedding[:count], precision=8, separator=", "))
 
     if args.output is not None:
         try:
-            save_embedding(args.output, embedding_np)
-        except Exception as exc:
-            print(
-                f"Saving failed: {type(exc).__name__}: {exc}",
-                file=sys.stderr,
-            )
+            save_embedding(args.output, embedding)
+        except (OSError, ValueError) as exc:
+            print(f"Saving failed: {exc}", file=sys.stderr)
             return 1
         print(f"saved: {args.output.resolve()}")
 
