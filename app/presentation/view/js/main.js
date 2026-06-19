@@ -103,6 +103,7 @@ const app = Vue.createApp({
             this.initImage()
         },
         model_name(){
+            if (this.syncPretrainedForSelectedModel()) return
             this.onModelChange()
         },
         pretrained(){
@@ -118,7 +119,7 @@ const app = Vue.createApp({
             const values = this.modelItems
                 .filter(item => item.model_name === this.model_name)
                 .map(item => item.pretrained)
-            return [...new Set([this.pretrained, ...values])]
+            return values.length > 0 ? [...new Set(values)] : [this.pretrained]
         },
     },
     methods:{
@@ -137,7 +138,21 @@ const app = Vue.createApp({
             return repository.getModelItems()
             .then(items => {
                 this.modelItems = items
+                this.syncPretrainedForSelectedModel()
             })
+        },
+
+        syncPretrainedForSelectedModel() {
+            const candidates = this.modelItems
+                .filter(item => item.model_name === this.model_name)
+                .map(item => item.pretrained)
+
+            if (candidates.length === 0 || candidates.includes(this.pretrained)) {
+                return false
+            }
+
+            this.pretrained = candidates[0]
+            return true
         },
 
         onModelChange(){
