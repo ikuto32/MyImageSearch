@@ -27,6 +27,7 @@ from app.application.embedding_backend import SearchEmbeddingBackend, to_float32
 from app.infrastructure.model_metadata import (
     default_model_dir_name,
     has_search_index,
+    normalize_model_id,
     read_model_metadata,
     safe_model_dir_name,
 )
@@ -159,6 +160,7 @@ class LocalAccessor(Accessor):
 
     def _search_model_meta_dir(self, model_id: ModelId) -> pathlib.Path:
         """Return the index directory for a ModelId, including metadata-backed safe names."""
+        model_id = normalize_model_id(model_id)
         candidates = [
             self._meta_dir_path / default_model_dir_name(model_id),
             self._meta_dir_path / safe_model_dir_name(model_id.model_name),
@@ -211,6 +213,7 @@ class LocalAccessor(Accessor):
     def load_embedding_backend(self, model_id: ModelId) -> SearchEmbeddingBackend:
         """ModelIdからOpenCLIPまたはQwenの検索埋め込みバックエンドを返す。"""
 
+        model_id = normalize_model_id(model_id)
         if _is_qwen_model(model_id):
             return QwenEmbeddingBackend(_hf_model_name(model_id))
         return OpenClipEmbeddingBackend(model_id.model_name, model_id.pretrained)

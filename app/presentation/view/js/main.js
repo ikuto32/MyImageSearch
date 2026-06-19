@@ -147,7 +147,12 @@ const app = Vue.createApp({
                 .filter(item => item.model_name === this.model_name)
                 .map(item => item.pretrained)
 
-            if (candidates.length === 0 || candidates.includes(this.pretrained)) {
+            if (candidates.length === 0) {
+                return false
+            }
+
+            const preferred = candidates.find(value => value === this.pretrained)
+            if (preferred !== undefined && !(this.model_name.includes("/") && preferred === "openai")) {
                 return false
             }
 
