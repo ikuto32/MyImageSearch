@@ -12,6 +12,7 @@ import numpy as np
 
 from app.application.usecase import Usecase
 from app.domain.domain_object import ImageItem, ImageId, ModelId, ModelItem, ResultImageItemList, UploadImage, ResultImageItem, UploadText
+from app.infrastructure.model_metadata import normalize_model_id
 from app.logging_config import configure_logging
 
 
@@ -142,6 +143,10 @@ def get_request_params() -> dict:
     return body_params if request.method == "POST" else request.args
 
 
+def make_model_id(model_name: str, pretrained: str | None = "") -> ModelId:
+    return normalize_model_id(ModelId(model_name, pretrained or ""))
+
+
 def get_requested_model_id() -> ModelId:
     """リクエストパラメータから検索モデルIDを取り出す"""
 
@@ -150,7 +155,7 @@ def get_requested_model_id() -> ModelId:
     pretrained = params.get("pretrained", "")
     if model_name is None:
         abort(400, description="model_name is required")
-    return ModelId(model_name, pretrained or "")
+    return make_model_id(model_name, pretrained)
 
 
 def get_requested_image_ids() -> list[ImageId] | None:
@@ -206,7 +211,7 @@ def get_original_image(id: str):
 def search_text():
     """文字列から検索して、結果を返す"""
     args = ast.literal_eval(request.data.decode('utf-8')).get("params")
-    model_id: ModelId = ModelId(args.get("model_name"), args.get("pretrained"))
+    model_id: ModelId = make_model_id(args.get("model_name"), args.get("pretrained"))
     text: str = args.get("text")
     # 美感スコアの重要度を取得する。
     aesthetic_quality_beta: float = args.get("aesthetic_quality_beta")
@@ -233,7 +238,7 @@ def search_image():
     json_obj = json.loads(request.data).get("params")
 
     # 検索モデルのIDを取得する。
-    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+    model_id: ModelId = make_model_id(json_obj["model_name"], json_obj["pretrained"])
 
     # 美感スコアの重要度を取得する。
     aesthetic_quality_beta: float = json_obj["aesthetic_quality_beta"]
@@ -255,7 +260,7 @@ def search_name():
     """名前から検索して、結果を返す"""
     args = ast.literal_eval(request.data.decode('utf-8')).get("params")
     # 検索モデルのIDを取得する。
-    model_id: ModelId = ModelId(args.get("model_name"), args.get("pretrained"))
+    model_id: ModelId = make_model_id(args.get("model_name"), args.get("pretrained"))
     text: str = args.get("text")
     is_regexp: bool = (args.get("is_regexp") == "true")
     # 美感スコアの重要度を取得する。
@@ -282,7 +287,7 @@ def search_upload_image():
 
     json_obj = json.loads(request.data).get("params")
 
-    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+    model_id: ModelId = make_model_id(json_obj["model_name"], json_obj["pretrained"])
     base64_text: str = json_obj["base64"]
     content_type: str = json_obj.get("content_type", "image/png")
 
@@ -305,7 +310,7 @@ def search_random():
     json_obj = json.loads(request.data).get("params")
 
     # 検索モデルのIDを取得する。
-    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+    model_id: ModelId = make_model_id(json_obj["model_name"], json_obj["pretrained"])
 
     # 美感スコアの重要度を取得する。
     aesthetic_quality_beta: float = json_obj["aesthetic_quality_beta"]
@@ -328,7 +333,7 @@ def search_query():
     json_obj = json.loads(request.data).get("params")
 
     # 検索モデルのIDを取得する。
-    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+    model_id: ModelId = make_model_id(json_obj["model_name"], json_obj["pretrained"])
 
     search_query = json_obj["search_query"]
 
@@ -353,7 +358,7 @@ def add_text_features():
     json_obj = json.loads(request.data).get("params")
 
     # 検索モデルのIDを取得する。
-    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+    model_id: ModelId = make_model_id(json_obj["model_name"], json_obj["pretrained"])
 
     text: str = json_obj["text"]
 
@@ -382,7 +387,7 @@ def search_tags():
     json_obj = json.loads(request.data).get("params")
 
     # 検索モデルのIDを取得する。
-    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+    model_id: ModelId = make_model_id(json_obj["model_name"], json_obj["pretrained"])
 
     text: str = json_obj.get("text")
     is_regexp: bool = (json_obj.get("is_regexp") == "true")
@@ -406,7 +411,7 @@ def search_style_cluster():
 
     json_obj = json.loads(request.data).get("params")
 
-    model_id: ModelId = ModelId(json_obj["model_name"], json_obj["pretrained"])
+    model_id: ModelId = make_model_id(json_obj["model_name"], json_obj["pretrained"])
 
     text: str = json_obj.get("text")
     is_regexp: bool = (json_obj.get("is_regexp") == "true")
