@@ -1,6 +1,7 @@
 from functools import cache
 import logging
 import sqlite3
+from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Tuple
 
 import pathlib
@@ -70,12 +71,18 @@ class QwenEmbeddingBackend(SearchEmbeddingBackend):
         self.model.eval()
 
     def _move_inputs_to_device(self, inputs):
-        if isinstance(inputs, dict):
+        if hasattr(inputs, "to"):
+            return inputs.to(self.device)
+        if isinstance(inputs, Mapping):
             return {
-                key: value.to(self.device) if torch.is_tensor(value) else value
+                key: self._move_inputs_to_device(value)
                 for key, value in inputs.items()
             }
-        return inputs.to(self.device) if torch.is_tensor(inputs) else inputs
+        if isinstance(inputs, tuple):
+            return tuple(self._move_inputs_to_device(value) for value in inputs)
+        if isinstance(inputs, Sequence) and not isinstance(inputs, (str, bytes, bytearray)):
+            return [self._move_inputs_to_device(value) for value in inputs]
+        return inputs
 
     def _structured_text_inputs(self, text: str):
         message = [{"role": "user", "content": [{"type": "text", "text": text}]}]
