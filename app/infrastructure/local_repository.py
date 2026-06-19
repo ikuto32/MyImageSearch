@@ -37,7 +37,6 @@ from app.domain.repository import Repository
 
 from PIL import Image as PILImage
 
-import open_clip
 
 @dataclass
 class _ScanProgress:
@@ -322,22 +321,16 @@ class LocalRepository(Repository):
 
     @cache
     def load_all_model_item(self) -> list[ModelItem]:
-        """利用可能な検索モデル一覧を返す。
+        """clip_meta に存在する検索モデル一覧を返す。
 
-        open_clip が提供する事前学習モデルに加えて、meta_dir 配下に
-        ``metafiles.index`` と ``sqlite_image_meta.db`` を持つインデックス
-        ディレクトリを検出し、UI で選択可能な ModelItem として追加する。
-        ``model_meta.json`` がある場合は、Qwen などの repo ID を安全な
-        ディレクトリ名へ変換したインデックスから元の ModelId と表示名を復元する。
+        meta_dir 配下に ``metafiles.index`` と ``sqlite_image_meta.db`` を持つ
+        インデックスディレクトリだけを検出し、UI で選択可能な
+        ModelItem として返す。``model_meta.json`` がある場合は、Qwen などの
+        repo ID を安全なディレクトリ名へ変換したインデックスから元の
+        ModelId と表示名を復元する。
         """
 
         items_by_key: dict[tuple[str, str], ModelItem] = {}
-
-        for model_name, dataset in open_clip.list_pretrained():
-            item = ModelItem(
-                ModelId(model_name, dataset), ModelName(f"{model_name}-{dataset}")
-            )
-            items_by_key[(model_name, dataset)] = item
 
         for index_dir in self._iter_search_index_dirs():
             item = self._model_item_from_index_dir(index_dir)
