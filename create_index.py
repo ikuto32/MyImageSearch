@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import concurrent.futures
 import contextlib
 import datetime
-from collections.abc import Mapping
+import io
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import gc
 import hashlib
@@ -17,6 +19,7 @@ import sqlite3
 import traceback
 import typing
 from typing import Any, Iterable
+from urllib.parse import urlparse
 import csv
 import uuid
 import time
@@ -40,78 +43,43 @@ from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 from torchvision import transforms
 from torch.utils.data._utils.collate import default_collate
 import onnxruntime as rt
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
+from openai.types.create_embedding_response import CreateEmbeddingResponse
 
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 Image.MAX_IMAGE_PIXELS = 268_435_456
 
+
+def normalize_qwen_api_base(api_base: str) -> str:
+    """Normalize a vLLM OpenAI-compatible API base URL so it ends in /v1."""
+
+    if not isinstance(api_base, str) or not api_base.strip():
+        raise ValueError("Qwen API base URL must not be empty.")
+    normalized = api_base.strip().rstrip("/")
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(
+            f"Invalid Qwen API base URL: {api_base!r}. Expected an http(s) URL such as http://127.0.0.1:8000/v1."
+        )
+    if not normalized.endswith("/v1"):
+        normalized = f"{normalized}/v1"
+    return normalized
+
+
+def pil_image_to_data_url(image: Image.Image) -> str:
+    """Convert a PIL image to a PNG data URL for the vLLM OpenAI API."""
+
+    buffer = io.BytesIO()
+    image.convert("RGB").save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
 # =========================
 # 共通ヘルパー
 # =========================
 
-QWEN_VARIABLE_IMAGE_KEYS = {
-    "pixel_values",
-    "pixel_values_videos",
-    "image_grid_thw",
-    "video_grid_thw",
-}
-
-
-def _tensor_shapes_differ(values: list[Any]) -> bool:
-    tensor_shapes = [tuple(value.shape) for value in values if torch.is_tensor(value)]
-    return bool(tensor_shapes) and any(shape != tensor_shapes[0] for shape in tensor_shapes[1:])
-
-
-def _is_variable_length_qwen_inputs(search_inputs: list[Any]) -> bool:
-    """Return True for per-image Qwen processor dicts that cannot use default_collate."""
-
-    if not search_inputs or not all(isinstance(item, Mapping) for item in search_inputs):
-        return False
-
-    common_keys = set(search_inputs[0])
-    if not common_keys.intersection(QWEN_VARIABLE_IMAGE_KEYS):
-        return False
-
-    return any(
-        _tensor_shapes_differ([item[key] for item in search_inputs if key in item])
-        for key in common_keys
-    )
-
-
-def _pad_tensors_to_common_shape(values: list[torch.Tensor]) -> torch.Tensor:
-    """Pad tensors with zeros to the per-dimension max shape, then stack."""
-
-    max_shape = tuple(max(value.shape[dim] for value in values) for dim in range(values[0].ndim))
-    padded_values = []
-    for value in values:
-        padded = value.new_full(max_shape, 0)
-        slices = tuple(slice(0, size) for size in value.shape)
-        padded[slices] = value
-        padded_values.append(padded)
-    return torch.stack(padded_values, dim=0)
-
-
-def _collate_qwen_processor_inputs(search_inputs: list[Mapping[str, Any]]) -> dict[str, Any]:
-    """Collate Qwen processor output dictionaries, padding variable tensor fields."""
-
-    collated: dict[str, Any] = {}
-    keys = search_inputs[0].keys()
-    for key in keys:
-        values = [item[key] for item in search_inputs]
-        if all(torch.is_tensor(value) for value in values):
-            collated[key] = (
-                _pad_tensors_to_common_shape(values)
-                if _tensor_shapes_differ(values)
-                else default_collate(values)
-            )
-        else:
-            collated[key] = default_collate(values)
-    return collated
-
-
 def _collate_search_inputs(search_inputs: list[Any]):
-    if _is_variable_length_qwen_inputs(search_inputs):
-        return _collate_qwen_processor_inputs(search_inputs)
     if search_inputs and all(isinstance(item, Image.Image) for item in search_inputs):
         return search_inputs
     return default_collate(search_inputs)
@@ -855,6 +823,20 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive number")
+    return parsed
+
+
+def nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be 0 or greater")
+    return parsed
+
+
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
@@ -902,12 +884,19 @@ def parse_arguments():
         "--qwen-max-pixels",
         dest="qwen_max_pixels",
         help=(
-            "Maximum image pixels for Qwen VL preprocessing. Used only with "
-            "--search_backend qwen_vl. Default is 262144 (512x512 equivalent)."
+            "Deprecated compatibility option for Qwen VL. Ignored by the API backend; "
+            "configure max_pixels with vLLM --mm-processor-kwargs instead."
         ),
         type=positive_int,
-        default=262144,
+        default=None,
     )
+    parser.add_argument("--qwen-api-base", default=os.environ.get("VLLM_API_BASE", "http://127.0.0.1:8000/v1"))
+    parser.add_argument("--qwen-api-key", default=os.environ.get("VLLM_API_KEY", "EMPTY"))
+    parser.add_argument("--qwen-api-timeout", type=positive_float, default=300.0)
+    parser.add_argument("--qwen-api-max-retries", type=nonnegative_int, default=2)
+    parser.add_argument("--qwen-api-concurrency", type=positive_int, default=4)
+    parser.add_argument("--qwen-instruction", default="Represent the user's input.")
+    parser.add_argument("--qwen-api-skip-server-check", action="store_true")
 
     parser.add_argument(
         "--aesthetic_checkpoint", help="aesthetic_checkpoint", default=AESTHETIC_REPO
@@ -1332,162 +1321,212 @@ class QwenVlImagePreprocess:
 
 
 class QwenVlEmbeddingBackend(SearchEmbeddingBackend):
-    """Qwen3-VL-Embedding を使う検索エンコーダ。"""
+    """Qwen3-VL-Embedding backend using vLLM's OpenAI-compatible API."""
 
     def __init__(
         self,
         model_id: str,
-        device: str,
         output_dim: int | None = None,
-        max_pixels: int = 262144,
+        api_base: str = "http://127.0.0.1:8000/v1",
+        api_key: str = "EMPTY",
+        timeout: float = 300.0,
+        max_retries: int = 2,
+        max_concurrency: int = 4,
+        instruction: str = "Represent the user's input.",
+        skip_server_check: bool = False,
     ):
-        import transformers
-        from transformers import AutoProcessor
+        if timeout <= 0:
+            raise ValueError("qwen_api_timeout must be a positive number.")
+        if max_retries < 0:
+            raise ValueError("qwen_api_max_retries must be 0 or greater.")
+        if max_concurrency < 1:
+            raise ValueError("qwen_api_concurrency must be 1 or greater.")
+        if not instruction:
+            raise ValueError("qwen_instruction must not be empty.")
 
-        self.device = device
         self.model_id = model_id
         self.output_dim = output_dim
-        self.max_pixels = self._validate_max_pixels(max_pixels)
-        dtype = torch.float16 if device.startswith("cuda") else torch.float32
-        self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-        self.configure_processor_image_limits(self.processor, self.max_pixels)
-        self.print_qwen_processor_config(self.processor)
-        self.model = transformers.Qwen3VLModel.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            trust_remote_code=True,
-        ).to(device)
-        self.model.eval()
-        self.print_qwen_runtime_config(self.model)
+        self.api_base = normalize_qwen_api_base(api_base)
+        self.api_key = api_key or "EMPTY"
+        self.timeout = float(timeout)
+        self.max_retries = int(max_retries)
+        self.max_concurrency = int(max_concurrency)
+        self.instruction = instruction
+        self._thread_local = threading.local()
 
-    @staticmethod
-    def _validate_max_pixels(max_pixels: int) -> int:
-        if not isinstance(max_pixels, int) or isinstance(max_pixels, bool) or max_pixels <= 0:
-            raise ValueError("max_pixels must be a positive integer.")
-        return max_pixels
+        self.print_qwen_api_config()
+        if not skip_server_check:
+            self._check_server()
 
-    @classmethod
-    def configure_processor_image_limits(cls, processor, max_pixels: int) -> None:
-        max_pixels = cls._validate_max_pixels(max_pixels)
-        image_processor = getattr(processor, "image_processor", None)
-        if image_processor is None:
-            raise RuntimeError("Qwen VL processor does not expose image_processor.")
-        image_processor.max_pixels = max_pixels
-        size = getattr(image_processor, "size", None)
-        if isinstance(size, dict) and "longest_edge" in size:
-            size["longest_edge"] = max_pixels
-
-    def print_qwen_processor_config(self, processor) -> None:
-        image_processor = getattr(processor, "image_processor", None)
-        print("processor min_pixels:", getattr(image_processor, "min_pixels", None))
-        print("processor max_pixels:", getattr(image_processor, "max_pixels", None))
-
-    def print_qwen_runtime_config(self, model) -> None:
-        print("model class:", type(model).__name__)
-        print("parameter device:", next(model.parameters()).device)
-        print("parameter dtype:", next(model.parameters()).dtype)
-
-        for name, config in (
-            ("root", model.config),
-            ("text", getattr(model.config, "text_config", None)),
-            ("vision", getattr(model.config, "vision_config", None)),
-        ):
-            if config is None:
-                continue
-
-            print(
-                f"{name} attention:",
-                getattr(config, "_attn_implementation", None),
-            )
-
-        print(
-            "use_cache:",
-            getattr(model.config, "use_cache", None),
-        )
+    def print_qwen_api_config(self) -> None:
+        print("Qwen backend: vLLM OpenAI-compatible API")
+        print(f"API base: {self.api_base}")
+        print(f"served model: {self.model_id}")
+        print(f"output dimension: {self.output_dim}")
+        print(f"timeout: {self.timeout}")
+        print(f"max retries: {self.max_retries}")
+        print(f"API concurrency: {self.max_concurrency}")
+        print(f"instruction: {self.instruction}")
+        print(f"API key configured: {bool(self.api_key)}")
 
     @property
     def preprocess(self):
         return QwenVlImagePreprocess()
 
-    def prepare_image_inputs(self, images: list[Image.Image]) -> dict[str, Any]:
-        """Build Qwen3-VL image embedding inputs with required prompt tokens."""
+    def _get_client(self) -> OpenAI:
+        client = getattr(self._thread_local, "client", None)
+        if client is None:
+            client = OpenAI(
+                base_url=self.api_base,
+                api_key=self.api_key,
+                timeout=self.timeout,
+                max_retries=self.max_retries,
+            )
+            self._thread_local.client = client
+        return client
 
-        messages = [
+    def _check_server(self) -> None:
+        try:
+            models = self._get_client().models.list()
+        except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
+            raise self._runtime_api_error(
+                "Could not connect to the Qwen vLLM server. Ensure the vLLM OpenAI-compatible server is running",
+                exc,
+            ) from exc
+        model_ids = [getattr(model, "id", None) for model in getattr(models, "data", [])]
+        model_ids = [model_id for model_id in model_ids if model_id]
+        if self.model_id not in model_ids:
+            available = ", ".join(model_ids) if model_ids else "<none>"
+            raise RuntimeError(
+                f"Qwen model '{self.model_id}' was not returned by {self.api_base}/models. "
+                f"Available models: {available}. If vLLM was started with --served-model-name, "
+                "set --search_model_id to that served name."
+            )
+
+    def _runtime_api_error(self, message: str, exc: Exception, *, index: int | None = None) -> RuntimeError:
+        parts = [f"{message}; API base: {self.api_base}"]
+        if index is not None:
+            parts.append(f"batch index: {index}")
+        if isinstance(exc, APIStatusError):
+            parts.append(f"HTTP status: {exc.status_code}")
+            response = getattr(exc, "response", None)
+            if response is not None:
+                try:
+                    parts.append(f"response body: {response.text}")
+                except Exception:
+                    pass
+        else:
+            parts.append(f"error: {exc}")
+        return RuntimeError("; ".join(parts))
+
+    def _image_messages(self, image_data_url: str) -> list[dict[str, Any]]:
+        return [
+            {"role": "system", "content": [{"type": "text", "text": self.instruction}]},
             {
                 "role": "user",
                 "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": "Represent this image for retrieval."},
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                    {"type": "text", "text": ""},
                 ],
-            }
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": ""}]},
         ]
-        if hasattr(self.processor, "apply_chat_template"):
-            prompt = self.processor.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=False,
+
+    def _text_messages(self, text: str) -> list[dict[str, Any]]:
+        return [
+            {"role": "system", "content": [{"type": "text", "text": self.instruction}]},
+            {"role": "user", "content": [{"type": "text", "text": text}]},
+            {"role": "assistant", "content": [{"type": "text", "text": ""}]},
+        ]
+
+    def _embedding_body(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "model": self.model_id,
+            "messages": messages,
+            "encoding_format": "float",
+            "continue_final_message": True,
+            "add_special_tokens": True,
+        }
+
+    def _post_embedding(self, messages: list[dict[str, Any]], *, index: int | None = None) -> np.ndarray:
+        try:
+            response = self._get_client().post(
+                "/embeddings",
+                cast_to=CreateEmbeddingResponse,
+                body=self._embedding_body(messages),
             )
-        else:
-            prompt = "<|vision_start|><|image_pad|><|vision_end|>Represent this image for retrieval."
+        except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
+            raise self._runtime_api_error("Qwen embedding API request failed", exc, index=index) from exc
+        return self._validate_embedding_response(response, index=index)
 
-        inputs = self.processor(
-            text=[prompt] * len(images),
-            images=images,
-            padding=True,
-            return_tensors="pt",
-        )
-        if "input_ids" not in inputs and "inputs_embeds" not in inputs:
-            raise RuntimeError(
-                "Qwen VL image preprocessing must include text/chat prompt tokens "
-                "(`input_ids` or `inputs_embeds`)."
-            )
-        if not any(key in inputs for key in QWEN_VARIABLE_IMAGE_KEYS):
-            raise RuntimeError("Qwen VL image preprocessing did not return image tensors.")
-        return inputs
+    def _validate_embedding_response(self, response: Any, *, index: int | None = None) -> np.ndarray:
+        prefix = f"Qwen embedding response for batch index {index}" if index is not None else "Qwen embedding response"
+        data = getattr(response, "data", None)
+        if not data:
+            raise RuntimeError(f"{prefix} did not contain any data.")
+        embedding = getattr(data[0], "embedding", None)
+        if embedding is None:
+            raise RuntimeError(f"{prefix} did not contain data[0].embedding.")
+        array = np.asarray(embedding, dtype=np.float32)
+        if array.ndim != 1:
+            raise RuntimeError(f"{prefix} embedding must be a 1-dimensional numeric array; got shape {array.shape}.")
+        if array.size == 0:
+            raise RuntimeError(f"{prefix} embedding must not be empty.")
+        if not np.isfinite(array).all():
+            raise RuntimeError(f"{prefix} embedding contains NaN or Inf values.")
+        if self.output_dim is not None:
+            if array.shape[0] < self.output_dim:
+                raise RuntimeError(
+                    f"{prefix} embedding dimension {array.shape[0]} is smaller than requested output_dim {self.output_dim}."
+                )
+            array = array[: self.output_dim]
+        return array.astype(np.float32, copy=False)
 
-    def _move_inputs_to_device(self, inputs):
-        return _to_device(inputs, self.device)
+    def _stack_embeddings(self, embeddings: Sequence[np.ndarray]) -> torch.Tensor:
+        stacked_embeddings = np.stack(embeddings).astype(np.float32, copy=False)
+        return torch.from_numpy(stacked_embeddings).to(dtype=torch.float32)
 
-    def _pool_outputs(self, outputs) -> torch.Tensor:
-        for attr in ("image_embeds", "text_embeds", "pooler_output"):
-            value = getattr(outputs, attr, None)
-            if value is not None:
-                return value
-        hidden = getattr(outputs, "last_hidden_state", None)
-        if hidden is None and isinstance(outputs, (tuple, list)) and outputs:
-            hidden = outputs[0]
-        if hidden is None:
-            raise RuntimeError("Qwen VL embedding model did not return embeddings.")
-        return hidden.mean(dim=1)
+    def _encode_messages_batch(self, messages: Sequence[list[dict[str, Any]]]) -> torch.Tensor:
+        if not messages:
+            dim = self.output_dim or 0
+            return torch.empty((0, dim), dtype=torch.float32)
+        max_workers = min(self.max_concurrency, len(messages))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            embeddings = list(executor.map(lambda item: self._post_embedding(item[1], index=item[0]), enumerate(messages)))
+        return self._stack_embeddings(embeddings)
 
-    def _apply_output_dim(self, features: torch.Tensor) -> torch.Tensor:
-        if self.output_dim is None:
-            return features
-        if features.shape[-1] < self.output_dim:
-            raise ValueError(
-                f"Requested output dimension {self.output_dim} exceeds model dimension {features.shape[-1]}."
-            )
-        return features[..., : self.output_dim].contiguous()
+    def _post_image_embedding(self, item: tuple[int, Image.Image]) -> np.ndarray:
+        index, image = item
+        image_data_url = pil_image_to_data_url(image)
+        return self._post_embedding(self._image_messages(image_data_url), index=index)
+
+    def _encode_image_batch(self, images: list[Image.Image]) -> torch.Tensor:
+        if not images:
+            dim = self.output_dim or 0
+            return torch.empty((0, dim), dtype=torch.float32)
+        max_workers = min(self.max_concurrency, len(images))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            embeddings = list(executor.map(self._post_image_embedding, enumerate(images)))
+        return self._stack_embeddings(embeddings)
 
     @torch.no_grad()
-    def encode_image_with_internal(self, image_inputs):
-        if isinstance(image_inputs, Mapping):
-            image_inputs = {
-                key: value.squeeze(1) if torch.is_tensor(value) and value.ndim > 1 and value.shape[1] == 1 else value
-                for key, value in image_inputs.items()
-            }
-        image_inputs = self._move_inputs_to_device(image_inputs)
-        outputs = self.model(**image_inputs, return_dict=True)
-        features = self._apply_output_dim(self._pool_outputs(outputs))
+    def encode_image_with_internal(self, images: list[Image.Image]):
+        if not isinstance(images, list) or not images or not all(isinstance(image, Image.Image) for image in images):
+            raise TypeError(
+                f"Qwen vLLM backend expected a non-empty list of PIL images. Got {type(images).__name__}: {images!r}"
+            )
+        features = self._encode_image_batch(images)
         return features, features
 
     @torch.no_grad()
     def encode_text(self, texts: list[str]) -> torch.Tensor:
-        inputs = self.processor(text=texts, padding=True, return_tensors="pt")
-        inputs = self._move_inputs_to_device(inputs)
-        outputs = self.model(**inputs, return_dict=True)
-        return self._apply_output_dim(self._pool_outputs(outputs))
-
+        if not texts:
+            dim = self.output_dim or 0
+            return torch.empty((0, dim), dtype=torch.float32)
+        if not isinstance(texts, list) or not all(isinstance(text, str) for text in texts):
+            raise TypeError(f"Qwen vLLM backend expected a list of strings. Got {type(texts).__name__}: {texts!r}")
+        messages = [self._text_messages(text) for text in texts]
+        return self._encode_messages_batch(messages)
 
 def safe_model_dir_name(value: str) -> str:
     return value.replace("/", "--").replace("\\", "--").replace(":", "_")
@@ -1574,11 +1613,21 @@ def load_search_embedding_backend(args, device) -> SearchEmbeddingBackend:
             device,
         )
     if args.search_backend == "qwen_vl":
+        if args.qwen_max_pixels is not None:
+            print(
+                "Warning: --qwen-max-pixels is ignored by the API backend.\n"
+                "Configure max_pixels with vLLM --mm-processor-kwargs instead."
+            )
         return QwenVlEmbeddingBackend(
             args.search_model_id,
-            device,
             args.search_model_out_dim,
-            max_pixels=args.qwen_max_pixels,
+            args.qwen_api_base,
+            args.qwen_api_key,
+            args.qwen_api_timeout,
+            args.qwen_api_max_retries,
+            args.qwen_api_concurrency,
+            args.qwen_instruction,
+            args.qwen_api_skip_server_check,
         )
     raise ValueError(f"Unknown search backend: {args.search_backend}")
 
@@ -1769,13 +1818,6 @@ def extract_image_features(
                 batched_wd_inputs,
                 batched_z3d_inputs,
             ) = batch
-
-            if (
-                isinstance(batched_image_input, list)
-                and batched_image_input
-                and isinstance(batched_image_input[0], Image.Image)
-            ):
-                batched_image_input = search_model.prepare_image_inputs(batched_image_input)
 
             batched_image_input = _to_device(batched_image_input, device)
             batched_metadata_input = _to_device(batched_metadata_input, device)
