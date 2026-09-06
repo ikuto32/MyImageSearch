@@ -2,6 +2,10 @@ from dataclasses import dataclass
 from typing import Any
 from PIL import Image as PILImage
 from io import BytesIO
+from app.domain.errors import ResourceLimitError
+
+MAX_IMAGE_BYTES = 64 * 1024 * 1024
+MAX_IMAGE_PIXELS = 64_000_000
 
 
 # =====================================================
@@ -40,7 +44,17 @@ class Image:
 
     def to_ptl_image(self):
         """バイナリがPillowで解釈可能な形式である前提で画像に変換する。"""
-        return PILImage.open(BytesIO(self.binary))
+        if len(self.binary) > MAX_IMAGE_BYTES:
+            raise ResourceLimitError("検索に使う画像は64MiB以内で指定してください。")
+        try:
+            with PILImage.open(BytesIO(self.binary)) as image:
+                if image.width * image.height > MAX_IMAGE_PIXELS:
+                    raise ResourceLimitError("検索に使う画像は6400万画素以内で指定してください。")
+                # The index builder encodes the stored pixel orientation. Keep
+                # that convention for search; thumbnails may orient for display.
+                return image.copy()
+        except PILImage.DecompressionBombError:
+            raise ResourceLimitError("画像の画素数が大きすぎます。縮小して再試行してください。") from None
 
 
 @dataclass(frozen=True)

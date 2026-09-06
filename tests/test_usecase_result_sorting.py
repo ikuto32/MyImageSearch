@@ -40,6 +40,8 @@ def make_result(name: str, score: float) -> ResultImageItem:
 class UsecaseResultSortingTests(unittest.TestCase):
     def setUp(self):
         self.usecase = Usecase.__new__(Usecase)
+        self.usecase._repository = types.SimpleNamespace(register_image_items=lambda items: None)
+        self.usecase._id_to_image_items = {}
 
     def test_finalize_result_sorts_score_desc_then_name_asc_and_limits(self):
         results = [

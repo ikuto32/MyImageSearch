@@ -39,12 +39,14 @@ class ResourceRouteTests(unittest.TestCase):
     def test_rejects_sibling_view_evil_path_traversal(self):
         response = self.client.get("/../view_evil/file.js")
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn(b"alert('evil')", response.data)
 
     def test_rejects_url_encoded_dot_dot_path_traversal(self):
         response = self.client.get("/js/%2e%2e/%2e%2e/view_evil/file.js")
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn(b"alert('evil')", response.data)
 
 
 if __name__ == "__main__":

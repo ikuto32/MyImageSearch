@@ -57,6 +57,9 @@ def _patch_fake_tensor():
     FakeTensor.float = lambda self: self
     FakeTensor.detach = lambda self: self
     FakeTensor.numpy = lambda self: self
+    FakeTensor.reshape = lambda self, *_shape: FakeTensor([
+        value for row in self.data for value in (row if isinstance(row, list) else [row])
+    ])
     FakeTensor.tolist = lambda self: self.data
     FakeTensor.__iter__ = lambda self: (FakeTensor(item) for item in self.data)
     FakeTensor.tobytes = tobytes

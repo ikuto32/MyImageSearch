@@ -1,7 +1,8 @@
 
 
-import axios from "https://cdn.jsdelivr.net/npm/axios@1.3.1/+esm"
+import axios from "../../vendor/axios/axios.min.js"
 import { fileToBase64 } from "./util.js"
+export { MAX_UPLOAD_BYTES } from "./util.js"
 
 /**
  * 画像項目
@@ -54,9 +55,19 @@ export function getImageOriginalUrl(itemId) {
  *
  * @return {Promise<ImageItem[]>}
  */
-export async function getImageItemsByPage(page = 0, pageSize = 60) {
-
-    return axios.get(`/image_item`, { params: { page: page, size: pageSize } }).then(res => res.data)
+export async function getImageItemsByPage(page = 0, pageSize = 60, modelName, pretrained, includeTotal = false, ratings) {
+    const params = { page, size: pageSize }
+    if (modelName) params.model_name = modelName
+    if (pretrained) params.pretrained = pretrained
+    if (includeTotal) params.include_total = 1
+    if (ratings !== undefined) params.ratings = JSON.stringify(ratings)
+    return axios.get(`/image_item`, { params }).then(res => {
+        const total = res.headers['x-catalog-total']
+        if (total !== undefined && total !== '') res.data.totalCount = Number(total)
+        const matching = res.headers['x-matching-total']
+        if (matching !== undefined && matching !== '') res.data.matchingCount = Number(matching)
+        return res.data
+    })
 }
 
 /**

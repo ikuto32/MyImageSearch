@@ -1,0 +1,82 @@
+[
+  {
+    "path": "axios/axios.min.js",
+    "bytes": 28868,
+    "sha256": "853c2dd40a67eed20699e248396bded95e5f3af703dd872134fa0463d63f344f"
+  },
+  {
+    "path": "axios/axios.min.js.map",
+    "bytes": 136796,
+    "sha256": "72e47e3f94c5c278cf16ff8dd6eb3a10524a5db541faf9db4bba3fcb894b68e0"
+  },
+  {
+    "path": "axios/LICENSE",
+    "bytes": 1084,
+    "sha256": "82761059eaedacb3356803aea8a170d8298609f91b14fc32ee1bfb40d690183c"
+  },
+  {
+    "path": "mdi/LICENSE",
+    "bytes": 1012,
+    "sha256": "f3bc8715bad84b26396bb42d2abd11f919cf58163be158eab79ecbaabf84cdf2"
+  },
+  {
+    "path": "mdi/LICENSE-APACHE-2.0.txt",
+    "bytes": 11358,
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "path": "mdi/css/materialdesignicons.min.css",
+    "bytes": 324226,
+    "sha256": "29e461b3a66dfb905a602e4c0ea68a1e541100deee2cb8f385f15607f162f914"
+  },
+  {
+    "path": "mdi/fonts/materialdesignicons-webfont.eot",
+    "bytes": 1223392,
+    "sha256": "5be9e9d73fe6e4825da6718066fc1f703eeca70439fe03cc56614c0ed43f795c"
+  },
+  {
+    "path": "mdi/fonts/materialdesignicons-webfont.ttf",
+    "bytes": 1223172,
+    "sha256": "948fce5271fd6ae722464c7a5f7581bcc66d7ec01f8e7d16923bfa7ba0305419"
+  },
+  {
+    "path": "mdi/fonts/materialdesignicons-webfont.woff",
+    "bytes": 553704,
+    "sha256": "7f3afe9ba6aa0f1cbd867655d7b62f5dd544a7ff30665c59eaaa28086bf3e0dd"
+  },
+  {
+    "path": "mdi/fonts/materialdesignicons-webfont.woff2",
+    "bytes": 381688,
+    "sha256": "633d596f7288835ff04eba1105f41cf6fe5c9ffed41f2cb20a3f00fb035c0c8b"
+  },
+  {
+    "path": "vue/LICENSE",
+    "bytes": 1091,
+    "sha256": "1bb85cc9b13b81ef41c81c51866172fc345e0503c86726a6755b796590b70175"
+  },
+  {
+    "path": "vue/vue.global.prod.js",
+    "bytes": 146843,
+    "sha256": "b50eeefe35d41636bb96c92b40f1df0b4fb7914e07b3c625b1ec15e9748767b9"
+  },
+  {
+    "path": "vuetify/LICENSE.md",
+    "bytes": 1090,
+    "sha256": "48a84d68305fcb773e7e2c82a41140faf2e5ac80adea12e49d7e3d2ab1826287"
+  },
+  {
+    "path": "vuetify/vuetify.min.css",
+    "bytes": 427480,
+    "sha256": "5508d20f8eb2a53fd8d663968ac8cca3ff999069980b23d0d14580f1504e336b"
+  },
+  {
+    "path": "vuetify/vuetify.min.js",
+    "bytes": 390342,
+    "sha256": "0dfcc22a87997b699d8e062530cc3c0bd72f01a2b7a12ad8cdf0ff8e67e0da79"
+  },
+  {
+    "path": "vuetify/vuetify.min.js.map",
+    "bytes": 1606251,
+    "sha256": "41f4550327451b4956e74def625ab3657b8846614ac7c7a2f751ac3e72fefbc6"
+  }
+]
