@@ -53,3 +53,7 @@ class Repository(metaclass=ABCMeta):
         """ImageIdから相対パスを引くためのマップを設定する"""
 
         pass
+
+    def register_image_items(self, items: list[ImageItem]) -> None:
+        """Register paths for images discovered in another model's search results."""
+        pass

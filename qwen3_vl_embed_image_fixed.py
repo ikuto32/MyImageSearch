@@ -6,10 +6,10 @@ OpenAI-compatible HTTP API.
 The vLLM server must be started with ``--runner pooling``.
 
 Examples:
-    uv run python qwen3_vl_embed_image_vllm_api.py image.jpg
-    uv run python qwen3_vl_embed_image_vllm_api.py image.jpg \
+    uv run python qwen3_vl_embed_image_fixed.py image.jpg
+    uv run python qwen3_vl_embed_image_fixed.py image.jpg \
         --warmup 1 --repeat 5 --output embedding.npy
-    uv run python qwen3_vl_embed_image_vllm_api.py "C:\\images\\1.png" \
+    uv run python qwen3_vl_embed_image_fixed.py images/1.png \
         --api-base http://127.0.0.1:8000/v1
 
 Image preprocessing options such as min_pixels, max_pixels, and max_model_len

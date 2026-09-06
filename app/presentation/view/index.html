@@ -1,187 +1,126 @@
 <!doctype html>
-<html>
-
+<html lang="ja">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MyImageSearch</title>
+    <link href="./vendor/mdi/css/materialdesignicons.min.css" rel="stylesheet">
+    <link href="./vendor/vuetify/vuetify.min.css" rel="stylesheet">
     <link href="./css/common.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/vuetify@3.x/dist/vuetify.min.css" rel="stylesheet">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, minimal-ui">
 </head>
-
 <body>
-    <div id="app" ref="hogehoge">
+    <div id="startupStatus" role="status" class="startupStatus"><p lang="ja">画像検索を読み込んでいます…</p><p lang="en">Loading image search…</p></div>
+    <div id="app" v-cloak>
         <v-app>
-            <v-app-bar id="controlArea">
-                <v-app-bar-nav-icon @click.stop="isShowSetting = !isShowSetting"></v-app-bar-nav-icon>
-                <v-text-field label="search" id="textSearchBox" single-line dense clearable hide-details="auto" v-model="text" placeholder="Text"></v-text-field>
-                <v-btn @click="textSearchButton" :disabled="isSearching" prepend-icon="mdi-format-text-variant" class="d-none d-md-flex">テキスト検索</v-btn>
-                <v-btn @click="imagesSearchButton" :disabled="isSearching" prepend-icon="mdi-image-search " class="d-none d-md-flex">画像検索</v-btn>
-                <v-btn @click="textSearchButton" :disabled="isSearching" icon="mdi-format-text-variant" class="d-md-none"></v-btn>
-                <v-btn @click="imagesSearchButton" :disabled="isSearching" icon="mdi-image-search " class="d-md-none"></v-btn>
-                <v-progress-circular
-                    v-if="isSearching"
-                    class="ml-3"
-                    color="primary"
-                    indeterminate
-                    size="24"
-                ></v-progress-circular>
+            <a class="skipLink" href="#scroll-target">{{ t('navigation.skipResults') }}</a>
+            <v-app-bar id="controlArea" flat height="64">
+                <v-btn id="settingsToggle" class="menuToggle compactAction" variant="text" :aria-label="t(isShowSetting ? 'settings.close' : 'settings.open')" :title="t(isShowSetting ? 'settings.close' : 'settings.open')" :aria-expanded="isShowSetting" aria-controls="settingsPanel"><v-icon :icon="isShowSetting ? 'mdi-close' : 'mdi-menu'" size="22"></v-icon><span class="actionText">{{ t(isShowSetting ? 'common.close' : 'settings.menu') }}</span></v-btn>
+                <v-text-field :label="t('search.inputLabel')" id="textSearchBox" single-line clearable hide-details="auto" v-model="text" :placeholder="t('search.placeholder')" @keydown.enter.prevent="!$event.isComposing && textSearchButton()"></v-text-field>
+                <v-btn @click="textSearchButton" :disabled="isSearching || isInitializing || initializationFailed || !text?.trim()" color="primary" variant="flat" class="searchSubmit compactAction" :aria-label="t('search.submit')" :title="t('search.submit')"><v-icon icon="mdi-magnify" size="22"></v-icon><span class="actionText">{{ t('search.submit') }}</span></v-btn>
+                <v-btn id="imageSearchAction" class="imageSearchAction compactAction" variant="text" @click="imageSearchAction" :disabled="isSearching || isInitializing || initializationFailed || isSelecting" :aria-label="t('search.imageAction')" :title="t(selectedCount > 64 ? 'selection.searchLimit' : 'search.imageAction')"><v-icon icon="mdi-image-search-outline" size="22"></v-icon><span class="actionText">{{ t('search.imageAction') }}</span></v-btn>
             </v-app-bar>
-            <v-main>
-                <div class="scrollArea"
-                    id="scroll-target"
-                    v-scroll:#scroll-target="updateImageFromScroll"
-                    >
-                    <v-container>
-                        <v-navigation-drawer
-                        class="px-5"
-                        v-model="isShowSetting"
-                        location="bottom"
-                        temporary
-                        :width="500"
-                        >
-                            <v-btn @click="nameSearchButton" :disabled="isSearching">名前検索</v-btn>
-                            <v-btn @click="allDownloadImagesButton">画像を一括ダウンロード</v-btn>
-                            <v-btn @click="randomSearchButton" :disabled="isSearching">乱数から検索</v-btn>
-                            <v-btn @click="querySearchButton" :disabled="isSearching">クエリから検索</v-btn>
-                            <v-btn @click="addTextFeaturesButton" :disabled="isSearching">クエリにテキストの特徴を足す</v-btn>
-                            <v-btn @click="tagSearchButton" :disabled="isSearching">タグを検索</v-btn>
-                            <v-btn @click="styleClusterSearchButton" :disabled="isSearching">style_cluster を検索</v-btn>
-                            <v-switch label="正規表現を使う" id="trueRegexp" v-model="isRegexp"></v-switch>
-                            <span class="rangeSpan d-flex flex-row">
-                                <v-slider class="" label="numCols" id="setnNumCols" :min="1" :max="24" :step="1"
-                                v-model="numCols"
-                                append-icon="mdi-magnify-plus-outline"
-                                prepend-icon="mdi-magnify-minus-outline"
-                                thumb-label
-                                ></v-slider>
-                                <v-text-field
-                                class=""
-                                v-model="numCols"
-                                hide-details
-                                single-line
-                                density="compact"
-                                type="number"
-                                style="width: 100px"
-                                ></v-text-field>
-                            </span>
-                            <v-slider label="aesthetic quality beta" :min="-1" :max="1" :step="0.01"
-                                v-model="aesthetic_quality_beta"
-                                thumb-label
-                                ></v-slider>
-                            <v-range-slider label="aesthetic quality range" :min="0" :max="1" :step="0.01"
-                            v-model="aesthetic_quality_range"
-                            thumb-label
-                            ></v-range-slider>
-                            <v-slider label="features strength" :min="-2" :max="2" :step="0.1"
-                                v-model="features_strength"
-                                thumb-label
-                                ></v-slider>
-                            <v-text-field
-                            v-model.number="resultSize"
-                            label="result size"
-                            type="number"
-                            min="1"
-                            hint="検索結果の最大件数（モバイルでは小さめ推奨）"
-                            persistent-hint
-                            ></v-text-field>
-                            <v-autocomplete
-                            v-model="model_name"
-                            label="model_name"
-                            :items="modelNameItems"
-                            ></v-autocomplete>
-                            <v-autocomplete
-                            v-model="pretrained"
-                            label="pretrained"
-                            :items="pretrainedItems"
-                            ></v-autocomplete>
-                            <v-autocomplete
-                            v-model="aesthetic_model_name"
-                            label="aesthetic_model_name"
-                            :items="['original','pony']"
-                            ></v-autocomplete>
-                            <v-select
-                            v-model="ratingFilter"
-                            label="rating"
-                            :items="ratingOptions"
-                            multiple
-                            chips
-                            ></v-select>
-                            <v-text-field
-                            v-model="search_query"
-                            label="search query"
-                            ></v-text-field>
-                            <v-file-input
-                            v-model="uploadFile"
-                            label="upload image"
-                            prepend-icon="mdi-upload"
-                            hide-details="auto"
-                            ></v-file-input>
-                            <v-btn @click="uploadImageSearchButton" :disabled="isSearching">アップロード検索</v-btn>
-                        </v-navigation-drawer>
-                        <div class="timingArea">
-                            <v-chip size="small" class="timingChip" label>
-                                <span class="timingLabel">Search</span>
-                                <span class="timingValue">{{ formatDuration(searchDurationMs) }}</span>
-                            </v-chip>
-                            <v-chip size="small" class="timingChip" label>
-                                <span class="timingLabel">Client</span>
-                                <span class="timingValue">{{ formatDuration(clientDurationMs) }}</span>
-                            </v-chip>
+            <v-main class="appMain">
+                <div class="scrollArea" :class="{ scrollLocked: isShowSetting || activeDialogItem || downloadConfirmation, compressedCatalog: stableCatalog && catalogScrollScale > 1 }" id="scroll-target" tabindex="0" :aria-label="t('results.scrollLabel')" @scroll.passive="updateImageFromScroll" @wheel="onCatalogWheel" @keydown="onCatalogKeydown" @pointerdown="onCatalogPointerDown" @pointermove="onCatalogPointerMove" @pointerup="onCatalogPointerUp" @pointercancel="onCatalogPointerCancel" @touchstart.passive="onCatalogTouchStart" @touchmove="onCatalogTouchMove" @click.capture="onCatalogClick">
+                    <v-container fluid class="resultsContainer">
+                        <div class="resultToolbar" :class="{selectionActive: selectMode}">
+                            <div v-if="!selectMode" class="resultSummary">
+                                <h1 id="results-heading" class="resultCount" tabindex="-1">{{ isPagedBrowseMode && !stableCatalog && (isInitializing || isLoadingPage) ? t('results.loading') : t(isPagedBrowseMode ? 'results.pageMatches' : 'results.searchCount', { count: searchCount.toLocaleString(locale) }) }}</h1>
+                                <span class="candidateCount">{{ t(isPagedBrowseMode ? 'results.pageCandidates' : 'results.candidateCount', { count: candidateCount === null ? '—' : candidateCount.toLocaleString(locale) }) }}</span>
+                            </div>
+                            <strong v-else id="results-heading" class="selectedCount" tabindex="-1"><span id="selectionCount">{{ selectedCount ? t('selection.countCompact', { count: selectedCount.toLocaleString(locale) }) : t('selection.active') }}</span></strong>
+                            <div class="toolbarActions">
+                                <v-btn v-if="selectMode" id="selectBatch" class="compactAction" variant="text" @click="selectCurrentResults" :disabled="!searchCount || allCurrentSelected || isSearching || isLoadingPage || isSelecting" :aria-label="t(searchCount > 1024 ? 'selection.selectFirstLimit' : (isPagedBrowseMode ? 'selection.selectPage' : 'selection.selectResults'))" :title="t(searchCount > 1024 ? 'selection.selectFirstLimit' : (isPagedBrowseMode ? 'selection.selectPage' : 'selection.selectResults'))"><v-icon icon="mdi-checkbox-multiple-marked-outline" size="22"></v-icon><span class="actionText">{{ t('selection.batch') }}</span></v-btn>
+                                <v-btn id="selectionModeToggle" class="compactAction selectionModeAction" :color="selectMode ? 'primary' : undefined" variant="text" @click="selectMode ? exitSelectionMode() : enterSelectionMode()" :disabled="!selectMode && (isSearching || isInitializing || initializationFailed || !searchCount)" :aria-pressed="selectMode" :aria-label="t(selectMode ? 'selection.finish' : 'selection.enter')" :title="t(selectMode ? 'selection.finish' : 'selection.enter')"><v-icon :icon="selectMode ? 'mdi-close' : 'mdi-checkbox-marked-outline'" size="22"></v-icon><span class="actionText">{{ t(selectMode ? 'selection.finishShort' : 'selection.enter') }}</span></v-btn>
+                                <v-btn class="downloadAction compactAction" variant="text" @click="allDownloadImagesButton" :loading="isDownloading" :disabled="isDownloading || isSearching || isInitializing || initializationFailed || isSelecting || !downloadCount || selectedCount > 1024 || (!selectedCount && !ratingFilter.length)" :aria-label="downloadLabel" :title="downloadLabel"><v-icon icon="mdi-download" size="22"></v-icon><span class="actionText">{{ t('download.saveShort') }}</span></v-btn>
+                            </div>
+                            <div id="scrollProgress" class="scrollPosition" role="progressbar" :aria-label="t('results.position')" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="scrollProgressPercent" :aria-valuetext="scrollProgressLabel" :title="t('results.position')">
+                                <div class="scrollPositionTrack"><span class="scrollPositionFill" :style="{ transform: 'scaleX(' + (scrollProgressPercent ?? 0) / 100 + ')' }"></span></div>
+                                <span id="scrollProgressValue" class="scrollPositionValue">{{ scrollProgressLabel }}</span>
+                            </div>
                         </div>
-                        <div id="itemArea"
-                        :style="'grid-template-columns: repeat(' + numCols + ', minmax(100px, 1fr)); padding-top: ' + padding_top + 'px; padding-bottom: ' + padding_bottom + 'px;'"
-                            >
-                            <v-card
-                            v-for="(item, index) in displayItems"
-                            :key="item.id"
-                            @click="onSelectItem"
-                            :class="[{'selectedItem' : selectedItemId[item.id]}, 'itemBlock']"
-                            :color="selectedItemId[item.id] ? 'light-blue-lighten-4' : null"
-                            :data-index="index"
-                            :data-selected="selectedItemId[item.id]"
-                            >
-                                <v-img :src="item.img_small" :title="item.img_name" height="200" :transition="false" loading="lazy" decoding="async">
-                                    <v-btn icon @click.stop="openDialog(item)">
-                                        <v-icon icon="mdi-arrow-expand-all" color="info"></v-icon>
-                                    </v-btn>
-
-                                </v-img>
-                                <span class="meta" :style="{width: 1 + 'fr'}">{{ item.img_name }}</span>
-                                <span class="tags" :style="{width: 1 + 'fr'}">{{ item.tags }}</span>
-                                <span class="score" :style="{width: 1 + 'fr'}">{{ item.score }}</span>
+                        <v-alert v-if="errorMessage && !stableCatalog" type="error" variant="tonal" closable role="alert" class="resultError" :close-label="t('common.close')" @click:close="errorMessage = ''">{{ errorMessage }}<details v-if="errorDetail"><summary>{{ t('errors.details') }}</summary><p class="errorDetail">{{ errorDetail }}</p></details></v-alert>
+                        <v-btn v-if="initializationFailed" @click="init" :loading="isInitializing" class="mb-3">{{ t('errors.retryInitialization') }}</v-btn>
+                        <div v-if="!searchCount && !isInitializing && !initializationFailed && !isLoadingPage && !isSearching && !errorMessage" class="emptyState" role="status"><v-icon size="40" aria-hidden="true">mdi-image-search-outline</v-icon><p>{{ t('results.empty') }}</p><p class="contextHint">{{ t(!ratingFilter.length ? 'results.categoriesRequired' : (isPagedBrowseMode && hasMorePages ? 'results.emptyBrowseHint' : 'results.emptySearchHint')) }}</p></div>
+                        <v-progress-linear v-if="!stableCatalog && (isInitializing || isLoadingPage)" indeterminate color="primary" :aria-label="t('results.loading')"></v-progress-linear>
+                        <div id="itemArea" :class="{catalogGrid: stableCatalog}" @keydown="onGridKeydown($event)" :aria-busy="isInitializing || isLoadingPage || isSearching" :style="'grid-template-columns: repeat(' + visibleCols + ', minmax(0, 1fr)); padding-top: ' + padding_top + 'px; padding-bottom: ' + padding_bottom + 'px; --catalog-shift: ' + (stableCatalog ? catalogRenderShift : 0) + 'px;'">
+                            <v-card v-for="(item, index) in displayItems" :key="item.id" role="group" :aria-label="item.img_name" :aria-hidden="item.placeholder || undefined" :class="[{'selectedItem': selectMode && selectedItemId[item.id], 'placeholderItem': item.placeholder}, 'itemBlock']" :data-index="index" :data-logical-index="item.position" :data-image-id="item.placeholder ? undefined : item.id" :data-loading="item.placeholder || undefined" :data-selected="!!selectedItemId[item.id]" flat>
+                                <div v-if="item.placeholder" class="imagePlaceholder"></div>
+                                <button v-else type="button" class="imageSelectButton" :role="selectMode ? 'checkbox' : undefined" :aria-label="t(selectMode ? 'selection.imageLabel' : 'image.openDetail', { name: item.img_name })" :aria-checked="selectMode ? !!selectedItemId[item.id] : undefined" @click="onImageClick(item, $event)" @dragstart.prevent>
+                                    <v-img :src="item.img_small" :alt="item.img_name" :title="item.img_name" height="240" :transition="false" :draggable="false" loading="lazy" decoding="async"><template #error><div class="imageError">{{ t('image.loadError') }}</div></template></v-img>
+                                    <span v-if="selectMode" class="selectionMark" aria-hidden="true"><v-icon :icon="selectedItemId[item.id] ? 'mdi-check' : 'mdi-plus'" size="16"></v-icon></span>
+                                    <span class="meta" :title="item.img_name">{{ shortImageName(item.img_name) }}</span>
+                                </button>
                             </v-card>
                         </div>
+                        <div v-if="stableCatalog || (!isInitializing && !initializationFailed && !isLoadingPage && !isSearching && (!isPagedBrowseMode || !hasMorePages))" class="resultsEnd" :role="stableCatalog ? undefined : 'status'"><v-icon icon="mdi-check-circle-outline" size="20" aria-hidden="true"></v-icon><span>{{ t('results.end') }}</span></div>
+                        <div v-if="isPagedBrowseMode && hasMorePages && !initializationFailed" class="loadMoreArea"><v-btn variant="outlined" @click="loadMoreImages" :loading="isLoadingPage || isExploringPages" :disabled="isSearching || isInitializing || !ratingFilter.length">{{ t(searchCount ? 'results.loadMore' : 'results.findMore') }}</v-btn><p v-if="!searchCount && ratingFilter.length" class="contextHint">{{ t('results.findMoreHint') }}</p></div>
                     </v-container>
+                    <div v-if="stableCatalog && (isLoadingPage || isSelecting || catalogPageError || errorMessage)" class="catalogProgress" role="status"><template v-if="catalogPageError"><span>{{ catalogPageError }}</span><v-btn variant="outlined" @click="loadMoreImages">{{ t('results.retry') }}</v-btn></template><template v-else-if="errorMessage"><span>{{ errorMessage }}</span><v-btn variant="text" @click="errorMessage = ''">{{ t('common.close') }}</v-btn></template><template v-else><v-progress-circular indeterminate size="20" color="primary"></v-progress-circular><span>{{ t('results.loading') }}</span></template></div>
                 </div>
             </v-main>
-
-            <v-dialog
-                :model-value="activeDialogItem !== null"
-                @update:model-value="(v) => { if (!v) activeDialogItem = null }"
-                width="auto"
-            >
-                <v-card v-if="activeDialogItem">
-                    <v-img :src="activeDialogItem.img_original" :title="activeDialogItem.img_name" width="90vw" height="85vh"></v-img>
-                    <v-card-title>
-                        <span class="meta">{{ activeDialogItem.img_name }}</span>
-                        <a :href="activeDialogItem.img_original" :download="activeDialogItem.img_name.split('\\').pop()">
-                            <v-icon icon="mdi-download" color="info"></v-icon>
-                        </a>
-                    </v-card-title>
-                    <v-card-text class="d-flex flex-column gap-2">
-                        <span class="meta">style_cluster: {{ getImageMetadata(activeDialogItem.id).style_cluster || '---' }}</span>
-                        <span class="meta">rating: {{ getImageMetadata(activeDialogItem.id).rating || '---' }}</span>
-                        <span class="meta">aesthetic_quality: {{ getImageMetadata(activeDialogItem.id).aesthetic_quality || '---' }}</span>
-                        <span class="meta">tags: {{ getImageMetadata(activeDialogItem.id).tags || '---' }}</span>
+            <div v-if="isSearching || isDownloading || downloadMessage || (selectMode && selectionMessage && selectionMessageKey === 'selection.limit')" class="actionFeedback" role="status"><v-progress-circular v-if="isSearching || isDownloading" indeterminate size="20" color="primary"></v-progress-circular><span>{{ isSearching ? t('search.running') : isDownloading ? t('download.preparing') : selectMode && selectionMessageKey === 'selection.limit' ? selectionMessage : downloadMessage }}</span><v-btn v-if="!isSearching && !isDownloading" icon="mdi-close" variant="text" :aria-label="t('common.close')" @click="downloadMessage = ''; selectionMessage = ''"></v-btn></div>
+            <v-dialog v-model="isShowSetting" activator="#settingsToggle" class="settingsOverlay" content-class="settingsDrawer" transition="slide-x-transition" width="400" scrollable aria-labelledby="settingsTitle">
+                <v-card id="settingsPanel" class="settingsPanel">
+                    <v-card-title class="settingsHeader"><v-btn icon="mdi-close" variant="text" :aria-label="t('settings.close')" @click="isShowSetting = false"></v-btn><h2 id="settingsTitle">{{ t('settings.title') }}</h2></v-card-title>
+                    <v-card-text class="settingsContent">
+                        <div class="drawerLanguage"><label for="drawerLocale" lang="en">Language</label><select id="drawerLocale" v-model="locale"><option value="ja" lang="ja">日本語</option><option value="en" lang="en">English</option></select></div>
+                        <div class="settingsActions">
+                            <v-btn id="scrollToTop" variant="outlined" prepend-icon="mdi-arrow-collapse-up" @click="scrollToTop">{{ t('results.scrollTop') }}</v-btn>
+                            <v-btn variant="outlined" prepend-icon="mdi-view-grid-outline" @click="browseImages" :disabled="isSearching || isInitializing">{{ t('results.backToBrowse') }}</v-btn>
+                        </div>
+                        <section class="settingsSection" aria-labelledby="searchMethodsTitle"><h3 id="searchMethodsTitle">{{ t('settings.searchMethods') }}</h3><p class="contextHint">{{ t('settings.searchMethodsHint') }}</p>
+                            <div class="settingsActions">
+                                <v-btn variant="outlined" @click="nameSearchButton" :disabled="isInitializing || initializationFailed || isSearching || !text?.trim()">{{ t('search.byName') }}</v-btn>
+                                <v-btn variant="outlined" @click="tagSearchButton" :disabled="isInitializing || initializationFailed || isSearching || !text?.trim()">{{ t('search.byTags') }}</v-btn>
+                                <v-btn variant="outlined" @click="styleClusterSearchButton" :disabled="isInitializing || initializationFailed || isSearching || !text?.trim()">{{ t('search.byStyle') }}</v-btn>
+                                <v-btn variant="text" @click="randomSearchButton" :disabled="isInitializing || initializationFailed || isSearching">{{ t('search.random') }}</v-btn>
+                            </div>
+                            <v-checkbox id="trueRegexp" v-model="isRegexp" color="primary" :label="t('settings.regexp') + ' — ' + t(isRegexp ? 'common.enabled' : 'common.disabled')" :hint="t('settings.regexpHint')" persistent-hint></v-checkbox>
+                        </section>
+                        <section class="settingsSection" aria-labelledby="filterTitle"><h3 id="filterTitle">{{ t('settings.filters') }}</h3>
+                            <v-select v-model="ratingFilter" :label="t('settings.rating')" :aria-label="t('settings.rating')" :menu-props="{ activatorProps: { 'aria-label': t('settings.rating') } }" :items="ratingOptions" multiple chips></v-select>
+                            <div class="rangeControl"><label for="aestheticWeight">{{ t('settings.aestheticWeight') }} <output for="aestheticWeight">{{ aesthetic_quality_beta }}</output></label><input id="aestheticWeight" type="range" min="-1" max="1" step="0.01" v-model.number="aesthetic_quality_beta"></div>
+                            <fieldset class="rangeGroup"><legend>{{ t('settings.aestheticRange') }}</legend><div class="rangeControl"><label for="aestheticMin">{{ t('settings.rangeMinimum') }} <output for="aestheticMin">{{ aesthetic_quality_range[0] }}</output></label><input id="aestheticMin" type="range" min="0" :max="aesthetic_quality_range[1]" step="0.1" v-model.number="aesthetic_quality_range[0]"></div><div class="rangeControl"><label for="aestheticMax">{{ t('settings.rangeMaximum') }} <output for="aestheticMax">{{ aesthetic_quality_range[1] }}</output></label><input id="aestheticMax" type="range" :min="aesthetic_quality_range[0]" max="10" step="0.1" v-model.number="aesthetic_quality_range[1]"></div></fieldset>
+                            <v-select v-model="aesthetic_model_name" :label="t('settings.aestheticModel')" :aria-label="t('settings.aestheticModel')" :menu-props="{ activatorProps: { 'aria-label': t('settings.aestheticModel') } }" :items="[{ title: t('settings.standard'), value: 'original' }, { title: 'Pony', value: 'pony' }]"></v-select>
+                            <v-text-field v-model.number="resultSize" :label="t('settings.resultLimit')" type="number" min="1" max="8192" :hint="t('settings.resultLimitHint')" persistent-hint></v-text-field>
+                        </section>
+                        <section class="settingsSection" aria-labelledby="modelTitle"><h3 id="modelTitle">{{ t('settings.modelTitle') }}</h3><v-autocomplete v-model="model_name" :label="t('settings.model')" :aria-label="t('settings.model')" :menu-props="{ activatorProps: { 'aria-label': t('settings.model') } }" :disabled="isInitializing" :items="modelNameItems"></v-autocomplete><v-autocomplete v-model="pretrained" :label="t('settings.pretrained')" :aria-label="t('settings.pretrained')" :menu-props="{ activatorProps: { 'aria-label': t('settings.pretrained') } }" :disabled="isInitializing" :items="pretrainedItems"></v-autocomplete></section>
+                        <section class="settingsSection" aria-labelledby="reuseTitle"><h3 id="reuseTitle">{{ t('settings.reuseTitle') }}</h3>
+                            <v-text-field v-model="search_query" :label="t('settings.savedQuery')" :hint="t('settings.savedQueryHint')" persistent-hint></v-text-field>
+                            <v-btn variant="outlined" class="my-3" @click="querySearchButton" :disabled="isInitializing || initializationFailed || isSearching || !search_query?.trim()">{{ t('search.replay') }}</v-btn>
+                            <div class="rangeControl"><label for="textStrength">{{ t('settings.textStrength') }} <output for="textStrength">{{ features_strength }}</output></label><input id="textStrength" type="range" min="-2" max="2" step="0.1" v-model.number="features_strength"></div>
+                            <v-btn variant="outlined" @click="addTextFeaturesButton" :disabled="isInitializing || initializationFailed || isSearching || !search_query?.trim() || !text?.trim()">{{ t('search.addWords') }}</v-btn>
+                        </section>
+                        <section class="settingsSection" aria-labelledby="layoutTitle"><h3 id="layoutTitle">{{ t('settings.layout') }}</h3><div class="rangeControl"><label for="setnNumCols">{{ t('settings.columns') }} <output for="setnNumCols">{{ numCols }}</output></label><input id="setnNumCols" type="range" min="1" max="24" step="1" v-model.number="numCols"></div><p class="contextHint">{{ t('settings.actualColumns', { count: visibleCols }) }}</p></section>
+                        <section class="settingsSection" aria-labelledby="helpTitle"><h3 id="helpTitle">{{ t('settings.helpTitle') }}</h3><p class="contextHint">{{ t(isPagedBrowseMode ? 'results.browseHint' : 'results.searchHint', { count: lastSearchLimit.toLocaleString(locale) }) }}</p><p class="contextHint">{{ t('selection.help') }}</p><p class="contextHint">{{ t('search.imageHelp') }}</p><p class="contextHint">{{ t('selection.searchLimit') }}</p><p class="contextHint">{{ t('download.defaultHint') }}</p><p class="contextHint">{{ t('download.selectedHint') }}</p><div class="timingArea" v-if="searchDurationMs !== null"><span>{{ t('timing.server') }} <strong>{{ formatDuration(searchDurationMs) }}</strong></span><span>{{ t('timing.screen') }} <strong>{{ formatDuration(clientDurationMs) }}</strong></span></div></section>
+                    </v-card-text>
+                    <v-card-actions class="settingsFooter"><v-btn color="primary" variant="flat" block @click="isShowSetting = false">{{ t('settings.done') }}</v-btn></v-card-actions>
+                </v-card>
+            </v-dialog>
+            <input id="imageSearchFileInput" ref="imageSearchFileInput" type="file" accept="image/*" hidden @change="onImageSearchFileChange($event)">
+            <v-dialog :model-value="downloadConfirmation !== null" @update:model-value="(value) => { if (!value) cancelDownloadConfirmation() }" @after-enter="focusDownloadCancel" @after-leave="restoreDownloadFocus" width="420" aria-labelledby="downloadConfirmTitle">
+                <v-card v-if="downloadConfirmation" id="downloadConfirmDialog" class="downloadConfirmDialog">
+                    <v-card-title><h2 id="downloadConfirmTitle">{{ t('download.confirmTitle') }}</h2></v-card-title>
+                    <v-card-text><p>{{ t(downloadConfirmation.selected ? 'download.confirmSelected' : 'download.confirmFirst', { count: downloadConfirmation.count.toLocaleString(locale) }) }}</p><p class="contextHint">{{ t('download.zipHint') }}</p></v-card-text>
+                    <v-card-actions class="downloadConfirmActions"><v-btn id="downloadCancel" variant="text" @click="cancelDownloadConfirmation">{{ t('common.cancel') }}</v-btn><v-btn id="downloadConfirm" color="primary" variant="flat" @click="confirmDownload">{{ t('download.confirmSave', { count: downloadConfirmation.count.toLocaleString(locale) }) }}</v-btn></v-card-actions>
+                </v-card>
+            </v-dialog>
+            <v-dialog :model-value="activeDialogItem !== null" @update:model-value="(v) => { if (!v) activeDialogItem = null }" @after-leave="restoreDetailFocus" class="detailOverlay" width="1200" scrollable aria-labelledby="detailTitle">
+                <v-card v-if="activeDialogItem" class="imageDialog">
+                    <v-card-title class="dialogHeader"><h2 id="detailTitle">{{ t('image.detailTitle') }}</h2><a :href="activeDialogItem.img_original" :download="shortImageName(activeDialogItem.img_name)" :aria-label="t('image.download', { name: activeDialogItem.img_name })" :title="t('download.saveShort')"><v-icon icon="mdi-download" size="24"></v-icon></a><v-btn id="closeImageDetail" icon="mdi-close" variant="text" :aria-label="t('image.closeDetail')" :title="t('common.close')" @click="activeDialogItem = null"></v-btn></v-card-title>
+                    <v-card-text class="detailBody" :data-image-state="detailImageState">
+                        <v-img v-for="detail in [{ item: activeDialogItem, attempt: detailImageAttempt }]" :key="detail.item.id + ':' + detail.attempt" class="detailOriginalImage" :src="detail.item.img_original" :lazy-src="detail.item.img_small" :alt="detail.item.img_name" :transition="false" eager @load="onDetailImageLoad(detail.item.id, detail.attempt)" @error="onDetailImageError(detail.item.id, detail.attempt)">
+                            <template #placeholder><div class="detailImageLoading" role="status"><v-progress-circular indeterminate color="primary" size="28"></v-progress-circular><span>{{ t('image.loading') }}</span></div></template>
+                            <template #error><div class="detailImageError" role="status"><p>{{ t('image.loadError') }}</p><v-btn id="retryDetailImage" variant="outlined" @click="retryDetailImage">{{ t('image.retry') }}</v-btn></div></template>
+                        </v-img>
+                        <div class="detailMetadata"><dl class="imageMetadata"><dt>{{ t('image.fullName') }}</dt><dd id="detailFileName" class="detailFullName">{{ activeDialogItem.img_name }}</dd><dt>{{ t('image.style') }}</dt><dd>{{ getImageMetadata(activeDialogItem.id).style_cluster || t('common.notAvailable') }}</dd><dt>{{ t('image.rating') }}</dt><dd>{{ ratingTitle(getImageMetadata(activeDialogItem.id).rating) }}</dd><dt>{{ t('image.aesthetic') }}</dt><dd>{{ getImageMetadata(activeDialogItem.id).aesthetic_quality ?? t('common.notAvailable') }}</dd><dt>{{ t('image.tags') }}</dt><dd>{{ getImageMetadata(activeDialogItem.id).tags || t('common.notAvailable') }}</dd></dl></div>
                     </v-card-text>
                 </v-card>
             </v-dialog>
         </v-app>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/vue@3.4/dist/vue.global.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/vuetify@3.5/dist/vuetify.min.js"></script>
-    <script type="module" src="./js/main.js"></script>
+    <script src="./vendor/vue/vue.global.prod.js"></script>
+    <script src="./vendor/vuetify/vuetify.min.js"></script>
+    <script type="module" src="./js/bootstrap.js"></script>
 </body>
-
 </html>
