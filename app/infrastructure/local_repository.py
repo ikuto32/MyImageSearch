@@ -1,5 +1,7 @@
 import asyncio
 import contextlib
+import errno
+from collections import OrderedDict
 from dataclasses import dataclass
 from functools import cache
 import hashlib
@@ -9,11 +11,13 @@ import logging
 import os
 import pathlib
 import mimetypes
+import shutil
 import threading
 import time
 from typing import List, Sequence
 import concurrent.futures
 import zipfile
+import tempfile
 
 from app.infrastructure.model_metadata import (
     default_model_dir_name,
@@ -34,8 +38,9 @@ from app.domain.domain_object import (
     ModelName,
 )
 from app.domain.repository import Repository
+from app.domain.errors import ResourceLimitError
 
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageOps, UnidentifiedImageError
 
 
 @dataclass
@@ -51,6 +56,12 @@ class LocalRepository(Repository):
     _SCAN_TIMEOUT_SEC = 3600.0
     _SCAN_STALL_LOG_INTERVAL_SEC = 300.0
     _IMAGE_ITEM_WORKERS = 32
+    _THUMBNAIL_CACHE_BYTES = 64 * 1024 * 1024
+    MAX_IMAGE_BYTES = 64 * 1024 * 1024
+    MAX_IMAGE_PIXELS = 64_000_000
+    MAX_ZIP_BYTES = 64 * 1024 * 1024 * 1024
+    ZIP_MEMORY_BYTES = 8 * 1024 * 1024
+    ZIP_DISK_RESERVE_BYTES = 16 * 1024 * 1024
 
     def __init__(
         self,
@@ -59,13 +70,22 @@ class LocalRepository(Repository):
         *,
         scan_timeout_sec: float = _SCAN_TIMEOUT_SEC,
         scan_parallelism: int = _PARALLEL,
+        thumbnail_cache_bytes: int = _THUMBNAIL_CACHE_BYTES,
     ) -> None:
+        if thumbnail_cache_bytes < 0:
+            raise ValueError("thumbnail_cache_bytes must be non-negative")
         self._logger = logging.getLogger(__name__)
         self._image_dir_path: pathlib.Path = image_dir_path
+        self._resolved_image_dir = image_dir_path.resolve()
         self._meta_dir_path: pathlib.Path = meta_dir_path or pathlib.Path('./clip_meta')
         self._id_to_path: dict[ImageId, pathlib.Path] = {}
         self._scan_timeout_sec = scan_timeout_sec
         self._scan_parallelism = scan_parallelism
+        self._thumbnail_cache_limit = thumbnail_cache_bytes
+        self._thumbnail_cache: OrderedDict[ImageId, Image] = OrderedDict()
+        self._thumbnail_cache_size = 0
+        self._thumbnail_cache_lock = threading.Lock()
+        self._image_paths_generation = 0
 
     @staticmethod
     def _get_default_image_extensions() -> list[str]:
@@ -363,80 +383,155 @@ class LocalRepository(Repository):
             ModelName(default_model_dir_name(ModelId(model_name, pretrained))),
         )
 
-    @cache
     def load_image(self, image_id: ImageId) -> Image:
-        """フルサイズ画像を読み込み、MIME 推定結果とともに返す（キャッシュ対象）。
+        """フルサイズ画像を読み込み、MIME 推定結果とともに返す。
 
         - ``load_all_image_item`` で構築された ``_id_to_path`` を用いて相対パスを引き当てる。
         - 対応するファイルをバイナリとして読み込み、 ``mimetypes.guess_type`` でContent-Typeを推測する。
-        - 結果は ``functools.cache`` によりメモ化され、同一IDの再読み込みを防ぐ。
+        - 大きな画像の閲覧やZIP出力でメモリを保持し続けないよう、キャッシュしない。
         - 戻り値は ``Image`` ドメインオブジェクト（バイナリ本体とcontent_typeを保持）。
         """
-        relative_path = self._id_to_path.get(image_id)
-
-        if relative_path is None:
-            self._logger.warning("指定されたImageIdが存在しません: %s", image_id)
-            raise ValueError(f"指定されたImageIdが存在しません: {image_id}")
-
-        path: pathlib.Path = self._image_dir_path / relative_path
-        binary: bytes = path.read_bytes()
+        path = self._image_path(image_id)
+        try:
+            with path.open('rb') as source:
+                binary = source.read(self.MAX_IMAGE_BYTES + 1)
+        except OSError as error:
+            raise ValueError(f"画像ファイルを開けません: {image_id.id}") from error
+        if len(binary) > self.MAX_IMAGE_BYTES:
+            raise ResourceLimitError("元画像は64MiB以内で指定してください。")
 
         content_type = mimetypes.guess_type(path)[0] or 'application/octet-stream'
 
         return Image(binary, content_type)
 
-    @cache
+    def _image_path(self, image_id: ImageId) -> pathlib.Path:
+        """Resolve only image files contained by the configured image root."""
+        relative_path = self._id_to_path.get(image_id)
+        if relative_path is None:
+            raise ValueError(f"画像IDが見つかりません: {image_id.id}")
+        # Reject drive/UNC/absolute paths even if they happen to point inside root.
+        relative_path = pathlib.Path(relative_path)
+        if relative_path.is_absolute() or relative_path.drive:
+            raise ValueError("画像パスは画像ディレクトリ内の相対パスである必要があります。")
+        try:
+            path = (self._resolved_image_dir / relative_path).resolve()
+            path.relative_to(self._resolved_image_dir)
+            if path.suffix.lower() not in PILImage.registered_extensions():
+                raise ValueError("対応していない画像形式です。")
+            if path.stat().st_size > self.MAX_IMAGE_BYTES:
+                raise ResourceLimitError("元画像は64MiB以内で指定してください。")
+        except (OSError, RuntimeError, ValueError) as error:
+            raise ValueError(f"画像ファイルを開けません: {image_id.id}") from error
+        return path
+
     def load_small_image(self, image_id: ImageId) -> Image:
-        """縮小サムネイルを生成して返す（400px以下、キャッシュ対象）。
+        """縮小サムネイルを生成して返す（400px以下、容量制限付きLRU）。
 
         - ``_id_to_path`` から元画像パスを取得し、Pillow で開いて長辺が400pxになるよう ``thumbnail`` で縮小する。
         - 元のフォーマットを維持しつつバイナリへ保存する。形式が判別できない場合は PNG を使用。
         - ``mimetypes.guess_type`` による MIME 推定結果を ``Image`` に格納する。
-        - 生成済みのサムネイルは ``functools.cache`` でメモ化され、再生成を回避する。
+        - 生成済みバイナリは合計64MiB（既定）まで保持し、古い利用順で破棄する。
+        - 上限より大きい画像はキャッシュせず返す。上限0でキャッシュを無効化できる。
         """
-        relative_path = self._id_to_path.get(image_id)
+        with self._thumbnail_cache_lock:
+            cached_image = self._thumbnail_cache.get(image_id)
+            if cached_image is not None:
+                self._thumbnail_cache.move_to_end(image_id)
+                return cached_image
+            relative_path = self._id_to_path.get(image_id)
+            generation = self._image_paths_generation
 
         if relative_path is None:
             self._logger.warning("指定されたImageIdが存在しません: %s", image_id)
             raise ValueError(f"指定されたImageIdが存在しません: {image_id}")
 
-        path: pathlib.Path = self._image_dir_path / relative_path
+        path = self._image_path(image_id)
 
-        # open image with PIL and resize to long side 400 px
-        with PILImage.open(path) as img:
-            img.thumbnail((400, 400))
-            buffer = io.BytesIO()
-            format = img.format if img.format else 'PNG'
-            img.save(buffer, format=format)
-            binary = buffer.getvalue()
+        try:
+            with PILImage.open(path) as img:
+                if img.width * img.height > self.MAX_IMAGE_PIXELS:
+                    raise ResourceLimitError("サムネイルにできる画像は6400万画素以内です。")
+                format = img.format or 'PNG'
+                img.thumbnail((400, 400))
+                oriented = ImageOps.exif_transpose(img)
+                buffer = io.BytesIO()
+                oriented.save(buffer, format=format)
+                binary = buffer.getvalue()
+        except (OSError, UnidentifiedImageError, PILImage.DecompressionBombError) as error:
+            raise ValueError(f"画像ファイルを開けません: {image_id.id}") from error
 
         content_type = mimetypes.guess_type(path)[0] or 'application/octet-stream'
 
-        return Image(binary, content_type)
+        image = Image(binary, content_type)
+        size = len(binary)
+        if self._thumbnail_cache_limit and size <= self._thumbnail_cache_limit:
+            with self._thumbnail_cache_lock:
+                # パス一覧の差替え中に生成した古い画像はキャッシュへ戻さない。
+                if generation == self._image_paths_generation:
+                    previous = self._thumbnail_cache.pop(image_id, None)
+                    if previous is not None:
+                        self._thumbnail_cache_size -= len(previous.binary)
+                    while self._thumbnail_cache_size + size > self._thumbnail_cache_limit:
+                        _, evicted = self._thumbnail_cache.popitem(last=False)
+                        self._thumbnail_cache_size -= len(evicted.binary)
+                    self._thumbnail_cache[image_id] = image
+                    self._thumbnail_cache_size += size
+        return image
 
-    def create_zip_from_images(self, images_with_names: list[tuple[Image, ImageName]]):
-        """画像バイナリのリストからZIPを生成し、メモリ上のバッファを返す。
+    def create_zip_from_images(self, images_with_names):
+        """(Image, ImageName) の反復可能オブジェクトから容量制限付きZIPを作る。
 
-        - 引数は ``(Image, ImageName)`` のタプルのリストで、content_typeから拡張子を推定しつつ元の名前で格納する。
-        - 圧縮形式は ``zipfile.ZIP_DEFLATED``、出力は ``io.BytesIO`` 上に書き込まれ ``seek(0)`` 済みで返却される。
-        - 戻り値は ``BytesIO`` バッファで、呼び出し側がHTTPレスポンス等へ直接書き出せる。
+        出力は8MiBを超えるとディスクへ退避し、seek(0)済みで返す。
+        呼び出し側は応答終了時にバッファをcloseする。
         """
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            for image, image_name in images_with_names:
-                extension = image.content_type.split('/')[-1]
-                filename = f"{image_name.name}"
-                zip_file.writestr(filename, image.binary)
-        zip_buffer.seek(0)
-        return zip_buffer
+        spool_directory = tempfile.gettempdir()
+        zip_buffer = tempfile.SpooledTemporaryFile(max_size=self.ZIP_MEMORY_BYTES, mode="w+b", dir=spool_directory)
+        total_bytes = 0
+        used_names = set()
+        try:
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                for image, image_name in images_with_names:
+                    total_bytes += len(image.binary)
+                    if total_bytes > self.MAX_ZIP_BYTES:
+                        raise ResourceLimitError("画像の合計が64GiBを超えています。件数を減らしてダウンロードしてください。")
+                    # ZIP's deflate output can be a little larger than its input.
+                    # Roll over before writing an image, rather than temporarily
+                    # retaining a large compressed member in the memory spool.
+                    write_bound = len(image.binary) + len(image.binary) // 1000 + 65536
+                    if zip_buffer._rolled or zip_buffer.tell() + write_bound > self.ZIP_MEMORY_BYTES:
+                        buffered_bytes = 0 if zip_buffer._rolled else zip_buffer.tell()
+                        required = buffered_bytes + write_bound + self.ZIP_DISK_RESERVE_BYTES
+                        if shutil.disk_usage(spool_directory).free < required:
+                            raise ResourceLimitError("ZIPを作成する一時ディスクの空き容量が不足しています。空きを確保するか保存枚数を減らしてください。")
+                        zip_buffer.rollover()
+                    # Preserve distinct images with the same basename and never
+                    # emit extraction paths controlled by stored metadata.
+                    base = pathlib.PureWindowsPath(image_name.name).name or 'image'
+                    filename = base
+                    suffix = 2
+                    while filename.casefold() in used_names:
+                        stem = pathlib.PurePath(base).stem
+                        extension = pathlib.PurePath(base).suffix
+                        filename = f"{stem} ({suffix}){extension}"
+                        suffix += 1
+                    used_names.add(filename.casefold())
+                    zip_file.writestr(filename, image.binary)
+            zip_buffer.seek(0)
+            return zip_buffer
+        except OSError as error:
+            zip_buffer.close()
+            if error.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)) or getattr(error, "winerror", None) in (39, 112):
+                raise ResourceLimitError("ZIP作成中にディスクの空き容量が不足しました。空きを確保するか保存枚数を減らしてください。") from error
+            raise
+        except BaseException:
+            zip_buffer.close()
+            raise
 
-    @cache
     def get_image_name(self, image_id: ImageId) -> ImageName:
-        """画像IDに対応するファイル名だけを返す（キャッシュ対象）。
+        """画像IDに対応するファイル名だけを返す。
 
         - ``load_all_image_item`` が構築した ``_id_to_path`` を参照し、相対パスからファイル名を抽出する。
         - 見つからない場合は ``ValueError`` を送出し、成功時は ``ImageName`` ドメインオブジェクトを返す。
-        - 関数結果は ``functools.cache`` によりメモ化される。
         """
         relative_path = self._id_to_path.get(image_id)
         if relative_path is None:
@@ -447,6 +542,34 @@ class LocalRepository(Repository):
 
         return ImageName(name=image_name)
 
+    def register_image_items(self, items: list[ImageItem]) -> None:
+        """Merge displayed search results without rescanning the image root.
+
+        Files are still resolved and checked by _image_path when read. Reject
+        obvious external paths here without adding a filesystem stat per result.
+        """
+        with self._thumbnail_cache_lock:
+            changed_existing_path = False
+            for item in items:
+                relative_path = pathlib.Path(item.display_name.name)
+                if relative_path.is_absolute() or relative_path.drive or ".." in relative_path.parts:
+                    continue
+                previous_path = self._id_to_path.get(item.id)
+                if previous_path == relative_path:
+                    continue
+                self._id_to_path[item.id] = relative_path
+                if previous_path is not None:
+                    changed_existing_path = True
+                    old_thumbnail = self._thumbnail_cache.pop(item.id, None)
+                    if old_thumbnail is not None:
+                        self._thumbnail_cache_size -= len(old_thumbnail.binary)
+            if changed_existing_path:
+                self._image_paths_generation += 1
+
     def set_image_paths(self, image_paths: dict[ImageId, pathlib.Path]) -> None:
         """ImageIdから相対パスを引くためのマップを設定する。"""
-        self._id_to_path = dict(image_paths)
+        with self._thumbnail_cache_lock:
+            self._id_to_path = dict(image_paths)
+            self._image_paths_generation += 1
+            self._thumbnail_cache.clear()
+            self._thumbnail_cache_size = 0

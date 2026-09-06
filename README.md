@@ -1,159 +1,99 @@
 # MyImageSearch
 
-MyImageSearch は、OpenAI の [CLIP](https://openai.com/index/clip/) (Contrastive Language-Image Pre-Training) モデルに基づいて、テキストクエリを使用してローカルマシン上の画像を検索し、画像を見つけることができるWebアプリケーションです。
+ローカルに保存した画像を、言葉や似ている画像から探すWebアプリです。OpenCLIPによる画像・テキストの埋め込みとFAISSを使って検索し、ブラウザで閲覧・選択・保存できます。
 
-![アプリケーションの見た目](./figs/fig1.png)
+![PCで「mountains」を検索した画面](figs/app-desktop.png)
 
-## Backend
-画像を[openCLIP](https://github.com/mlfoundations/open_clip)を用いてembeddingsに変換し、SQLiteデータベースで管理している。検索には[faiss](https://github.com/facebookresearch/faiss)を使用して"index"を作成し、高速なベクトル検索を行っている。ウェブアプリケーションの実装には [Flask](https://flask.palletsprojects.com/en/3.0.x/)フレームワークを使用した。
+プロジェクト内の軽量データを使った実際の検索画面です。スマホ幅でも、検索と画像の閲覧を同じ画面で続けられます。
 
-## Frontend
-アプリケーションのフロントエンドは、人気のマテリアルデザインコンポーネントフレームワークである[Vue.js](https://vuejs.org/)と[Vuetify](https://vuetifyjs.com/en/)を使用して開発した。
+<img src="figs/app-mobile.png" alt="スマホ幅で山の写真を閲覧する画面" width="320">
 
-## Technologies
-このプロジェクトで使用される主な言語は、Python、JavaScript、HTML です。
+## できること
 
-# Setup
-次の手順に従って、MyImageSearch をセットアップして実行します。
+- テキスト・画像・ファイル名・タグによる検索、ランダム表示、検索クエリの保存と再実行。
+- 無限スクロールでの閲覧。件数の下のバーとパーセントで現在位置を確認でき、メニューから先頭へ戻れます。
+- 画像の拡大、複数選択、最大1,024枚のZIP保存。
+- 日本語・英語のUI切替、スマホ・タブレット・PCでの利用。
 
----
+## セットアップ
 
-## 方法 1: uv を使ったセットアップ（推奨）
-
-### 仮想環境を作成して有効化:
-```
-uv venv
-.venv\Scripts\activate      # Windows の場合
-# または
-source .venv/bin/activate   # Linux/macOS の場合
-```
-
-### 依存ライブラリをインストール:
-pyproject.tomlからインストール
-```
-uv sync
-```
-
-### アプリケーションを起動:
-```
-python app.py
-```
-
----
-
-## 方法 2: pip を使ったセットアップ
-
-### 仮想環境を作成:
-```
-python -m venv venv
-```
-
-### 仮想環境を有効化:
-```
-venv\Scripts\activate      # Windows の場合
-# または
-source venv/bin/activate   # Linux/macOS の場合
-```
-
-### 依存ライブラリをインストール:
-```
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu117
-pip install faiss-cpu pandas Flask open_clip_torch
-```
-
-### アプリケーションを起動:
-```
-python app.py
-```
-## Access UI:
-[localhost](http://localhost)にブラウザからアクセスします。
-
-## Qwen3-VL-Embedding via vLLM
-
-`--search_backend qwen_vl` は、クライアント側で Qwen3-VL-Embedding の重みをロードせず、WSL など別環境で起動した vLLM の OpenAI 互換 API (`POST /v1/embeddings`) に画像・テキストを送信します。MyImageSearch 側では画像読み込み、タグ付け、SQLite 保存、FAISS インデックス作成のみを行い、Qwen の画像前処理と GPU 推論は vLLM サーバー側で実行されます。
-
-### WSL 側: vLLM 用の独立環境
-
-MyImageSearch の仮想環境とは別に、WSL 側で vLLM 専用環境を作成します。
-
-```bash
-mkdir -p ~/qwen-vllm
-cd ~/qwen-vllm
-
-uv venv --python 3.12
-source .venv/bin/activate
-
-uv pip install "vllm>=0.14.0" --torch-backend=auto
-```
-
-標準解像度の起動例:
-
-```bash
-vllm serve Qwen/Qwen3-VL-Embedding-2B \
-  --served-model-name Qwen/Qwen3-VL-Embedding-2B \
-  --runner pooling \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --dtype float16 \
-  --max-model-len 8192 \
-  --gpu-memory-utilization 0.90 \
-  --limit-mm-per-prompt '{"image":1,"video":0}' \
-  --mm-processor-kwargs '{"min_pixels":4096,"max_pixels":262144}'
-```
-
-高解像度設定の起動例:
-
-```bash
-vllm serve Qwen/Qwen3-VL-Embedding-2B \
-  --served-model-name Qwen/Qwen3-VL-Embedding-2B \
-  --runner pooling \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --dtype float16 \
-  --max-model-len 8192 \
-  --gpu-memory-utilization 0.90 \
-  --limit-mm-per-prompt '{"image":1,"video":0}' \
-  --mm-processor-kwargs '{"min_pixels":4096,"max_pixels":1310720}'
-```
-
-`min_pixels` / `max_pixels` は `create_index.py` のクライアント引数では変更できません。vLLM 起動時の `--mm-processor-kwargs` で決まります。後方互換用の `--qwen-max-pixels` は API バックエンドでは無視され、指定時に警告を表示します。
-
-サーバー起動後、モデル一覧を確認します。
-
-```bash
-curl http://127.0.0.1:8000/v1/models
-```
-
-### クライアント側: create_index.py の実行例
-
-```bash
-uv sync
-
-uv run python create_index.py \
-  --search_backend qwen_vl \
-  --search_model_id Qwen/Qwen3-VL-Embedding-2B \
-  --search_model_out_dim 2048 \
-  --qwen-api-base http://127.0.0.1:8000/v1 \
-  --batch_size 8 \
-  --qwen-api-concurrency 8 \
-  --disable-clip-metadata \
-  --image_dir ./images \
-  --meta_dir ./clip_meta
-```
-
-環境変数を使う Windows PowerShell の例:
+Python 3.12以上と[uv](https://docs.astral.sh/uv/)を使用します。リポジトリのルートで実行してください。
 
 ```powershell
-$env:VLLM_API_BASE = "http://127.0.0.1:8000/v1"
-$env:VLLM_API_KEY = "EMPTY"
-
-uv run python create_index.py `
-  --search_backend qwen_vl `
-  --batch_size 8 `
-  --qwen-api-concurrency 8 `
-  --disable-clip-metadata
+uv sync
 ```
 
-`--qwen-api-base` は `/v1` なしでも指定できます。その場合は自動的に `/v1` が追加されます。WSL と Windows 間で `localhost` 転送が利用できない環境では、WSL の IP アドレスを `--qwen-api-base` に指定してください。
+現在の依存設定はPyTorchのCUDA版を参照しています。CUDAの版と取得先は `pyproject.toml` で確認し、別の実行環境では環境に合わせて調整してください。初回は検索モデルのダウンロードが発生します。
 
-実画像での最終確認では、1〜数枚のテストディレクトリに対して `create_index.py` を実行し、Windows 側プロセスで Qwen モデルがロードされないこと、WSL 側 vLLM にリクエストが到達すること、埋め込み shape が `(N, 2048)` になること、L2 norm がほぼ 1 になること、SQLite へ 2048 次元 `float32` として保存されること、FAISS インデックス生成が成功すること、2 回目の実行で保存済み画像が再推論されないことを確認してください。
+### 1. 画像とインデックスを用意する
+
+**画像・生成済みDB・FAISSインデックス・モデル重みは同梱していません。** 自分の画像を `images/` に配置してください。既に対応する `clip_meta/` がある場合は、作成を省略して起動できます。
+
+軽量な動作確認では、32枚以上の画像を配置し、次のコマンドで検索用インデックスを作成します。
+
+```powershell
+uv run python create_index.py --image_dir ./images --meta_dir ./clip_meta --search_backend open_clip --search_model_out_dim 768 --disable-clip-metadata --use-existing-tags --nlist 1 --bits_per_code 4 --batch_size 8 --num_workers 0
+```
+
+この例は検索に必要な埋め込みだけを作成し、追加の審美性・スタイル推論と自動タグ付けを省略します。既存のタグファイルがなければタグは空、画像区分は未分類になります。作成後は `clip_meta/ViT-L-14-openai/` にDBとインデックスが保存されます。
+
+既存タグを使う場合は、画像の隣に `photo.jpg.tags.json` のように配置します。形式は `{"rating":"general","tags":["mountain","sky"]}` です。
+
+`--nlist 1 --bits_per_code 4` は少数画像の確認用設定です。大規模データの作成ではこの2引数を外し、必要なメモリと検索精度を確認して調整してください。追加のメタデータ推論を有効にする場合は、`--aesthetic_model_path` で指定する重みなどを別途用意します。引数一覧は `uv run python create_index.py --help` で確認できます。
+
+### 2. 起動する
+
+```powershell
+uv run python app.py --local --host 127.0.0.1 --port 5000
+```
+
+コンソールに「起動準備完了」と表示されたら、[http://127.0.0.1:5000](http://127.0.0.1:5000)を開きます。起動時にモデル・インデックス・件数を準備するため、大規模データでは接続を受け付けるまで時間がかかります。
+
+タグなしで登録した画像は「未分類・評価なし」に含まれます。画像区分を絞って見つからなくなった場合は、メニューでこの区分を有効にしてください。
+
+`--local` はプロジェクト内の `images/` と `clip_meta/` を使用します。データを更新した場合はアプリを再起動してください。`--skip-warmup` はUIなどの検証時に準備を省略するためのオプションです。
+
+### 別の保存先・LANからの利用
+
+```powershell
+uv run python app.py --image-dir "D:/photos" --meta-dir "D:/image-index" --host 0.0.0.0 --port 5000
+```
+
+LAN内の端末では `http://<サーバーPCのIPアドレス>:5000/` を開きます。`0.0.0.0` は待受用の指定です。アプリに認証機能はないため、画像を共有してよいネットワーク内で使用してください。
+
+保存先を毎回入力したくない場合は [.env.example](.env.example) を `.env` にコピーして編集し、次のように読み込みます。
+
+```powershell
+uv run --env-file .env python app.py --host 127.0.0.1 --port 5000
+```
+
+保存先の優先順位は、明示した `--image-dir` / `--meta-dir` → `--local` → `MYIMAGESEARCH_IMAGE_DIR` / `MYIMAGESEARCH_META_DIR` 環境変数 → プロジェクト内のデータです。`.env` はGit管理対象外で、通常の `python app.py` では自動読込しません。
+
+## 操作方法
+
+| 操作 | 方法 |
+| --- | --- |
+| 言葉で探す | 上部の入力欄に入力して検索します。検索方法やモデルはメニューで変更できます。 |
+| 画像で探す | 上部の「画像で検索」で画像を指定します。選択中の画像からも検索できます（最大64枚）。 |
+| 拡大する | 通常表示で画像を押します。読み込み中・再試行の表示があり、長いファイル名も全文を確認できます。 |
+| 複数選択する | 「選択」を押して選択モードに入ります。Shift＋クリックで範囲選択、上部の一括選択ボタンでまとめて選択できます。 |
+| 選択を解除する | 選択モードを終了するか、Escを押します。 |
+| まとめて保存する | 「保存」で対象と枚数を確認して開始します。未選択なら現在の結果の先頭から最大1,024枚が対象です。確認画面でキャンセルできます。 |
+| 言語を変える | メニュー内の言語選択で日本語・Englishを切り替えます。 |
+
+スマホ幅では主要な操作をアイコンで表示します。UI文言は `app/presentation/view/lang/ja.json` と `en.json` で管理し、画像名やタグなどの元データは翻訳しません。
+
+## 開発と検証
+
+```powershell
+uv run python tests/run_tests.py
+node --test tests/test_ui_state.cjs tests/test_catalog_scroll.cjs tests/test_i18n.cjs
+```
+
+実装は `app/`、テストは `tests/`、検証・計測用スクリプトは `scripts/` にあります。ブラウザ検証、軽量データの動作確認、大規模データの計測方法は [検証ガイド](docs/testing.md) を参照してください。
+
+バックエンドはFlask・OpenCLIP・FAISS・SQLite、フロントエンドはVue・Vuetifyを使用しています。UIのJS・CSS・フォントはローカル配信し、必要なvendorファイルとライセンスは [vendor/](app/presentation/view/vendor/) に保持しています。
+
+Qwen3-VL-Embeddingを利用する場合は [vLLM APIの接続手順](docs/qwen-vllm.md) を参照してください。
+
+実行データ、ローカル設定、仮想環境、キャッシュ、計測出力はGit管理対象外です。公開用にはソース・テスト・依存定義・UI資材・このREADMEの画面画像を管理します。

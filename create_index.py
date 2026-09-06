@@ -31,6 +31,9 @@ import numpy as np
 import open_clip
 
 from app.infrastructure.model_metadata import (
+    INDEX_MANIFEST_SUFFIX,
+    INDEX_MANIFEST_VERSION,
+    file_sha256,
     SearchModelMetadata,
     write_model_metadata,
 )
@@ -801,6 +804,30 @@ class ImageTaggingService:
         return out
 
 
+def load_sidecar_tags(image_dir: str, image_path: str) -> dict:
+    """Read photo.jpg.tags.json next to an image, or leave it unclassified."""
+
+    image = pathlib.Path(image_dir) / image_path
+    sidecar = image.with_name(image.name + ".tags.json")
+    empty = {"rating": "", "tags": []}
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8-sig"))
+        if not isinstance(data, dict):
+            raise ValueError("expected an object with rating and tags")
+        rating = data.get("rating", "")
+        tags = data.get("tags", [])
+        if not isinstance(rating, str) or not isinstance(tags, list) or any(
+            not isinstance(tag, str) for tag in tags
+        ):
+            raise ValueError("rating must be a string and tags must be a list of strings")
+        return {"rating": rating, "tags": tags}
+    except FileNotFoundError:
+        return empty
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f"[tags warning] {sidecar}: {error}; using empty tags and no rating")
+        return empty
+
+
 def get_aesthetic_model(path_to_model, clip_model="vit_l_14"):
     """load the aethetic model"""
     if clip_model == "vit_l_14":
@@ -841,10 +868,8 @@ def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
 
-    # parser.add_argument("--image_dir", help="dir", default="//192.168.1.46/ikutoDataset/dataset/gallery-dl")
-    # parser.add_argument("--meta_dir", help="dir", default="C:/Users/ikuto/projects/clip_meta")
-    parser.add_argument("--image_dir", help="dir", default="./images")
-    parser.add_argument("--meta_dir", help="dir", default="./clip_meta")
+    parser.add_argument("--image_dir", help="dir", default=os.environ.get("MYIMAGESEARCH_IMAGE_DIR") or str(pathlib.Path(__file__).resolve().parent / "images"))
+    parser.add_argument("--meta_dir", help="dir", default=os.environ.get("MYIMAGESEARCH_META_DIR") or str(pathlib.Path(__file__).resolve().parent / "clip_meta"))
 
     parser.add_argument(
         "--aesthetic_model_path", help="aesthetic_model_path", default="./model/aesthetic_rankingv2.pth"
@@ -2017,7 +2042,10 @@ def collect_train_samples_algL(
     次元 d の float32 ベクトルを k=min(train_samples, total) 件だけ均一サンプルする。
     """
     if total is None:
-        total = con.execute("SELECT COUNT(*) FROM image_meta").fetchone()[0]
+        total = con.execute(
+            "SELECT COUNT(*) FROM image_meta WHERE typeof(meta) = 'blob' AND length(meta) = ?",
+            (d * 4,),
+        ).fetchone()[0]
 
     k = min(train_samples, total)
     if k <= 0:
@@ -2030,9 +2058,9 @@ def collect_train_samples_algL(
     cur = con.execute("""
         SELECT meta
           FROM image_meta
-         WHERE meta IS NOT NULL
+         WHERE typeof(meta) = 'blob' AND length(meta) = ?
          ORDER BY image_path
-    """)
+    """, (d * 4,))
 
     # --- フェーズA: 先頭 k 件でリザーバを満たす ---
     while filled < k:
@@ -2307,7 +2335,10 @@ def compute_mean_vector(
     ここでも明示的に正規化してから平均を取る。
     """
     print("Computing mean vector...")
-    cur = con.execute("SELECT meta FROM image_meta WHERE meta IS NOT NULL")
+    cur = con.execute(
+        "SELECT meta FROM image_meta WHERE typeof(meta) = 'blob' AND length(meta) = ?",
+        (d * 4,),
+    )
     mean_vec = np.zeros(d, dtype=np.float64)
     total_count = 0
     pbar = tqdm.tqdm(desc="mean computation")
@@ -2351,15 +2382,30 @@ def stream_build_faiss(
     batch_size: int = 50_000,
     train_samples: int = 2_000_000,
 ):
+    """Build a centered index plus a manifest of the exact image IDs added to it.
+
+    Files are prepared beside the output and published only after the build
+    succeeds. The manifest binds index/mean checksums and is published last;
+    readers reject mixed generations if a build is interrupted during publication.
+    """
     con = connect_db(db_path)
+    manifest_con = None
+    target = pathlib.Path(out_index_path)
+    token = uuid.uuid4().hex
+    temporary = {
+        suffix: target.with_name(f".{target.name}.{token}{suffix}")
+        for suffix in (".index.tmp", ".mean.npy", ".meta.json", INDEX_MANIFEST_SUFFIX)
+    }
     try:
         con.execute("PRAGMA case_sensitive_like=OFF")
         con.execute("PRAGMA temp_store=MEMORY")
+        con.execute("BEGIN")  # Train, mean, vectors and row IDs use one SQLite snapshot.
 
         total = con.execute(
-            "SELECT COUNT(*) FROM image_meta WHERE meta IS NOT NULL"
+            "SELECT COUNT(*) FROM image_meta WHERE typeof(meta) = 'blob' AND length(meta) = ?",
+            (d * 4,),
         ).fetchone()[0]
-        print(f"total rows with meta: {total}")
+        print(f"total rows with {d}-dimensional float32 meta: {total}")
 
         if total == 0:
             print("No valid meta found, skipping index creation.")
@@ -2367,14 +2413,19 @@ def stream_build_faiss(
 
         # -------- 平均ベクトルの計算と保存 --------
         mean_vec = compute_mean_vector(con, d, batch_size).astype(np.float32)
-        mean_vec_path = out_index_path + ".mean.npy"
-        np.save(mean_vec_path, mean_vec)
-        print(f"Saved mean vector to {mean_vec_path}")
+        if not np.isfinite(mean_vec).all():
+            raise ValueError("Image embeddings contain non-finite values; index was not replaced.")
+        np.save(temporary[".mean.npy"], mean_vec)
+        temporary[".meta.json"].write_text(json.dumps({
+            "embedding_dim": d, "pq_m": pq_m, "mean_centered": True,
+            "rows_manifest_version": INDEX_MANIFEST_VERSION,
+        }, indent=2) + "\n", encoding="utf-8")
 
-        metadata_path = out_index_path + ".meta.json"
-        with open(metadata_path, "w", encoding="utf-8") as f:
-            json.dump({"embedding_dim": d, "pq_m": pq_m}, f, ensure_ascii=False, indent=2)
-        print(f"Saved index metadata to {metadata_path}")
+        manifest_con = sqlite3.connect(temporary[INDEX_MANIFEST_SUFFIX])
+        manifest_con.execute("CREATE TABLE index_info (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        manifest_con.execute("""CREATE TABLE index_rows (
+            position INTEGER PRIMARY KEY, image_id TEXT NOT NULL UNIQUE, image_path TEXT NOT NULL
+        )""")
 
         # -------- パス1: 訓練 --------
         train_buf = collect_train_samples_algL(con, d, train_samples, batch_size, total=total)
@@ -2395,11 +2446,11 @@ def stream_build_faiss(
         # -------- パス2: 逐次add --------
         print("add")
         cur = con.execute("""
-            SELECT image_path, meta
+            SELECT image_id, image_path, meta
               FROM image_meta
-             WHERE meta IS NOT NULL
-             ORDER BY image_path
-        """)
+             WHERE typeof(meta) = 'blob' AND length(meta) = ?
+             ORDER BY image_path, image_id
+        """, (d * 4,))
 
         pbar = tqdm.tqdm(total=total, unit="row")
         buf = np.empty((batch_size, d), dtype=np.float32)
@@ -2411,12 +2462,14 @@ def stream_build_faiss(
                 break  # 各バッチで即 add しているので、ここでの flush は不要
 
             k = 0
-            for (_, meta_blob) in rows:
+            manifest_rows = []
+            for (image_id, image_path, meta_blob) in rows:
                 a = np.frombuffer(meta_blob, dtype=np.float32)
                 if a.size != d:
                     pbar.update(1)
                     continue
                 buf[k, :] = a
+                manifest_rows.append((int(index.ntotal) + k, image_id, image_path))
                 k += 1
                 pbar.update(1)
 
@@ -2425,13 +2478,39 @@ def stream_build_faiss(
                 faiss.normalize_L2(buf[:k])
                 buf[:k] -= mean_vec
                 index.add(buf[:k])
+                manifest_con.executemany("INSERT INTO index_rows VALUES (?, ?, ?)", manifest_rows)
 
         pbar.close()
+        if index.ntotal != total:
+            raise ValueError(f"Expected {total} vectors, added {index.ntotal}; index was not replaced.")
         print("write")
-        faiss.write_index(index, out_index_path)
+        faiss.write_index(index, str(temporary[".index.tmp"]))
+        manifest_info = {
+            "version": INDEX_MANIFEST_VERSION,
+            "count": int(index.ntotal), "dimension": int(index.d), "mean_centered": True,
+            "index_sha256": file_sha256(temporary[".index.tmp"]),
+            "mean_sha256": file_sha256(temporary[".mean.npy"]),
+        }
+        manifest_con.executemany(
+            "INSERT INTO index_info VALUES (?, ?)",
+            [(key, json.dumps(value)) for key, value in manifest_info.items()],
+        )
+        manifest_con.commit()
+        manifest_con.close()
+        manifest_con = None
+        # Publish the format marker first so a partial new build cannot be
+        # mistaken for an old index without a manifest.
+        temporary[".meta.json"].replace(str(target) + ".meta.json")
+        temporary[".mean.npy"].replace(str(target) + ".mean.npy")
+        temporary[".index.tmp"].replace(target)
+        temporary[INDEX_MANIFEST_SUFFIX].replace(str(target) + INDEX_MANIFEST_SUFFIX)
     finally:
+        if manifest_con is not None:
+            manifest_con.close()
         print("close db connection")
         con.close()
+        for path in temporary.values():
+            path.unlink(missing_ok=True)
 
 
 @torch.no_grad()
