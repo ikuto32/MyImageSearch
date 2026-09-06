@@ -67,61 +67,21 @@ class MissingImageHandlingTests(unittest.TestCase):
         )
 
 
-def _install_controller_stubs():
-    class AbortException(Exception):
-        def __init__(self, code):
-            self.code = code
-            super().__init__(code)
-
-    class FakeFlask:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    class Headers(dict):
-        def set(self, key, value):
-            self[key] = value
-
-    class Response:
-        def __init__(self, binary):
-            self.binary = binary
-            self.headers = Headers()
-
-    flask_stub = types.ModuleType("flask")
-    flask_stub.Flask = FakeFlask
-    flask_stub.request = types.SimpleNamespace(args={}, form={}, files={})
-    flask_stub.make_response = Response
-    flask_stub.send_file = lambda *args, **kwargs: (args, kwargs)
-    flask_stub.abort = lambda code: (_ for _ in ()).throw(AbortException(code))
-    sys.modules["flask"] = flask_stub
-
-    logging_config_stub = types.ModuleType("app.logging_config")
-    logging_config_stub.configure_logging = lambda: None
-    sys.modules["app.logging_config"] = logging_config_stub
-    return AbortException
-
-
 class ControllerMissingImageTests(unittest.TestCase):
     def test_unknown_small_and_original_image_return_404(self):
-        AbortException = _install_controller_stubs()
-        sys.modules.pop("app.presentation.controller", None)
+        from unittest.mock import patch
         from app.presentation import controller
 
-        controller.usecase = types.SimpleNamespace(
+        fake = types.SimpleNamespace(
             get_small_image=lambda _image_id: (_ for _ in ()).throw(ValueError("unknown")),
             get_image=lambda _image_id: (_ for _ in ()).throw(ValueError("unknown")),
         )
-
-        with self.assertRaises(AbortException) as small_error:
-            controller.get_small_image("unknown")
-        self.assertEqual(small_error.exception.code, 404)
-
-        with self.assertRaises(AbortException) as original_error:
-            controller.get_original_image("unknown")
-        self.assertEqual(original_error.exception.code, 404)
-
+        with patch.object(controller, "usecase", fake):
+            client = controller.app.test_client()
+            for variant in ("small", "original"):
+                with self.subTest(variant=variant):
+                    response = client.get(f"/image/unknown/{variant}")
+                    self.assertEqual(response.status_code, 404)
 
 if __name__ == "__main__":
     unittest.main()

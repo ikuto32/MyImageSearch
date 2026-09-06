@@ -9,14 +9,14 @@ dependencies = [
     "flask>=3.1.2",
     "onnxruntime-gpu>=1.23.2",
     "open-clip-torch>=3.2.0",
-    "openai>=1.100,<3",
+    "openai>=2.43,<3",
     "pandas>=2.3.3",
     "rich>=13.9.4",
     "torch>=2.9.1",
     "torchvision>=0.24.1",
     "transformers>=5.12.1",
     "qwen-vl-utils>=0.0.14",
-    "openai>=2.43.0",
+    "regex>=2024.11.6",
 ]
 
 [tool.uv.sources]
