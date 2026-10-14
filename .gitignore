@@ -139,6 +139,8 @@ dmypy.json
 # Machine settings and private review output
 /.vscode/
 /.idea/
+/.claude/worktrees/
+/.claude/settings.local.json
 node_modules/
 .env.*
 !.env.example
