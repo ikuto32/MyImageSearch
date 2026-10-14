@@ -298,8 +298,16 @@ class LookupTests(CatalogDatabaseTestCase):
     def test_older_optional_metadata_columns_are_returned_as_unset(self):
         create_catalog(self.root, "Test-model", [("a", "a.png", 4.0)], ("image_id", "image_path", "aesthetic_quality"))
         found = self.catalog().find(ModelId("Test", "model"), ImageId("a"))
-        self.assertEqual((found.tags, found.rating, found.style_cluster), ("", "", ""))
+        self.assertEqual((found.tags, found.rating, found.style_cluster, found.blake3), ("", "", "", ""))
         self.assertEqual(found.aesthetic_quality, 4.0)
+
+    def test_file_hash_is_returned_where_it_was_recorded(self):
+        create_catalog(self.root, "Test-model", [("old", "old.png", None), ("new", "new.png", "cd" * 32)],
+                       ("image_id", "image_path", "image_blake3"))
+        catalog = self.catalog()
+        model = ModelId("Test", "model")
+        self.assertEqual(catalog.find(model, ImageId("new")).blake3, "cd" * 32)
+        self.assertEqual(catalog.find(model, ImageId("old")).blake3, "")
 
     def test_database_without_required_columns_is_rejected(self):
         create_catalog(self.root, "Test-model", [("a",)], ("image_id",), path_index=False)

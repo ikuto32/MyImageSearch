@@ -30,14 +30,16 @@ _COLUMNS = {
     "time_stamp_ISO": "text",
     "search_embedding_model": "text",
     "metadata_embedding_model": "text",
+    # 画像ファイルの内容のblake3ハッシュ(16進)。この列を追加する前に処理した画像はNULL。
+    "image_blake3": "text",
 }
 
 UPSERT_IMAGE_META = """
     INSERT INTO image_meta (
         image_id, image_path, meta, aesthetic_quality, pony_aesthetic_quality,
         style_cluster, rating, image_tags, time_stamp_ISO,
-        search_embedding_model, metadata_embedding_model
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        search_embedding_model, metadata_embedding_model, image_blake3
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(image_id) DO UPDATE SET
         meta=excluded.meta,
         aesthetic_quality=excluded.aesthetic_quality,
@@ -47,7 +49,8 @@ UPSERT_IMAGE_META = """
         image_tags=excluded.image_tags,
         time_stamp_ISO=excluded.time_stamp_ISO,
         search_embedding_model=excluded.search_embedding_model,
-        metadata_embedding_model=excluded.metadata_embedding_model
+        metadata_embedding_model=excluded.metadata_embedding_model,
+        image_blake3=excluded.image_blake3
 """
 
 

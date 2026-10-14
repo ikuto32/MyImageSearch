@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from blake3 import blake3
 from PIL import Image, ImageFile
 from torch.utils.data import IterableDataset, get_worker_info
 from torch.utils.data._utils.collate import default_collate
@@ -13,6 +14,8 @@ from indexer.tagging import prepare_tag_input
 # DataLoaderのワーカーもこのモジュールを読み込むため、ここで設定する。
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 Image.MAX_IMAGE_PIXELS = 268_435_456
+# ハッシュを求めるときに一度に読む量。ファイル全体をメモリに載せない。
+_HASH_CHUNK_BYTES = 1024 * 1024
 
 
 def open_rgb(path: str) -> Image.Image:
@@ -20,8 +23,33 @@ def open_rgb(path: str) -> Image.Image:
         return image.convert("RGBA").convert("RGB")
 
 
+def _file_identity(path: str) -> tuple[int, int, int]:
+    status = os.stat(path)
+    return status.st_ino, status.st_size, status.st_mtime_ns
+
+
+def open_rgb_with_hash(path: str) -> tuple[Image.Image, str]:
+    """画像を開き、ファイルの内容のblake3ハッシュ(16進)と合わせて返す。
+
+    画像はハッシュを記録する前と同じくパスから読む。読めた画像だけを少しずつ読んでハッシュするため、
+    画像でないファイルは先頭だけで失敗し、大きなファイルも一度にメモリへ載せない。
+    読み込みの途中でファイルが書き換えられた場合は、画像とハッシュが食い違わないよう失敗とする。
+    """
+    before = _file_identity(path)
+    image = open_rgb(path)
+    hasher = blake3()
+    chunk = bytearray(_HASH_CHUNK_BYTES)
+    view = memoryview(chunk)
+    with open(path, "rb") as stream:
+        while size := stream.readinto(chunk):
+            hasher.update(view[:size])
+    if _file_identity(path) != before:
+        raise OSError(f"The file changed while it was being read: {path}")
+    return image, hasher.hexdigest()
+
+
 class DirImageIterable(IterableDataset):
-    """(検索入力, メタデータ入力, 画像の番号, WDタガー入力, Z3Dタガー入力)を順に返す。
+    """(検索入力, メタデータ入力, 画像の番号, WDタガー入力, Z3Dタガー入力, blake3ハッシュ)を順に返す。
 
     使わないモデルの入力はNoneになる。読めない画像は記録して飛ばす。
     """
@@ -68,7 +96,7 @@ class DirImageIterable(IterableDataset):
             yield sample
 
     def _load(self, path: str, index: int):
-        image = open_rgb(path)
+        image, file_hash = open_rgb_with_hash(path)
         wd_input = z3d_input = None
         if self.tag_sizes is not None:
             wd_size, z3d_size = self.tag_sizes
@@ -76,7 +104,7 @@ class DirImageIterable(IterableDataset):
             z3d_input = wd_input if z3d_size == wd_size else prepare_tag_input(image, z3d_size)
         search_input = image if self.transform is None else self.transform(image)
         metadata_input = None if self.metadata_transform is None else self.metadata_transform(image)
-        return search_input, metadata_input, index, wd_input, z3d_input
+        return search_input, metadata_input, index, wd_input, z3d_input, file_hash
 
 
 def _collate_search_inputs(search_inputs: list[Any]):
@@ -93,13 +121,13 @@ def _collate_optional(values: list[Any]):
 
 
 def safe_collate(batch):
-    """Collate search, metadata, index, and tagger inputs safely."""
+    """Collate search, metadata, index and tagger inputs, and the file hashes, safely."""
 
     batch = [item for item in batch if item is not None]
     if not batch:
         return None
 
-    search_inputs, metadata_inputs, indices, wd_inputs, z3d_inputs = zip(*batch)
+    search_inputs, metadata_inputs, indices, wd_inputs, z3d_inputs, file_hashes = zip(*batch)
 
     return (
         _collate_search_inputs(list(search_inputs)),
@@ -107,4 +135,5 @@ def safe_collate(batch):
         default_collate(list(indices)),
         _collate_optional(list(wd_inputs)),
         _collate_optional(list(z3d_inputs)),
+        list(file_hashes),
     )

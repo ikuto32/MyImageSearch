@@ -1382,3 +1382,17 @@ test('search result limit describes the completed request even if settings chang
     await state.runSearch(async () => searchResult(['image']))
     assert.equal(state.lastSearchLimit, 10)
 })
+
+test('image details show the recorded file hash, or not available for images without one', async () => {
+    const row = template.match(/<dt>\{\{ ([^}]+) \}\}<\/dt><dd id="detailFileHash"[^>]*>\{\{ ([^}]+) \}\}<\/dd>/)
+    assert.ok(row, 'The image details must show the file hash')
+    const [label, text] = row.slice(1).map(expression => new Function('state', `with (state) { return ${expression} }`))
+    const hash = 'ab'.repeat(32)
+    const { state } = createApp({ getImageMetadata: async (_model, _pretrained, id) => ({ tags: '', blake3: id === 'hashed' ? hash : null }) })
+    assert.equal(label(state), 'translated:image.blake3')
+    for (const [id, shown] of [['hashed', hash], ['unhashed', 'translated:common.notAvailable']]) {
+        state.openDialog({ id })
+        await nextTurn()
+        assert.equal(text(state), shown)
+    }
+})

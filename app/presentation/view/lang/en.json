@@ -82,6 +82,7 @@
   "image.rating": "Image category",
   "image.aesthetic": "Aesthetic score",
   "image.tags": "Tags",
+  "image.blake3": "Hash (BLAKE3)",
   "rating.general": "General",
   "rating.sensitive": "Sensitive",
   "rating.questionable": "Potentially adult",

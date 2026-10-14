@@ -31,8 +31,8 @@ from indexer.database import (
 from indexer.image_scan import ImageScan, scan_image_dir
 
 
-def row(image_id, path, meta=None, rating="general", tags=""):
-    return (image_id, path, meta, None, None, "", rating, tags, "2026-01-01T00:00:00+00:00", "search", None)
+def row(image_id, path, meta=None, rating="general", tags="", blake3=None):
+    return (image_id, path, meta, None, None, "", rating, tags, "2026-01-01T00:00:00+00:00", "search", None, blake3)
 
 
 def vector(dimension) -> bytes:
@@ -87,10 +87,12 @@ class IndexerDatabaseTests(unittest.TestCase):
             )
 
     def test_upsert_replaces_everything_but_the_path_of_an_existing_image(self):
-        self.insert(row("a", "a.png", vector(2), "general", "old"))
-        self.insert(row("a", "ignored.png", vector(4), "explicit", "new"))
-        stored = self.connection.execute("SELECT image_path, length(meta), rating, image_tags FROM image_meta").fetchall()
-        self.assertEqual(stored, [("a.png", 16, "explicit", "new")])
+        self.insert(row("a", "a.png", vector(2), "general", "old", blake3="11" * 32))
+        self.insert(row("a", "ignored.png", vector(4), "explicit", "new", blake3="22" * 32))
+        stored = self.connection.execute(
+            "SELECT image_path, length(meta), rating, image_tags, image_blake3 FROM image_meta"
+        ).fetchall()
+        self.assertEqual(stored, [("a.png", 16, "explicit", "new", "22" * 32)])
 
     def test_images_without_a_matching_embedding_are_found_without_reading_blobs(self):
         self.insert(
