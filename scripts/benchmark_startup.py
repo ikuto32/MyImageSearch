@@ -24,28 +24,28 @@ def main():
     from app.domain.domain_object import ModelId
     from app.infrastructure.local_accessor import LocalAccessor
     from app.infrastructure.local_repository import LocalRepository
+    from app.infrastructure.model_registry import ModelRegistry
 
-    accessor = LocalAccessor(args.meta_dir)
-    # No image method is called. Using the bundled root avoids contacting a NAS.
-    repository = LocalRepository(ROOT / 'images', args.meta_dir)
+    model = ModelId(args.model_name, args.pretrained)
     tracemalloc.start()
     started = perf_counter()
-    usecase = Usecase(repository, accessor, ModelId(args.model_name, args.pretrained))
+    registry = ModelRegistry(args.meta_dir)
+    accessor = LocalAccessor(registry)
+    # No image method is called. Using the bundled root avoids contacting a NAS.
+    usecase = Usecase(LocalRepository(ROOT / 'images', registry), accessor)
+    first = usecase.get_image_items_by_page(model, 0, 60)
     startup_ms = (perf_counter() - started) * 1000
     current, peak = tracemalloc.get_traced_memory()
-    first_count = len(usecase._id_to_image_items)
-    assert usecase._paged_catalog, 'This benchmark requires a registered catalog database.'
     started = perf_counter()
-    second = usecase.get_image_items_by_page(1, 60)
+    second = usecase.get_image_items_by_page(model, 1, 60)
     page_ms = (perf_counter() - started) * 1000
     tracemalloc.stop()
-    assert not accessor._search_indexes, 'Catalog browsing unexpectedly loaded FAISS.'
+    assert len(accessor._search_indexes) == 0, 'Catalog browsing unexpectedly loaded FAISS.'
     print(json.dumps({
-        'startup_ms': round(startup_ms, 2), 'startup_rows': first_count,
-        'startup_python_retained_bytes': current, 'startup_python_peak_bytes': peak,
+        'models': len(registry.items()),
+        'startup_and_first_page_ms': round(startup_ms, 2), 'first_page_rows': len(first),
+        'python_retained_bytes': current, 'python_peak_bytes': peak,
         'second_page_ms': round(page_ms, 2), 'second_page_rows': len(second),
-        'retained_rows_after_second_page': len(usecase._id_to_image_items),
-        'loaded_faiss_indexes': len(accessor._search_indexes),
     }, indent=2))
 
 

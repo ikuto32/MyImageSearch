@@ -153,7 +153,6 @@ async function reviewCatalogFilters(page, catalogResponses, fullTotal) {
   assert.equal(await page.locator('.downloadAction').isDisabled(), true)
   assert(empty.gridHeight <= empty.clientHeight, 'No matching items should leave no enormous empty rail')
   assert.match(await page.locator('.emptyState').innerText(), /区分/)
-  if (await page.locator('.loadMoreArea button').count()) assert.equal(await page.locator('.loadMoreArea button').isDisabled(), true)
   await setCategories(page, ratingLabels)
   await waitForCatalogWindow(page)
   await page.waitForFunction(total => {

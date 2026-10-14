@@ -23,11 +23,17 @@ function deferred() {
     return { promise, resolve, reject }
 }
 
-function searchResult(ids, query = 'query') {
+function searchResult(ids, query = 'query', ratings = {}) {
     return {
-        list: ids.map(id => ({ item: { id, name: `${id}.png`, tags: '' }, score: 1 })),
+        list: ids.map(id => ({ item: { id, name: `${id}.png`, rating: ratings[id] }, score: 1 })),
         search_query: query,
     }
+}
+
+// The first catalog response carries the totals that fix the scroll range.
+function catalogItems(ids, total = ids.length, matching = total) {
+    return Object.assign(ids.map(id => ({ id, name: `${id}.png`, rating: 'general' })),
+        { totalCount: total, matchingCount: matching })
 }
 
 function createApp(overrides = {}, browser = {}) {
@@ -37,9 +43,7 @@ function createApp(overrides = {}, browser = {}) {
     const repository = {
         MAX_UPLOAD_BYTES: 64 * 1024 * 1024,
         getModelItems: async () => [{ model_name: 'ViT-L-14', pretrained: 'openai' }],
-        getImageItemsByPage: async () => [],
-        getImageRatings: async (_model, _pretrained, ids) =>
-            Object.fromEntries(ids.map(id => [id, 'general'])),
+        getImageItemsByPage: async () => catalogItems([]),
         getImageSmallUrl: id => `/image/${id}/small`,
         getImageOriginalUrl: id => `/image/${id}/original`,
         ...overrides,
@@ -112,8 +116,8 @@ test('ordinary image clicks enlarge and only explicit selection mode selects ima
 
 test('header image search directly uses selected images and returns to browsing on success', async () => {
     const requests = []
-    const { state, scrollArea } = createApp({ searchImage: async (_model, _weights, ids) => {
-        requests.push(Array.from(ids))
+    const { state, scrollArea } = createApp({ search: async (kind, params) => {
+        requests.push([kind, Array.from(params.id)])
         return searchResult(['similar'])
     } })
     await state.runSearch(async () => searchResult(['a']))
@@ -121,7 +125,7 @@ test('header image search directly uses selected images and returns to browsing 
     await state.onImageClick(state.displayItems[0])
     scrollArea.scrollTop = 50_000
     await state.imageSearchAction()
-    assert.deepEqual(requests, [['a']])
+    assert.deepEqual(requests, [['image', ['a']]])
     assert.equal(state.selectedCount, 0)
     assert.equal(state.selectMode, false)
     assert.equal(state.displayItems[0].id, 'similar')
@@ -147,7 +151,7 @@ test('unselected header image search opens the native picker and cancelling star
 
 test('header image search rejects more than 64 selections without changing selection', async () => {
     let requests = 0
-    const { state } = createApp({ searchImage: async () => { requests++; return searchResult([]) } })
+    const { state } = createApp({ search: async () => { requests++; return searchResult([]) } })
     state.selectMode = true
     state.selectedItemId = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`${i}`, true]))
     await state.imageSearchAction()
@@ -259,7 +263,7 @@ test('known catalog retries a failed viewport without changing extent or offset'
     const height = state.catalogPhysicalHeight
     const position = state.showedItemIndex
     fail = false
-    await state.loadMoreImages()
+    await state.retryCatalogPage()
     assert.equal(state.catalogPageError, '')
     assert.equal(state.catalogPhysicalHeight, height)
     assert.equal(state.showedItemIndex, position)
@@ -440,7 +444,7 @@ test('search is blocked during initialization and works after initialization', a
     let searches = 0
     const { state } = createApp({
         getModelItems: () => models.promise,
-        searchText: async () => { searches += 1; return searchResult(['cat']) },
+        search: async () => { searches += 1; return searchResult(['cat']) },
     })
     const initialization = state.init()
     state.text = 'cat'
@@ -535,18 +539,17 @@ test('a failed search shows the API error, preserves results, and permits retry'
     assert.deepEqual(displayedIds(state), ['retry'])
 })
 
-test('rating lookup failure preserves previous buffers, selection, and upload state', async () => {
-    const { state, repository } = createApp()
+test('a failed search preserves previous buffers, selection, and upload state', async () => {
+    const { state } = createApp()
     await state.runSearch(async () => searchResult(['previous'], 'previous-query'))
     state.selectedItemId = { previous: true }
     state.uploadFile = { name: 'upload.png' }
-    repository.getImageRatings = async () => { throw new Error('rating request failed') }
     await state.runSearch(
-        async () => searchResult(['unrated-result'], 'new-query'),
+        async () => { throw new Error('search request failed') },
         () => { state.uploadFile = null },
     )
 
-    assert.equal(state.errorDetail, 'rating request failed')
+    assert.equal(state.errorDetail, 'search request failed')
     assert.equal(state.isSearching, false)
     assert.deepEqual(displayedIds(state), ['previous'])
     assert.deepEqual(Array.from(state.rawResultBuffer, result => result.item.id), ['previous'])
@@ -555,27 +558,39 @@ test('rating lookup failure preserves previous buffers, selection, and upload st
     assert.equal(state.uploadFile.name, 'upload.png')
 })
 
-test('failed page loading retries the same page without skipping or duplicating items', async () => {
+test('a failed first page shows its error and browsing again retries it', async () => {
     const requestedPages = []
     const { state } = createApp({
         getImageItemsByPage: async page => {
             requestedPages.push(page)
             if (requestedPages.length === 1) throw new Error('offline')
-            return [{ id: 'first', name: 'first.png' }]
+            return catalogItems(['first'])
         },
     })
     await state.browseImages()
-    assert.equal(state.nextPage, 0)
     assert.equal(state.isLoadingPage, false)
     assert.equal(state.errorDetail, 'offline')
+    assert.equal(state.stableCatalog, false)
+    assert.equal(state.scrollProgressPercent, null)
+    assert.deepEqual(displayedIds(state), [])
+    // A failed collection does not block searching.
+    await state.runSearch(async () => searchResult(['found']))
+    assert.deepEqual(displayedIds(state), ['found'])
 
-    // The retry button clears the message before invoking this method.
-    state.errorMessage = ''
-    await state.loadNextImagePage()
+    await state.browseImages()
     assert.deepEqual(requestedPages, [0, 0])
-    assert.equal(state.nextPage, 1)
-    assert.equal(state.hasMorePages, false)
+    assert.equal(state.errorMessage, '')
+    assert.equal(state.stableCatalog, true)
     assert.deepEqual(displayedIds(state), ['first'])
+})
+
+test('a collection response without totals is reported instead of leaving an endless list', async () => {
+    const { state } = createApp({ getImageItemsByPage: async () => [{ id: 'image', name: 'image.png' }] })
+    await state.browseImages()
+    assert.match(state.errorDetail, /totals/)
+    assert.equal(state.stableCatalog, false)
+    assert.equal(state.isLoadingPage, false)
+    assert.deepEqual(displayedIds(state), [])
 })
 
 test('scrolling reaches a partial last row with no phantom bottom padding', async () => {
@@ -645,16 +660,14 @@ test('zoom and user column changes do not change pagination offsets', async () =
     const { state, watch } = createApp({
         getImageItemsByPage: async (page, size) => {
             pages.push([page, size])
-            return Array.from({ length: size }, (_, index) => ({
-                id: `${page * size + index}`, name: 'image.png',
-            }))
+            return catalogItems(Array.from({ length: size }, (_, index) => `${page * size + index}`), 120)
         },
     })
     state.updateGridWidth(343)
     await state.browseImages()
     state.updateGridWidth(1400)
     watch('numCols', 2)
-    await state.loadNextImagePage()
+    await state.loadCatalogPage(1)
     assert.deepEqual(pages, [[0, 60], [1, 60]])
     assert.equal(state.rawResultBuffer.length, 120)
     assert.equal(new Set(state.rawResultBuffer.map(result => result.item.id)).size, 120)
@@ -669,7 +682,7 @@ test('failed model initialization can be retried without refreshing the browser'
             if (++requests === 1) throw new Error('offline')
             return [{ model_name: 'available-model', pretrained: 'weights' }]
         },
-        getImageItemsByPage: async () => [{ id: 'image', name: 'image.png' }],
+        getImageItemsByPage: async () => catalogItems(['image']),
     })
     await state.init()
     assert.equal(state.initializationFailed, true)
@@ -692,46 +705,6 @@ test('an empty model list offers recovery instead of searching with a nonexisten
     assert.equal(state.initializationFailed, true)
     assert.equal(state.errorMessage, 'translated:errors.noModels')
     assert.equal(state.isInitializing, false)
-})
-
-test('initial empty filtered results automatically explore bounded pages until a match', async () => {
-    const pages = []
-    const { state } = createApp({
-        getImageItemsByPage: async (page, size) => {
-            pages.push(page)
-            return Array.from({ length: size }, (_, i) => ({ id: `${page}-${i}`, name: 'image.png' }))
-        },
-        getImageRatings: async (_model, _pretrained, ids) => Object.fromEntries(
-            ids.map(id => [id, id.startsWith('2-') ? 'general' : 'explicit']),
-        ),
-    })
-    state.ratingFilter = ['general']
-    await state.browseImages()
-    assert.deepEqual(pages, [0, 1, 2])
-    assert.equal(state.resultBuffer.length, 60)
-    assert.equal(state.displayItems[0].id, '2-0')
-    assert.equal(state.isExploringPages, false)
-})
-
-test('an empty filtered page never triggers an unbounded collection scan', async () => {
-    const pages = []
-    const { state } = createApp({
-        getImageItemsByPage: async (page, size) => {
-            pages.push(page)
-            return Array.from({ length: size }, (_, i) => ({ id: `${page}-${i}`, name: 'image.png' }))
-        },
-        getImageRatings: async (_model, _pretrained, ids) => Object.fromEntries(ids.map(id => [id, 'explicit'])),
-    })
-    state.ratingFilter = ['general']
-    await state.browseImages()
-    assert.deepEqual(pages, [0, 1, 2, 3])
-    await state.loadMoreImages()
-    assert.deepEqual(pages, [0, 1, 2, 3, 4, 5, 6])
-    assert.equal(state.hasMorePages, true)
-    assert.equal(state.resultBuffer.length, 0)
-    assert.equal(state.isExploringPages, false)
-    await state.loadMoreImages()
-    assert.deepEqual(pages, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
 })
 
 test('native selection buttons toggle selection without opening the image dialog', () => {
@@ -914,10 +887,13 @@ test('ZIP errors display backend detail and allow the user to retry', async () =
 })
 
 test('unclassified images are explicit and clearing all rating filters hides every image', async () => {
-    const { state, watch } = createApp({
-        getImageRatings: async () => ({ general: 'general', empty: '', unknown: 'unknown', legacy: 'safe' }),
-    })
-    await state.runSearch(async () => searchResult(['general', 'empty', 'unknown', 'legacy', 'missing']))
+    const requests = []
+    const { state, watch } = createApp({ search: async kind => {
+        requests.push(kind)
+        return searchResult(['general', 'empty', 'unknown', 'legacy', 'missing'], 'query',
+            { general: 'general', empty: '', unknown: 'unknown', legacy: 'safe' })
+    } })
+    await state.randomSearchButton()
     assert.deepEqual(displayedIds(state), ['general', 'empty', 'unknown', 'legacy', 'missing'])
 
     state.ratingFilter = ['general']
@@ -932,6 +908,34 @@ test('unclassified images are explicit and clearing all rating filters hides eve
     watch('ratingFilter')
     assert.deepEqual(displayedIds(state), [])
     assert.equal(state.resultBuffer.length, 0)
+    // Results carry their own category: filtering never asks the server again.
+    assert.deepEqual(requests, ['random'])
+})
+
+test('changing categories while browsing asks the server for the filtered collection', async () => {
+    const calls = []
+    const { state, watch } = createApp({
+        getImageItemsByPage: async (page, _size, _model, _pretrained, includeTotal, ratings) => {
+            calls.push({ page, includeTotal, ratings: Array.from(ratings) })
+            const matching = ratings.includes('explicit') ? ['explicit-image'] : []
+            return catalogItems(matching, 100, matching.length)
+        },
+    })
+    await state.browseImages()
+    state.selectedItemId = { stale: true }
+    state.ratingFilter = ['explicit']
+    await watch('ratingFilter')
+    assert.deepEqual(calls.at(-1), { page: 0, includeTotal: true, ratings: ['explicit'] })
+    assert.deepEqual(displayedIds(state), ['explicit-image'])
+    assert.equal(state.candidateCount, 100)
+    assert.equal(state.searchCount, 1)
+    assert.equal(state.selectedCount, 0)
+
+    state.ratingFilter = []
+    await watch('ratingFilter')
+    assert.deepEqual(calls.at(-1).ratings, [])
+    assert.equal(state.searchCount, 0)
+    assert.equal(state.downloadCount, 0)
 })
 
 test('oversized uploads are rejected before upload conversion or search starts', async () => {
@@ -977,17 +981,18 @@ test('file conversion rejects oversized input without constructing FileReader', 
     assert.equal(reads, 1)
 })
 
-test('virtual window changes preserve the loaded height until another page is fetched', async () => {
+test('virtual window changes preserve the result height without further requests', async () => {
     let pageRequests = 0
     const { state } = createApp({
         getImageItemsByPage: async (_page, size) => {
             pageRequests += 1
-            return Array.from({ length: size }, (_, i) => ({ id: `${i}`, name: 'image.png' }))
+            return catalogItems(Array.from({ length: size }, (_, i) => `${i}`))
         },
     })
     await state.browseImages()
     for (const scrollTop of [0, 500, 5_000, 100_000, 0]) {
         state.updateImageFromScroll({ target: { scrollTop } })
+        await state.ensureCatalogWindow()
     }
     assert.equal(pageRequests, 1)
     assert.equal(state.rawResultBuffer.length, 60)
@@ -999,34 +1004,13 @@ test('virtual window changes preserve the loaded height until another page is fe
         const renderedHeight = Math.ceil(state.displayItems.length / state.visibleCols) * state.item_height
         assert.equal(state.padding_top + renderedHeight + state.padding_bottom, height)
     }
-})
-
-test('infinite page appends preserve candidates and selection, and failed appends preserve the next offset', async () => {
-    const { state } = createApp({
-        getImageItemsByPage: async (page, size) => {
-            if (page === 2) throw new Error('temporary network failure')
-            return Array.from({ length: size }, (_, i) => ({ id: `${page * size + i}`, name: 'image.png' }))
-        },
-    })
-    await state.browseImages()
-    state.toggleSelection('0')
-    await state.loadNextImagePage()
-    assert.equal(state.currentPage, 1)
-    assert.equal(state.rawResultBuffer[0].item.id, '0')
-    assert.equal(state.rawResultBuffer.length, 120)
-    assert.equal(state.selectedItemId['0'], true)
-    await state.loadNextImagePage()
-    assert.equal(state.currentPage, 1)
-    assert.equal(state.nextPage, 2)
-    assert.equal(state.rawResultBuffer[0].item.id, '0')
-    assert.equal(state.selectedItemId['0'], true)
+    assert.equal(pageRequests, 1)
 })
 
 test('candidate counts and filtered search counts remain distinct', async () => {
-    const { state, watch } = createApp({
-        getImageRatings: async () => ({ one: 'general', two: 'explicit', three: 'general' }),
-    })
-    await state.runSearch(async () => searchResult(['one', 'two', 'three']))
+    const { state, watch } = createApp()
+    await state.runSearch(async () => searchResult(['one', 'two', 'three'], 'query',
+        { one: 'general', two: 'explicit', three: 'general' }))
     state.ratingFilter = ['general']
     watch('ratingFilter')
     assert.equal(state.candidateCount, 3)
@@ -1054,10 +1038,8 @@ test('shift selection covers offscreen results, and oversized ranges leave selec
 })
 
 test('filter changes remove hidden selections and start new searches with no old selection', async () => {
-    const { state, watch } = createApp({
-        getImageRatings: async () => ({ one: 'general', two: 'explicit' }),
-    })
-    await state.runSearch(async () => searchResult(['one', 'two']))
+    const { state, watch } = createApp()
+    await state.runSearch(async () => searchResult(['one', 'two'], 'query', { one: 'general', two: 'explicit' }))
     state.selectCurrentResults()
     state.ratingFilter = ['general']
     watch('ratingFilter')
@@ -1104,7 +1086,6 @@ test('unselected catalog download asks the server for filtered first 1024 includ
         },
     })
     state.ratingFilter = ['general', 'unclassified']
-    state.currentPage = 10
     await state.allDownloadImagesButton()
     await state.confirmDownload()
     assert.deepEqual(requests, [{
@@ -1114,7 +1095,7 @@ test('unselected catalog download asks the server for filtered first 1024 includ
 
 test('image similarity search explains its separate 64-image input limit', async () => {
     let requests = 0
-    const { state } = createApp({ searchImage: async () => { requests += 1; return searchResult([]) } })
+    const { state } = createApp({ search: async () => { requests += 1; return searchResult([]) } })
     state.selectedItemId = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`${i}`, true]))
     await state.imagesSearchButton()
     assert.equal(requests, 0)
@@ -1142,41 +1123,77 @@ test('language changes translate active errors and selection announcements', () 
     assert.match(state.selectionMessage, /"count":1/)
 })
 
-test('long browsing sessions bound rating metadata while retaining visible results', async () => {
-    const { state } = createApp()
-    const key = state.getRatingMapKey()
-    state.ratingMaps[key] = Object.fromEntries(Array.from({ length: 16384 }, (_, i) => [`old-${i}`, 'general']))
-    state.rawResultBuffer = searchResult(['old-0']).list
-    await state.ensureRatingMapForItemIds(['next-page'])
-    assert.equal(Object.keys(state.ratingMaps[key]).length, 2)
-    assert.equal(state.ratingMaps[key]['old-0'], 'general')
-    assert.equal(state.ratingMaps[key]['next-page'], 'general')
-})
-
 test('catalog totals and explicit model identity are preserved across page changes', async () => {
     const calls = []
     const { state } = createApp({
         getImageItemsByPage: async (page, size, model, pretrained, includeTotal) => {
             calls.push({ page, size, model, pretrained, includeTotal })
-            const items = Array.from({ length: size }, (_, i) => ({ id: `${page * size + i}`, name: 'image.png' }))
-            if (includeTotal) items.totalCount = 120
-            return items
+            const count = Math.max(0, Math.min(size, 100 - page * size))
+            return catalogItems(Array.from({ length: count }, (_, i) => `${page * size + i}`), 120, 100)
         },
     })
     state.model_name = 'another-model'
     state.pretrained = 'another-weights'
     await state.browseImages()
     assert.equal(state.candidateCount, 120)
-    assert.equal(state.searchCount, 60)
-    assert.equal(state.hasMorePages, true)
-    assert.equal(state.downloadCount, 120)
-    await state.loadNextImagePage()
-    assert.equal(state.hasMorePages, false)
+    assert.equal(state.searchCount, 100)
+    assert.equal(state.downloadCount, 100)
+    assert.equal(state.resultBuffer.length, 60)
+    await state.loadCatalogPage(1)
+    assert.equal(state.resultBuffer.length, 100)
     assert.equal(state.catalogTotal, 120)
     assert.deepEqual(calls, [
         { page: 0, size: 60, model: 'another-model', pretrained: 'another-weights', includeTotal: true },
         { page: 1, size: 60, model: 'another-model', pretrained: 'another-weights', includeTotal: false },
     ])
+})
+
+test('every search sends the shared settings with its own parameters', async () => {
+    const requests = []
+    const { state } = createApp({
+        search: async (kind, params) => { requests.push([kind, params]); return searchResult([], 'saved-query') },
+        searchUploadImage: async (file, params) => { requests.push(['uploadimage', { ...params, file: file.name }]); return searchResult([]) },
+    })
+    Object.assign(state, {
+        model_name: 'model', pretrained: 'weights', text: 'cat', isRegexp: true, resultSize: '60',
+        aesthetic_quality_beta: 0.25, aesthetic_quality_range: [2, 8], aesthetic_model_name: 'pony', features_strength: -0.5,
+    })
+    const shared = {
+        model_name: 'model', pretrained: 'weights', aesthetic_quality_beta: 0.25,
+        aesthetic_quality_range: [2, 8], aesthetic_model_name: 'pony', result_size: 60,
+    }
+    await state.textSearchButton()
+    await state.nameSearchButton()
+    await state.tagSearchButton()
+    await state.styleClusterSearchButton()
+    await state.randomSearchButton()
+    await state.querySearchButton()
+    await state.addTextFeaturesButton()
+    state.selectedItemId = { a: true, b: true }
+    await state.imagesSearchButton()
+    state.uploadFile = { name: 'reference.png', size: 100 }
+    await state.uploadImageSearchButton()
+    assert.equal(JSON.stringify(requests), JSON.stringify([
+        ['text', { ...shared, text: 'cat' }],
+        ['name', { ...shared, text: 'cat', is_regexp: true }],
+        ['tags', { ...shared, text: 'cat', is_regexp: true }],
+        ['style_cluster', { ...shared, text: 'cat', is_regexp: true }],
+        ['random', shared],
+        ['query', { ...shared, search_query: 'saved-query' }],
+        ['queryaddtext', { ...shared, text: 'cat', search_query: 'saved-query', features_strength: -0.5 }],
+        ['image', { ...shared, id: ['a', 'b'] }],
+        ['uploadimage', { ...shared, file: 'reference.png' }],
+    ]))
+    // The request holds a copy: moving the sliders afterwards cannot change it.
+    assert.notEqual(requests[0][1].aesthetic_quality_range, state.aesthetic_quality_range)
+
+    state.resultSize = 'invalid'
+    state.text = '   '
+    await state.textSearchButton()
+    await state.nameSearchButton()
+    await state.randomSearchButton()
+    assert.equal(requests.length, 10)
+    assert.equal(requests.at(-1)[1].result_size, 2048)
 })
 
 test('closing image details restores the trigger focus or the result heading after virtualization', () => {
@@ -1229,33 +1246,127 @@ test('large ZIP preparation starts a native download without buffering a Blob an
     assert.equal(state.isDownloading, false)
 })
 
-test('near-bottom scroll appends once despite repeated events and preserves selection and position', async () => {
-    const nextPage = deferred()
-    const requested = []
-    const { state, scrollArea } = createApp({
-        getImageItemsByPage: async (page, size) => {
-            requested.push(page)
-            if (page === 1) return nextPage.promise
-            const items = Array.from({ length: size }, (_, i) => ({ id: `${i}`, name: 'image.png' }))
-            items.totalCount = 120
-            return items
+test('changing the categories while a search runs returns to the collection without staying busy', async () => {
+    const response = deferred()
+    const { state, watch } = createApp({ getImageItemsByPage: async () => catalogItems(['a', 'b']) })
+    await state.browseImages()
+    const search = state.runSearch(() => response.promise)
+    await nextTurn()
+    assert.equal(state.isSearching, true)
+
+    state.ratingFilter = ['general']
+    await watch('ratingFilter')
+    assert.equal(state.isSearching, false)
+    assert.deepEqual(displayedIds(state), ['a', 'b'])
+
+    response.resolve(searchResult(['late']))
+    await search
+    assert.equal(state.isSearching, false)
+    assert.equal(state.isPagedBrowseMode, true)
+    assert.deepEqual(displayedIds(state), ['a', 'b'])
+    // The next search is not blocked.
+    await state.runSearch(async () => searchResult(['next'], 'query', { next: 'general' }))
+    assert.deepEqual(displayedIds(state), ['next'])
+})
+
+// The conditions index.html puts on the reload button and on the empty state, evaluated against a state.
+const template = fs.readFileSync(path.join(__dirname, '../app/presentation/view/index.html'), 'utf8')
+function templateCondition(pattern) {
+    const expression = template.match(pattern)[1]
+    return state => Boolean(new Function('state', `with (state) { return ${expression} }`)(state))
+}
+const offersReload = templateCondition(/<v-btn v-else-if="([^"]+)" id="retryBrowse"/)
+const showsEmptyState = templateCondition(/<div v-if="([^"]+)" class="emptyState"/)
+
+test('a collection that failed to load keeps offering a reload after its error is dismissed', async () => {
+    let fail = true
+    const { state } = createApp({
+        getImageItemsByPage: async () => {
+            if (fail) throw new Error('server unreachable')
+            return catalogItems(['a'])
         },
     })
     await state.browseImages()
-    state.toggleSelection('0')
-    Object.assign(scrollArea, { scrollTop: 1500, clientHeight: 800, scrollHeight: 2820 })
-    state.updateImageFromScroll({ target: scrollArea })
-    state.updateImageFromScroll({ target: scrollArea })
-    assert.deepEqual(requested, [0, 1])
-    assert.equal(state.isLoadingPage, true)
-    nextPage.resolve(Array.from({ length: 60 }, (_, i) => ({ id: `${i + 60}`, name: 'image.png' })))
+    assert.equal(state.errorDetail, 'server unreachable')
+    assert.equal(state.catalogUnavailable, true)
+    state.errorMessage = ''
+    assert.equal(state.catalogUnavailable, true)
+    assert.equal(offersReload(state), true)
+    assert.equal(showsEmptyState(state), false)
+
+    // No reload is offered while a search runs or while the first page is being fetched.
+    const response = deferred()
+    const search = state.runSearch(() => response.promise)
     await nextTurn()
-    assert.equal(state.rawResultBuffer.length, 120)
-    assert.equal(state.selectedItemId['0'], true)
-    assert.equal(scrollArea.scrollTop, 1500)
-    assert.equal(state.hasMorePages, false)
-    state.updateImageFromScroll({ target: scrollArea })
-    assert.deepEqual(requested, [0, 1])
+    assert.equal(state.catalogUnavailable, false)
+    response.reject(new Error('search failed'))
+    await search
+    assert.equal(state.catalogUnavailable, true)
+
+    fail = false
+    const reload = state.browseImages()
+    assert.equal(state.catalogUnavailable, false)
+    await reload
+    assert.equal(state.catalogUnavailable, false)
+    assert.deepEqual(displayedIds(state), ['a'])
+})
+
+test('a loaded collection without matching images is empty rather than unavailable', async () => {
+    const { state } = createApp({ getImageItemsByPage: async () => catalogItems([], 400, 0) })
+    await state.browseImages()
+    assert.equal(state.stableCatalog, true)
+    assert.equal(state.searchCount, 0)
+    assert.equal(state.catalogUnavailable, false)
+    assert.equal(offersReload(state), false)
+    assert.equal(showsEmptyState(state), true)
+})
+
+test('a search that fails over the collection resumes the page loads and selection it interrupted', async () => {
+    const ids = Array.from({ length: 180 }, (_, i) => `image-${i}`)
+    const pending = []
+    const { state } = createApp({
+        getImageItemsByPage: (page, size) => {
+            if (page === 0) return Promise.resolve(catalogItems(ids.slice(0, size), ids.length))
+            const response = deferred()
+            pending.push({ page, response, items: catalogItems(ids.slice(page * size, (page + 1) * size)) })
+            return response.promise
+        },
+    })
+    state.numRows = 1
+    state.numCols = 1
+    await state.browseImages()
+
+    // The viewport and a select-all both wait for page 1 when a search starts and then fails.
+    const selecting = state.selectCurrentResults()
+    state.showedItemIndex = 60
+    state.refreshVisibleItems()
+    state.ensureCatalogWindow()
+    await nextTurn()
+    assert.equal(state.isSelecting, true)
+    assert.deepEqual(pending.map(request => request.page), [1])
+    await state.runSearch(async () => { throw new Error('invalid expression') })
+    assert.equal(state.isSearching, false)
+    assert.equal(state.isSelecting, false)
+    assert.equal(state.stableCatalog, true)
+
+    // The failed search requests the page in view again instead of reusing the interrupted request.
+    await nextTurn()
+    assert.deepEqual(pending.map(request => request.page), [1, 1])
+    assert.equal(state.isLoadingPage, true)
+    assert.equal(state.displayItems[0].placeholder, true)
+    pending[1].response.resolve(pending[1].items)
+    await nextTurn()
+    assert.equal(state.isLoadingPage, false)
+    assert.equal(state.displayItems[0].id, 'image-60')
+
+    // The interrupted request finishing late changes nothing.
+    pending[0].response.resolve(pending[0].items)
+    await selecting
+    assert.equal(state.isLoadingPage, false)
+    assert.equal(state.isSelecting, false)
+    assert.equal(state.selectedCount, 0)
+    await state.toggleSelection('image-60')
+    assert.equal(state.selectedItemId['image-60'], true)
 })
 
 test('search result limit describes the completed request even if settings change while it runs', async () => {
@@ -1270,42 +1381,4 @@ test('search result limit describes the completed request even if settings chang
     assert.equal(state.lastSearchLimit, 2048)
     await state.runSearch(async () => searchResult(['image']))
     assert.equal(state.lastSearchLimit, 10)
-})
-
-test('a viewport without a scrollbar fills automatically within a bounded page budget', async () => {
-    const pages = []
-    const { state, scrollArea } = createApp({
-        getImageItemsByPage: async (page, size) => {
-            pages.push(page)
-            return Array.from({ length: size }, (_, i) => ({ id: `${page}-${i}`, name: 'image.png' }))
-        },
-    })
-    Object.assign(scrollArea, { clientHeight: 2000, scrollHeight: 1000 })
-    await state.browseImages()
-    assert.deepEqual(pages, [0, 1, 2, 3])
-    assert.equal(state.rawResultBuffer.length, 240)
-    assert.equal(state.isExploringPages, false)
-})
-
-test('infinite scroll crosses filtered-out pages within its bounded budget to find the next match', async () => {
-    const pages = []
-    const { state, scrollArea } = createApp({
-        getImageItemsByPage: async (page, size) => {
-            pages.push(page)
-            const items = Array.from({ length: size }, (_, i) => ({ id: `${page}-${i}`, name: 'image.png' }))
-            items.totalCount = 180
-            return items
-        },
-        getImageRatings: async (_model, _pretrained, ids) => Object.fromEntries(ids.map(id => [id, id.startsWith('1-') ? 'explicit' : 'general'])),
-    })
-    state.ratingFilter = ['general']
-    await state.browseImages()
-    assert.deepEqual(pages, [0])
-    Object.assign(scrollArea, { scrollTop: 1500, clientHeight: 800, scrollHeight: 2820 })
-    state.updateImageFromScroll({ target: scrollArea })
-    await nextTurn()
-    assert.deepEqual(pages, [0, 1, 2])
-    assert.equal(state.resultBuffer.length, 120)
-    assert.equal(state.rawResultBuffer.length, 180)
-    assert.equal(state.hasMorePages, false)
 })

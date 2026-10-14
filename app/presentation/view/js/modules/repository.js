@@ -1,359 +1,117 @@
-
-
 import axios from "../../vendor/axios/axios.min.js"
 import { fileToBase64 } from "./util.js"
 export { MAX_UPLOAD_BYTES } from "./util.js"
 
 /**
- * 画像項目
- * @typedef {{id:string, name:string}} ImageItem 
- * 
+ * 画像項目。タグや評価値は getImageMetadata で画像ごとに取得する
+ * @typedef {{id:string, name:string, rating:string}} ImageItem
+ *
  * 検索結果
  * @typedef {{item:ImageItem, score:number}} ResultItem
+ *
+ * 検索結果の一覧と、同じ検索を再実行するための保存クエリ
+ * @typedef {{list:ResultItem[], search_query:string}} SearchResults
+ *
+ * すべての検索に共通する設定
+ * @typedef {{model_name:string, pretrained:string, aesthetic_quality_beta:number,
+ *   aesthetic_quality_range:number[], aesthetic_model_name:string, result_size:number}} SearchSettings
  */
-
-const DEFAULT_RESULT_SIZE = 2048
-
-function normalizeResultSize(resultSize) {
-    const normalized = Number.parseInt(resultSize, 10)
-    return Number.isFinite(normalized) && normalized > 0 ? normalized : DEFAULT_RESULT_SIZE
-}
-
-
 
 /**
  * 利用可能な検索モデル一覧を取得する。
  *
  * @return {Promise<{model_name:string, pretrained:string}[]>}
  */
-export async function getModelItems() {
-
-    return axios.get(`/model_item`).then(res => res.data)
+export function getModelItems() {
+    return axios.get("/model_item").then(res => res.data)
 }
 
 /**
- * 画像項目のIDから画像のURLを取得する
- * 
+ * 画像項目のIDから縮小画像のURLを取得する
+ *
  * @param {string} itemId
- * 
  * @return {string}
  */
 export function getImageSmallUrl(itemId) {
     return `/image/${itemId}/small`
 }
 
+/**
+ * 画像項目のIDから元の画像のURLを取得する
+ *
+ * @param {string} itemId
+ * @return {string}
+ */
 export function getImageOriginalUrl(itemId) {
     return `/image/${itemId}/original`
 }
 
-
 /**
- * ページ指定で画像項目の一覧を取得する
+ * ページ指定で画像項目の一覧を取得する。
+ * includeTotalを指定すると、戻り値の配列にモデル全体の件数(totalCount)と
+ * 区分に一致する件数(matchingCount)が付く。
  *
  * @param {number} page 0始まりのページ番号
- * @param {number} pageSize 取得する件数（デフォルトは初期表示分）
- *
- * @return {Promise<ImageItem[]>}
+ * @param {number} pageSize 取得する件数
+ * @param {string} modelName
+ * @param {string} pretrained
+ * @param {boolean} includeTotal
+ * @param {string[]} [ratings] 絞り込む画像区分。省略時は絞り込まない
+ * @return {Promise<ImageItem[] & {totalCount?: number, matchingCount?: number}>}
  */
-export async function getImageItemsByPage(page = 0, pageSize = 60, modelName, pretrained, includeTotal = false, ratings) {
-    const params = { page, size: pageSize }
-    if (modelName) params.model_name = modelName
-    if (pretrained) params.pretrained = pretrained
+export function getImageItemsByPage(page, pageSize, modelName, pretrained, includeTotal = false, ratings) {
+    const params = { page, size: pageSize, model_name: modelName, pretrained }
     if (includeTotal) params.include_total = 1
     if (ratings !== undefined) params.ratings = JSON.stringify(ratings)
-    return axios.get(`/image_item`, { params }).then(res => {
-        const total = res.headers['x-catalog-total']
-        if (total !== undefined && total !== '') res.data.totalCount = Number(total)
-        const matching = res.headers['x-matching-total']
-        if (matching !== undefined && matching !== '') res.data.matchingCount = Number(matching)
+    return axios.get("/image_item", { params }).then(res => {
+        const total = res.headers["x-catalog-total"]
+        if (total !== undefined && total !== "") res.data.totalCount = Number(total)
+        const matching = res.headers["x-matching-total"]
+        if (matching !== undefined && matching !== "") res.data.matchingCount = Number(matching)
         return res.data
     })
 }
 
 /**
- * 画像項目を取得する
- * 
- * @param {string} itemId
- * 
- * @return {Promise<ImageItem>}
+ * 画像のタグ・評価などのメタデータを取得する
+ *
+ * @return {Promise<{tags:string, style_cluster:string, rating:string, aesthetic_quality:number|null}>}
  */
-export async function getItem(itemId) {
-
-    return axios.get(`/image_item/${itemId}`).then(res => res.data)
-}
-
-export async function getImageMetadata(modelName, pretrained, itemId) {
-
+export function getImageMetadata(modelName, pretrained, itemId) {
     return axios.get(`/image_meta/${itemId}`, {
-        params: {
-            model_name: modelName,
-            pretrained: pretrained
-        }
+        params: { model_name: modelName, pretrained },
     }).then(res => res.data)
 }
 
-export async function getImageRatings(modelName, pretrained, itemIds = []) {
-
-    if(itemIds.length === 0) {
-        return Promise.resolve({})
-    }
-
-    const payload = {
-        params:{
-            model_name: modelName,
-            pretrained: pretrained,
-            ids: itemIds
-        }
-    }
-
-    return axios.post(`/image_ratings`, payload).then(res => res.data)
-}
-
-
-
 /**
- * 画像項目を文字列で検索する
- * 
- * @param {string} modelName
- * @param {string} pretrained
- * @param {string} text
- * 
- * @return {Promise<ResultItem[]>}
- */
-export async function searchText(modelName, pretrained, text, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
-
-    let payload = {
-
-        params:{
-            model_name: modelName, 
-            pretrained: pretrained, 
-            text : text,
-            aesthetic_quality_beta: aesthetic_quality_beta,
-            aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name,
-            result_size: normalizeResultSize(resultSize)
-        }
-    }
-
-    return axios.post("/search/text", payload).then(res => res.data)
-}
-
-
-/**
- * 画像項目を画像で検索する
- * 
- * @param {string} modelName
- * @param {string} pretrained
- * @param {string[]} itemId_list
- * 
- * @return {Promise<ResultItem[]>}
- */
-export async function searchImage(modelName, pretrained, itemId_list, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
-
-    let payload = {
-
-        params:{
-            model_name: modelName,
-            pretrained: pretrained,
-            id : itemId_list,
-            aesthetic_quality_beta: aesthetic_quality_beta,
-            aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name,
-            result_size: normalizeResultSize(resultSize)
-        }
-    }
-
-    return axios.post("/search/image", payload).then(res => res.data)
-}
-
-
-/**
- * 画像項目を名前で検索する
+ * 画像項目を検索する。
  *
- * @param {string} isRegexp
- * @param {string} text
+ * kindごとに、共通の設定へ次のパラメータを加える:
+ * text {text} / image {id: 画像IDの配列} / random {} / query {search_query}
+ * queryaddtext {text, search_query, features_strength}
+ * name・tags・style_cluster {text, is_regexp}
  *
- * @return {Promise<ResultItem[]>}
+ * @param {'text'|'image'|'random'|'query'|'queryaddtext'|'name'|'tags'|'style_cluster'|'uploadimage'} kind
+ * @param {SearchSettings & Object} params
+ * @return {Promise<SearchResults>}
  */
-export async function searchName(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
-
-    let payload = {
-
-        params:{
-            model_name: modelName,
-            pretrained: pretrained,
-            text : itemId_list,
-            is_regexp : is_regexp.toString(),
-            aesthetic_quality_beta: aesthetic_quality_beta,
-            aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name,
-            result_size: normalizeResultSize(resultSize)
-        }
-    }
-
-    return axios.post("/search/name", payload).then(res => res.data)
-}
-
-
-/**
- * 画像項目を乱数で検索する
- * 
- * @param {string} modelName
- * @param {string} pretrained
- * @param {string[]} itemId_list
- * 
- * @return {Promise<ResultItem[]>}
- */
-export async function searchRandom(modelName, pretrained, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
-
-    let payload = {
-
-        params:{
-            model_name: modelName,
-            pretrained: pretrained,
-            aesthetic_quality_beta: aesthetic_quality_beta,
-            aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name,
-            result_size: normalizeResultSize(resultSize)
-        }
-    }
-
-    return axios.post("/search/random", payload).then(res => res.data)
-}
-
-
-/**
- * 画像項目をクエリで検索する
- * 
- * @param {string} modelName
- * @param {string} pretrained
- * @param {string[]} itemId_list
- * 
- * @return {Promise<ResultItem[]>}
- */
-export async function searchQuery(modelName, pretrained, search_query, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
-
-    let payload = {
-
-        params:{
-            model_name: modelName,
-            pretrained: pretrained,
-            search_query: search_query,
-            aesthetic_quality_beta: aesthetic_quality_beta,
-            aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name,
-            result_size: normalizeResultSize(resultSize)
-        }
-    }
-
-    return axios.post("/search/query", payload).then(res => res.data)
-}
-
-/**
- * 画像項目をクエリにstrengthの強さ分テキストの特徴を足してから検索する
- * 
- * @param {string} modelName
- * @param {string} pretrained
- * @param {string[]} itemId_list
- * 
- * @return {Promise<ResultItem[]>}
- */
-export async function addTextFeatures(modelName, pretrained, text, search_query, features_strength, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
-
-    let payload = {
-
-        params:{
-            model_name: modelName,
-            pretrained: pretrained,
-            text : text,
-            search_query: search_query,
-            features_strength: features_strength,
-            aesthetic_quality_beta: aesthetic_quality_beta,
-            aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name,
-            result_size: normalizeResultSize(resultSize)
-        }
-    }
-
-    return axios.post("/search/queryaddtext", payload).then(res => res.data)
-}
-
-/**
- * 画像項目をタグで検索する
- * 
- * @param {string} modelName
- * @param {string} pretrained
- * @param {string[]} itemId_list
- * 
- * @return {Promise<ResultItem[]>}
- */
-export async function searchTags(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
-
-    let payload = {
-
-        params:{
-            model_name: modelName,
-            pretrained: pretrained,
-            text : itemId_list,
-            is_regexp : is_regexp.toString(),
-            aesthetic_quality_beta: aesthetic_quality_beta,
-            aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name,
-            result_size: normalizeResultSize(resultSize)
-        }
-    }
-
-    return axios.post("/search/tags", payload).then(res => res.data)
-}
-
-/**
- * style_cluster で検索する
- *
- * @param {string} modelName
- * @param {string} pretrained
- * @param {string} itemId_list
- * @param {boolean} is_regexp
- *
- * @return {Promise<ResultItem[]>}
- */
-export async function searchStyleCluster(modelName, pretrained, itemId_list, is_regexp, aesthetic_quality_beta, aesthetic_quality_range, aesthetic_model_name, resultSize = DEFAULT_RESULT_SIZE) {
-
-    let payload = {
-
-        params:{
-            model_name: modelName,
-            pretrained: pretrained,
-            text : itemId_list,
-            is_regexp : is_regexp.toString(),
-            aesthetic_quality_beta: aesthetic_quality_beta,
-            aesthetic_quality_range: aesthetic_quality_range,
-            aesthetic_model_name: aesthetic_model_name,
-            result_size: normalizeResultSize(resultSize)
-        }
-    }
-
-    return axios.post("/search/style_cluster", payload).then(res => res.data)
+export function search(kind, params) {
+    return axios.post(`/search/${kind}`, { params }).then(res => res.data)
 }
 
 /**
  * アップロードされた画像で検索する
  *
- * @param {string} modelName
- * @param {string} pretrained
  * @param {File} file
- * @returns {Promise<ResultItem[]>}
+ * @param {SearchSettings} params
+ * @return {Promise<SearchResults>}
  */
-export async function searchUploadImage(modelName, pretrained, file, resultSize = DEFAULT_RESULT_SIZE) {
+export async function searchUploadImage(file, params) {
     const dataUrl = await fileToBase64(file)
-    let payload = {
-        params:{
-            model_name: modelName,
-            pretrained: pretrained,
-            base64: dataUrl.split(',')[1],
-            content_type: file.type,
-            result_size: normalizeResultSize(resultSize)
-        }
-    }
-    return axios.post("/search/uploadimage", payload).then(res => res.data)
+    return search("uploadimage", {
+        ...params,
+        base64: dataUrl.split(",")[1],
+        // ブラウザが形式を判別できない場合は、サーバーの既定値に任せる。
+        content_type: file.type || undefined,
+    })
 }
-

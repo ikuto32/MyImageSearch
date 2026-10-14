@@ -33,8 +33,8 @@ class AppCliTests(unittest.TestCase):
         args = entry.parse_args([])
         self.assertEqual((args.image_dir, args.meta_dir), (Path('external-images'), Path('external-metadata')))
 
-    def test_warmup_is_explicit(self):
-        self.assertFalse(entry.parse_args(['--warmup']).skip_warmup)
+    def test_warmup_is_the_default_and_can_be_skipped(self):
+        self.assertFalse(entry.parse_args([]).skip_warmup)
         self.assertTrue(entry.parse_args(['--skip-warmup']).skip_warmup)
 
     def test_host_can_be_limited_to_this_pc(self):
