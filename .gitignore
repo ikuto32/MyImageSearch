@@ -134,11 +134,11 @@ dmypy.json
 /images/
 /clip_meta/
 /model/
-/embedding.npy
 
 # Machine settings and private review output
 /.vscode/
 /.idea/
+/.claude/
 node_modules/
 .env.*
 !.env.example

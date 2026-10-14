@@ -1,109 +1,127 @@
-r"""Measure only metadata lookup overhead before and after removing per-search sort.
+r"""Measure search over synthetic metadata: loading rows, text matching and ranking.
 
 Run from the project root:
-    .\.venv\Scripts\python.exe scripts/benchmark_metadata.py
+    uv run python scripts/benchmark_metadata.py
 
-The synthetic metadata is already ordered by path, as LocalAccessor returns it.
-The old path sorts all records again before looking up the FAISS result positions;
-the new path uses those positions directly. No FAISS search, embedding model,
-database, images, network, or result scoring is measured here.
-
-Timing runs do not enable tracemalloc. A separate allocation run starts tracing
-after fixture construction, so peaks exclude the existing metadata and indices.
+A synthetic database and a flat FAISS index are generated in a temporary
+directory, then read through the same code as the application. No embedding
+model, image file or network is used. Vector search uses an exact flat index,
+so its time grows with the row count unlike the IVF index of a real dataset.
 """
 
 import argparse
-import gc
+from contextlib import closing
 import json
+from pathlib import Path
 import platform
-import random
+import sqlite3
 import statistics
+import sys
+import tempfile
 import time
 import tracemalloc
-from dataclasses import dataclass
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+DIMENSION = 16
 
 
-@dataclass(frozen=True, slots=True)
-class ImageName:
-    name: str
+def create_dataset(directory: Path, count: int):
+    import faiss
+    import numpy as np
+
+    from app.infrastructure.index_files import IndexFiles
+
+    files = IndexFiles(directory)
+    rng = np.random.default_rng(20260906)
+    vectors = rng.normal(size=(count, DIMENSION)).astype(np.float32)
+    faiss.normalize_L2(vectors)
+    index = faiss.IndexFlatIP(DIMENSION)
+    index.add(vectors)
+    with files.index.open("wb") as stream:
+        faiss.write_index(index, faiss.PyCallbackIOWriter(stream.write))
+    width = len(str(count))
+    ratings = ("general", "sensitive", "questionable", "explicit", None)
+    with closing(sqlite3.connect(files.database)) as connection:
+        connection.execute("""CREATE TABLE image_meta (
+            image_id TEXT PRIMARY KEY, image_path TEXT, meta BLOB, image_tags TEXT,
+            aesthetic_quality REAL, pony_aesthetic_quality REAL, style_cluster TEXT, rating TEXT)""")
+        connection.executemany("INSERT INTO image_meta VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (
+            (
+                f"{row:064x}", f"folder_{row // 1000:05d}/image_{row:0{width}d}.jpg", vectors[row].tobytes(),
+                f"tag_{row % 97}, tag_{row % 13}, landscape", (row % 100) / 10, (row % 37) / 3.7,
+                f"style_cluster_{row % 2048}", ratings[row % 5],
+            )
+            for row in range(count)
+        ))
+        connection.execute("CREATE INDEX idx_image_meta_path ON image_meta(image_path)")
+        connection.commit()
+    return files
 
 
-@dataclass(frozen=True, slots=True)
-class ImageItem:
-    display_name: ImageName
-
-
-def old_metadata_lookup(items, matched_indices):
-    sorted_items = sorted(items, key=lambda item: item.display_name.name)
-    return [sorted_items[index] for index in matched_indices]
-
-
-def direct_metadata_lookup(items, matched_indices):
-    return [items[index] for index in matched_indices]
-
-
-def measure_lookup(lookup, items, matched_indices, repeats):
-    samples_ms = []
+def measure(operation, repeats: int) -> dict:
+    samples = []
     for _ in range(repeats):
-        gc.collect()
         started = time.perf_counter()
-        result = lookup(items, matched_indices)
-        samples_ms.append((time.perf_counter() - started) * 1000)
-        del result
-
-    gc.collect()
-    tracemalloc.start()
-    try:
-        result = lookup(items, matched_indices)
-        _, peak_bytes = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
-    del result
-
-    return {
-        "median_ms": statistics.median(samples_ms),
-        "min_ms": min(samples_ms),
-        "max_ms": max(samples_ms),
-        "samples_ms": samples_ms,
-        "extra_peak_bytes": peak_bytes,
-    }
+        result = operation()
+        samples.append((time.perf_counter() - started) * 1000)
+    return {"median_ms": round(statistics.median(samples), 2), "min_ms": round(min(samples), 2), "results": len(result.items)}
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--items", type=int, default=1_000_000)
     parser.add_argument("--results", type=int, default=2048)
     parser.add_argument("--repeats", type=int, default=5)
     args = parser.parse_args(argv)
-    if args.items < 1 or not 1 <= args.results <= args.items or args.repeats < 1:
-        parser.error("items/repeats must be positive and results must be between 1 and items")
+    if args.items < 1 or args.results < 1 or args.repeats < 1:
+        parser.error("items, results and repeats must be positive")
 
-    # Fixed-width names preserve lexical path order for every supported item count.
-    width = len(str(args.items))
-    items = [ImageItem(ImageName(f"image_{index:0{width}d}.jpg")) for index in range(args.items)]
-    matched_indices = random.Random(20260906).sample(range(args.items), args.results)
+    import numpy as np
 
-    old_result = old_metadata_lookup(items, matched_indices)
-    new_result = direct_metadata_lookup(items, matched_indices)
-    if any(old is not new for old, new in zip(old_result, new_result)):
-        raise AssertionError("The old and new paths returned different image references")
-    del old_result, new_result
+    from app.application.search import SearchOptions
+    from app.application.usecase import Usecase
+    from app.domain.domain_object import ModelId
+    from app.domain.search_query import SearchQuery
+    from app.infrastructure.search_index_loader import load_search_index
 
-    old = measure_lookup(old_metadata_lookup, items, matched_indices, args.repeats)
-    direct = measure_lookup(direct_metadata_lookup, items, matched_indices, args.repeats)
+    model = ModelId("synthetic", "")
+    with tempfile.TemporaryDirectory() as directory:
+        files = create_dataset(Path(directory), args.items)
+        tracemalloc.start()
+        started = time.perf_counter()
+        search_index = load_search_index(files)
+        load_ms = (time.perf_counter() - started) * 1000
+        retained, _peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+    class Accessor:
+        def load_search_index(self, _model_id):
+            return search_index
+
+    class Repository:
+        def remember_image_items(self, _items):
+            pass
+
+    usecase = Usecase(Repository(), Accessor())
+    options = SearchOptions(result_size=args.results)
+    aesthetic = SearchOptions(0.3, (2.0, 8.0), "original", args.results)
+    query = SearchQuery(tuple(np.random.default_rng(1).normal(size=DIMENSION).tolist()), False, model)
     report = {
-        "scope": "Metadata reference selection only; not end-to-end search latency",
-        "metadata_order": "Already sorted by path, matching LocalAccessor",
+        "scope": "Synthetic metadata through the application's loader and search; no embedding model",
         "python": platform.python_version(),
         "platform": platform.platform(),
         "item_count": args.items,
-        "result_count": args.results,
-        "repeats": args.repeats,
-        "same_image_references": True,
-        "old_sort_then_lookup": old,
-        "direct_lookup": direct,
-        "median_speedup": old["median_ms"] / direct["median_ms"],
-        "extra_peak_reduction_bytes": old["extra_peak_bytes"] - direct["extra_peak_bytes"],
+        "result_limit": args.results,
+        "load_index_and_metadata_ms": round(load_ms, 2),
+        "metadata_python_retained_mb": round(retained / 1024 / 1024, 1),
+        "name_substring_all_rows_match": measure(lambda: usecase.search_metadata(model, "name", "image", False, options), args.repeats),
+        "name_substring_few_rows_match": measure(lambda: usecase.search_metadata(model, "name", "folder_00123/", False, options), args.repeats),
+        "tags_regexp": measure(lambda: usecase.search_metadata(model, "tags", r"\btag_1\b", True, options), args.repeats),
+        "tags_with_aesthetic_filter": measure(lambda: usecase.search_metadata(model, "tags", "tag_5", False, aesthetic), args.repeats),
+        "vector_exact": measure(lambda: usecase.search_query(model, query, options), args.repeats),
+        "vector_exact_with_aesthetic_filter": measure(lambda: usecase.search_query(model, query, aesthetic), args.repeats),
     }
     print(json.dumps(report, indent=2))
 

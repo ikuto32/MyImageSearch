@@ -32,14 +32,18 @@ uv sync
 軽量な動作確認では、32枚以上の画像を配置し、次のコマンドで検索用インデックスを作成します。
 
 ```powershell
-uv run python create_index.py --image_dir ./images --meta_dir ./clip_meta --search_backend open_clip --search_model_out_dim 768 --disable-clip-metadata --use-existing-tags --nlist 1 --bits_per_code 4 --batch_size 8 --num_workers 0
+uv run python create_index.py --image-dir ./images --meta-dir ./clip_meta --search-backend open_clip --disable-clip-metadata --use-existing-tags --nlist 1 --bits-per-code 4 --batch-size 8 --num-workers 0
 ```
 
 この例は検索に必要な埋め込みだけを作成し、追加の審美性・スタイル推論と自動タグ付けを省略します。既存のタグファイルがなければタグは空、画像区分は未分類になります。作成後は `clip_meta/ViT-L-14-openai/` にDBとインデックスが保存されます。
 
 既存タグを使う場合は、画像の隣に `photo.jpg.tags.json` のように配置します。形式は `{"rating":"general","tags":["mountain","sky"]}` です。
 
-`--nlist 1 --bits_per_code 4` は少数画像の確認用設定です。大規模データの作成ではこの2引数を外し、必要なメモリと検索精度を確認して調整してください。追加のメタデータ推論を有効にする場合は、`--aesthetic_model_path` で指定する重みなどを別途用意します。引数一覧は `uv run python create_index.py --help` で確認できます。
+`--nlist 1 --bits-per-code 4` は少数画像の確認用設定です。大規模データの作成ではこの2引数を外し、必要なメモリと検索精度を確認して調整してください。追加のメタデータ推論を有効にする場合は、`--aesthetic-model-path` で指定する重み（既定は `./model/aesthetic_rankingv3.pth`）などを別途用意します。重みを入れ替えた場合、検索モデルが `open_clip` の `ViT-L-14` / `openai` のインデックスは `--recalc-aesthetic` で保存済みの評価を計算し直せます。引数一覧は `uv run python create_index.py --help` で確認できます。
+
+同じコマンドを再実行すると、追加された画像だけを処理してインデックスを作り直します。埋め込みの次元は保存済みのデータ（なければ最初の埋め込み）から決まります。次元の異なる埋め込みが保存されている場合は、`--search-model-out-dim` でどの次元に揃えるかを指定します。
+
+画像ディレクトリから削除した画像の記録は、`--delete-orphan-db-records` を付けたときだけDBから削除します。読めないフォルダがあった場合も、その中の画像は削除済みとみなさず、記録を残します。
 
 ### 2. 起動する
 
@@ -90,7 +94,14 @@ uv run python tests/run_tests.py
 node --test tests/test_ui_state.cjs tests/test_catalog_scroll.cjs tests/test_i18n.cjs
 ```
 
-実装は `app/`、テストは `tests/`、検証・計測用スクリプトは `scripts/` にあります。ブラウザ検証、軽量データの動作確認、大規模データの計測方法は [検証ガイド](docs/testing.md) を参照してください。
+| 場所 | 内容 |
+| --- | --- |
+| `app/` | Webアプリ。`domain`（画像・モデル・検索クエリ）、`application`（検索と一覧の処理）、`infrastructure`（SQLite・FAISS・画像ファイル・埋め込みモデル）、`presentation`（Flaskと画面）の4層 |
+| `indexer/` | インデックス作成。`create_index.py` から実行します |
+| `tests/` | 自動テスト |
+| `scripts/` | 検証・計測用スクリプト |
+
+インデックスのファイル名と形式は `app/infrastructure/index_files.py` で、作成側と検索側が共有します。ブラウザ検証、軽量データの動作確認、大規模データの計測方法は [検証ガイド](docs/testing.md) を参照してください。
 
 バックエンドはFlask・OpenCLIP・FAISS・SQLite、フロントエンドはVue・Vuetifyを使用しています。UIのJS・CSS・フォントはローカル配信し、必要なvendorファイルとライセンスは [vendor/](app/presentation/view/vendor/) に保持しています。
 

@@ -1,22 +1,24 @@
 [project]
 name = "myimagesearch"
 version = "0.1.0"
-description = "Add your description here"
+description = "ローカルに保存した画像を、言葉や似ている画像から探すWebアプリ"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "faiss-cpu>=1.13.0",
     "flask>=3.1.2",
+    "huggingface-hub>=1.20",
+    "numpy>=2.4",
     "onnxruntime-gpu>=1.23.2",
     "open-clip-torch>=3.2.0",
     "openai>=2.43,<3",
-    "pandas>=2.3.3",
+    "pillow>=12.2",
+    "regex>=2024.11.6",
     "rich>=13.9.4",
     "torch>=2.9.1",
     "torchvision>=0.24.1",
+    "tqdm>=4.68",
     "transformers>=5.12.1",
-    "qwen-vl-utils>=0.0.14",
-    "regex>=2024.11.6",
 ]
 
 [tool.uv.sources]

@@ -9,7 +9,7 @@ uv run python tests/run_tests.py
 node --test tests/test_ui_state.cjs tests/test_catalog_scroll.cjs tests/test_i18n.cjs
 ```
 
-Pythonテストは各ファイルを別プロセスで実行し、MLライブラリのスタブが別のテストへ混入するのを防ぎます。ブラウザ用の画像は `tests/fixtures/image.png`（メタデータを持たない2色のテスト画像）を使用し、利用者の画像データを必要としません。
+Pythonテストは各ファイルを別プロセスで並列に実行します。`uv run python tests/run_tests.py catalog` のように名前の一部を指定すると、該当するファイルだけを実行できます。モデルの重みやネットワークは使用しません。ブラウザ用の画像は `tests/fixtures/image.png`（メタデータを持たない2色のテスト画像）を使用し、利用者の画像データを必要としません。
 
 ## ブラウザでの操作・レイアウト検証
 
@@ -37,7 +37,7 @@ uv run python scripts/validate_local.py
 uv run python scripts/validate_local.py --with-text
 ```
 
-既定のViT-L-14/openaiを対象に、一覧・画像配信・検索API・保存クエリの再実行を読み取り専用で検証します。`--with-text` は実際のCLIP推論を含み、未取得のモデルはダウンロードされます。`--all-models` を追加すると、他の登録モデルのインデックスと保存クエリも確認します。
+既定のViT-L-14/openaiを対象に、一覧・画像配信・検索API・保存クエリの再実行を読み取り専用で検証します。別の場所のデータは `--image-dir` と `--meta-dir` で指定できます。`--with-text` は実際のCLIP推論を含み、未取得のモデルはダウンロードされます。`--all-models` を追加すると、他の登録モデルのインデックスと保存クエリも確認します。
 
 ## 大規模データの性能とUX
 
@@ -65,4 +65,4 @@ uv run python scripts/benchmark_catalog_filters.py --meta-dir "D:/image-index"
 uv run python scripts/benchmark_metadata.py
 ```
 
-`benchmark_startup.py` は実DBの一覧初期化、`benchmark_catalog_filters.py` は件数・区分・ページ取得を測定します。`benchmark_metadata.py` は合成100万件のメタデータ参照のみを対象とし、画像検索全体の測定ではありません。インデックス更新中の同時実行は避け、更新後はサーバーを再起動してください。
+`benchmark_startup.py` は実DBの一覧初期化、`benchmark_catalog_filters.py` は件数・区分・ページ取得を測定します。`benchmark_metadata.py` は合成100万件のデータを生成し、メタデータの読み込み・名前やタグの検索・順位付けをアプリと同じ処理で測定します。埋め込みモデルと実データのIVFインデックスは含みません。インデックス更新中の同時実行は避け、更新後はサーバーを再起動してください。

@@ -1,0 +1,2 @@
+# Third-party files are verified against vendor/manifest.json and must stay byte-identical.
+app/presentation/view/vendor/** -text

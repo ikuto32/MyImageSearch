@@ -1,80 +1,17 @@
-
-from abc import abstractmethod
-import pathlib
-from typing import Any
-import numpy as np
+from abc import ABC, abstractmethod
 
 from app.application.embedding_backend import SearchEmbeddingBackend
-from app.domain.domain_object import ImageId, ImageItem, Model, ModelId, Tokenizer
-from app.domain.errors import SearchInputError
+from app.application.search_index import SearchIndex
+from app.domain.domain_object import ModelId
 
 
-class Accessor():
+class Accessor(ABC):
     """キャッシュなどドメイン(アプリケーションの役割)と直接関係ない外部接続を行うインターフェイス"""
 
     @abstractmethod
-    def load_image_feature(self, model_id: ModelId, image_id: ImageId) -> np.ndarray:
-        """外部から対応したメタ情報を取得する"""
-
-        pass
-
-    @abstractmethod
-    def load_model(self, model_id: ModelId) -> Model:
-
-        pass
-
-    @abstractmethod
-    def load_tokenizer(self, model_id: ModelId) -> Tokenizer:
-
-        pass
+    def load_search_index(self, model_id: ModelId) -> SearchIndex:
+        """ModelIdから検索インデックスと、その行番号に対応するメタデータを取得する。"""
 
     @abstractmethod
     def load_embedding_backend(self, model_id: ModelId) -> SearchEmbeddingBackend:
         """ModelIdから検索クエリ生成用の埋め込みバックエンドを取得する。"""
-
-        pass
-
-    @abstractmethod
-    def load_index_with_metadata(
-        self, model_id: ModelId, aesthetic_model_name: str
-    ) -> tuple[Any, list[ImageItem]]:
-        """外部から対応したインデックスとメタ情報付きの画像一覧を読み込む"""
-
-        pass
-
-    @abstractmethod
-    def load_image_metadata(
-        self, model_id: ModelId, image_ids: list[ImageId] | None = None,
-    ) -> list[ImageItem]:
-        """FAISSを読み込まず、指定画像のメタデータを取得する。Noneは全件。"""
-        pass
-
-    @abstractmethod
-    def load_startup_image_items(
-        self,
-        model_id: ModelId,
-    ) -> tuple[list[ImageItem], dict[ImageId, pathlib.Path]]:
-        """起動時表示用の画像一覧とImageId->相対パスマップを読み込む"""
-
-        pass
-
-    @abstractmethod
-    def get_mean_meta_vector(self, model_id: ModelId) -> np.ndarray | None:
-        """ModelIdからimage meta全体の平均ベクトルを取得する。"""
-
-        pass
-
-    def load_startup_image_page(
-        self, model_id: ModelId, page: int, size: int, ratings: list[str] | None = None,
-    ) -> tuple[list[ImageItem], dict[ImageId, pathlib.Path]] | None:
-        """Optional database pagination; None preserves legacy repository fallback."""
-        return None
-
-    def load_download_image_items(
-        self, model_id: ModelId, limit: int, ratings: list[str] | None = None,
-    ) -> list[ImageItem]:
-        """Return a bounded, path-ordered download selection from this model."""
-        raise SearchInputError("This data source does not support catalog downloads")
-
-    def load_catalog_count(self, model_id: ModelId, ratings: list[str] | None = None) -> int | None:
-        return None

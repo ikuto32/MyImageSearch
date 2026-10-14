@@ -12,13 +12,9 @@ class SearchEmbeddingBackend(ABC):
     def encode_text(self, text: str) -> np.ndarray:
         """検索テキストを ``np.float32`` の2次元特徴量配列に変換する。"""
 
-        pass
-
     @abstractmethod
     def encode_image(self, image: PILImage.Image) -> np.ndarray:
         """検索画像を ``np.float32`` の2次元特徴量配列に変換する。"""
-
-        pass
 
 
 def to_float32_2d_array(features: Any) -> np.ndarray:

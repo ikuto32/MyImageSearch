@@ -60,7 +60,6 @@ async function startFixture(options = {}) {
           const count=params.ids?.length || params.first || 0
           return json({download_url:`/downloads/fixture-${calls.filter(call=>call.path==='/downloads/prepare').length}`,requested_count:count,image_count:count,skipped_count:0,bytes:22})
         }
-        if (url.pathname === '/image_ratings') return json(Object.fromEntries((params.ids || []).map(id=>[id,'general'])))
         if (url.pathname.startsWith('/search/')) {
           const length = Math.min(2048,params.result_size || 2048)
           return json({list:Array.from({length},(_,i)=>({item:fixtureItem(i),score:1-i/length})),search_query:'fixture-query'})

@@ -4,8 +4,21 @@ import { createCatalogScroll } from "./modules/catalog_scroll.js"
 
 const { markRaw, nextTick } = Vue
 
+const KNOWN_RATINGS = ['general', 'sensitive', 'questionable', 'explicit']
+const RATING_CATEGORIES = [...KNOWN_RATINGS, 'unclassified']
+const PAGE_SIZE = 60
+const DEFAULT_RESULT_SIZE = 2048
+// 一度に選択・保存できる枚数と、画像検索に使える枚数の上限（サーバーの上限と同じ）。
+const MAX_SELECTION = 1024
+const MAX_IMAGE_SEARCH_SELECTION = 64
+// 一覧を保持するページ数の上限。表示位置から遠いページを破棄する。
+const MAX_CACHED_PAGES = 64
+
+const ratingCategory = rating => KNOWN_RATINGS.includes(rating) ? rating : 'unclassified'
+
 /**
- * @typedef {{id: string, score: number, img_name: string, img_small: string, img_original: string, selected: boolean}} DisplayItem
+ * 画面に表示する画像。一覧の未取得の位置は placeholder になる。
+ * @typedef {{id: string, score?: number, img_name?: string, img_small?: string, img_original?: string, position?: number, placeholder?: boolean}} DisplayItem
  */
 
 const vuetify = Vuetify.createVuetify({
@@ -17,8 +30,7 @@ const app = Vue.createApp({
     data() {
         return {
             locale: i18n.getInitialLocale(),
-            pageSize: 0,
-            currentPage: 0,
+            pageSize: PAGE_SIZE,
             catalogTotal: null,
             catalogMatchingCount: null,
             catalogPages: {},
@@ -30,13 +42,10 @@ const app = Vue.createApp({
             catalogPageError: '',
             catalogPageErrorKey: '',
             catalogErrorPage: null,
-            serverCatalogAvailable: false,
             isSelecting: false,
             selectMode: false,
             selectionAnchorPosition: null,
             selectionRevision: 0,
-            nextPage: 0,
-            hasMorePages: true,
             isLoadingPage: false,
             isPagedBrowseMode: true,
             text: "",
@@ -45,8 +54,8 @@ const app = Vue.createApp({
             numCols: 6,
             gridWidth: 0,
             numRows: 10,
-            resultSize: 2048,
-            lastSearchLimit: 2048,
+            resultSize: DEFAULT_RESULT_SIZE,
+            lastSearchLimit: DEFAULT_RESULT_SIZE,
             model_name: "ViT-L-14",
             pretrained: "openai",
             modelItems: [],
@@ -78,9 +87,8 @@ const app = Vue.createApp({
             errorDetail: '',
             isInitializing: true,
             initializationFailed: false,
-            isExploringPages: false,
+            // 一覧や検索結果を入れ替えるたびに増やし、古い応答を無視するために使う。
             resultsRevision: 0,
-            pageRequestId: 0,
 
             /**
              * @type {ResultItem[]}
@@ -103,19 +111,14 @@ const app = Vue.createApp({
             selectedItemId:{},
 
             /**
-             * @type {{[itemId: string]: {tags: string, style_cluster: string, rating: string, aesthetic_quality: number}}}
+             * @type {{[modelAndItemId: string]: {tags: string, style_cluster: string, rating: string, aesthetic_quality: number|null}}}
              */
             imageMeta:{},
 
-            /**
-             * @type {{[modelKey: string]: {[itemId: string]: string}}}
-             */
-            ratingMaps:{},
-
-            ratingFilter: ["general", "questionable", "sensitive", "explicit", "unclassified"],
+            ratingFilter: [...RATING_CATEGORIES],
 
             /**
-             * @type {{[itemId: string]: boolean}}
+             * @type {DisplayItem | null}
              */
             activeDialogItem: null,
             detailTriggerElement: null,
@@ -169,11 +172,11 @@ const app = Vue.createApp({
             }
         },
         ratingFilter(){
-            if (this.isPagedBrowseMode && (this.serverCatalogAvailable || this.isLoadingPage)) return this.browseImages()
+            // 一覧はサーバーで絞り込み、検索結果は取得済みの候補から絞り込む。
+            if (this.isPagedBrowseMode) return this.browseImages()
             this.applyRatingFilterToBuffer()
             this.pruneSelection()
             this.initImage(false)
-            this.fillInitialViewport()
         },
         numCols(value) {
             this.numCols = Math.max(1, Math.min(24, Number.parseInt(value, 10) || 1))
@@ -190,10 +193,15 @@ const app = Vue.createApp({
     computed:{
         candidateCount() { return this.isPagedBrowseMode ? this.catalogTotal : this.rawResultBuffer.length },
         stableCatalog() { return this.isPagedBrowseMode && Number.isInteger(this.catalogMatchingCount) },
+        // 一覧を取得できていないのに、読み込みも検索も進んでいない状態。再読み込みの操作を表示する。
+        catalogUnavailable() {
+            return this.isPagedBrowseMode && !this.stableCatalog && !this.isLoadingPage &&
+                !this.isInitializing && !this.initializationFailed && !this.isSearching
+        },
         searchCount() { return this.stableCatalog ? this.catalogMatchingCount : this.resultBuffer.length },
         scrollProgressPercent() {
             if (this.isInitializing || this.initializationFailed ||
-                (this.isPagedBrowseMode && !this.stableCatalog && this.hasMorePages)) return null
+                (this.isPagedBrowseMode && !this.stableCatalog)) return null
             return this.searchCount ? this.scrollPositionPercent : 0
         },
         scrollProgressLabel() {
@@ -216,19 +224,21 @@ const app = Vue.createApp({
         },
         allCurrentSelected() {
             if (this.stableCatalog) {
-                const count = Math.min(1024, this.catalogMatchingCount)
+                const count = Math.min(MAX_SELECTION, this.catalogMatchingCount)
                 return count > 0 && Array.from({ length: count }, (_, i) => this.catalogResultAt(i))
                     .every(result => result && this.selectedItemId[result.item.id])
             }
             return this.resultBuffer.length > 0 && this.resultBuffer.every(result => this.selectedItemId[result.item.id])
         },
         ratingOptions() {
-            return ['general', 'sensitive', 'questionable', 'explicit', 'unclassified']
-                .map(value => ({ title: this.t(`rating.${value}`), value }))
+            return RATING_CATEGORIES.map(value => ({ title: this.t(`rating.${value}`), value }))
         },
         downloadCount() {
             if (this.selectedCount) return this.selectedCount
-            return this.isPagedBrowseMode ? Math.min(1024, this.catalogMatchingCount ?? this.catalogTotal ?? 1024) : Math.min(1024, this.resultBuffer.length)
+            const available = this.isPagedBrowseMode
+                ? this.catalogMatchingCount ?? this.catalogTotal ?? MAX_SELECTION
+                : this.resultBuffer.length
+            return Math.min(MAX_SELECTION, available)
         },
         downloadLabel() {
             return this.t(this.selectedCount ? 'download.selected' : 'download.first', { count: this.downloadCount })
@@ -250,10 +260,7 @@ const app = Vue.createApp({
     methods:{
         t(key, params = {}) { return i18n.t(this.locale, key, params) },
         shortImageName(name) { return String(name || '').split(/[\\/]/).pop() },
-        ratingTitle(value) {
-            const category = ['general', 'sensitive', 'questionable', 'explicit'].includes(value) ? value : 'unclassified'
-            return this.t(`rating.${category}`)
-        },
+        ratingTitle(value) { return this.t(`rating.${ratingCategory(value)}`) },
 
         /**
          * 初期化する
@@ -301,7 +308,7 @@ const app = Vue.createApp({
             .then(items => {
                 this.modelItems = items
                 if (!items.length) throw Object.assign(new Error(), { code: 'noModels' })
-                if (items.length && !items.some(item => item.model_name === this.model_name)) {
+                if (!items.some(item => item.model_name === this.model_name)) {
                     this.model_name = items[0].model_name
                 }
                 this.syncPretrainedForSelectedModel()
@@ -317,8 +324,7 @@ const app = Vue.createApp({
                 return false
             }
 
-            const preferred = candidates.find(value => value === this.pretrained)
-            if (preferred !== undefined && !(this.model_name.includes("/") && preferred === "openai")) {
+            if (candidates.includes(this.pretrained)) {
                 return false
             }
 
@@ -328,7 +334,6 @@ const app = Vue.createApp({
 
         onModelChange(){
             if (this.isInitializing) return
-            this.isSearching = false
             this.search_query = ""
             this.searchDurationMs = null
             this.clientDurationMs = null
@@ -340,7 +345,6 @@ const app = Vue.createApp({
             if (this.initializationFailed) return this.init()
             this.errorMessage = ""
             return this.initBuffer()
-                .catch(error => this.showError(error))
         },
 
         describeError(error) {
@@ -360,7 +364,7 @@ const app = Vue.createApp({
         },
 
         /**
-         * 表示画像をリセットして、一部を表示する
+         * 表示位置を先頭へ戻して描画し直す
          */
         initImage(clearSelection = true) {
             this._catalogInput?.stop()
@@ -370,46 +374,26 @@ const app = Vue.createApp({
             }
             this.showedItemIndex = 0
             this.scrollPositionPercent = 0
-            this.padding_top = 0
             const scrollArea = document.getElementById('scroll-target')
             if (scrollArea) scrollArea.scrollTop = 0
             this.catalogPhysicalOffset = 0
             this.catalogLogicalOffset = 0
             this._catalogScrollIntent = null
-            if (this.stableCatalog) {
-                this.refreshVisibleItems()
-                this.ensureCatalogWindow()
-                return
-            }
-
-            const end = this.numRows * this.getColumnCount()
-            this.displayItems = this.resultBuffer.slice(0, end).map(result => ({
-                id: result.item.id,
-                score: result.score,
-                tags: result.item.tags,
-                img_name: result.item.name,
-                img_small: repository.getImageSmallUrl(result.item.id),
-                img_original: repository.getImageOriginalUrl(result.item.id),
-                selected: false
-            }))
-            this.updatePadding()
+            this.refreshVisibleItems()
+            if (this.stableCatalog) this.ensureCatalogWindow()
         },
 
         /**
-         * バッファを初期化する
+         * 一覧の閲覧を先頭から始める。最初のページと、スクロール範囲を決める件数を取得する。
+         * 失敗はエラー表示に反映し、戻り値のPromiseは常に解決する。
          *
          * @return {Promise<void>}
          */
         initBuffer() {
             this._catalogInput?.stop()
-            this.resultsRevision += 1
-            this.pageRequestId += 1
-            this.isLoadingPage = false
-            this.isExploringPages = false
-            // Keep this size stable across resizes so page offsets never skip images.
-            this.pageSize = 60
-            this.nextPage = 0
-            this.currentPage = 0
+            const revision = ++this.resultsRevision
+            // 実行中の検索は、この一覧表示に置き換えられる。その完了を待たずに操作できるようにする。
+            this.isSearching = false
             this.catalogTotal = null
             this.catalogMatchingCount = null
             this.catalogPages = {}
@@ -418,105 +402,37 @@ const app = Vue.createApp({
             this._catalogPending = markRaw(new Map())
             this._catalogWindowRevision = null
             this.isSelecting = false
-            this.hasMorePages = true
             this.isPagedBrowseMode = true
             this.rawResultBuffer = []
             this.resultBuffer = []
             this.initImage()
 
-            return this.loadNextImagePage().then(() => this.fillInitialViewport())
-        },
-
-        async loadMoreImages() {
-            if (this.stableCatalog) {
-                this.catalogPageError = ''
-                this.catalogErrorPage = null
-                return this.ensureCatalogWindow()
-            }
-            if (this.isExploringPages || this.isLoadingPage || this.isSearching || this.initializationFailed || !this.ratingFilter.length) return
-            this.isExploringPages = true
-            this.errorMessage = ''
-            const revision = this.resultsRevision
-            const previousCount = this.resultBuffer.length
-            const budget = 3
-            try {
-                for (let page = 0; page < budget && this.hasMorePages; page += 1) {
-                    await this.loadNextImagePage()
-                    if (revision !== this.resultsRevision || this.errorMessage || this.resultBuffer.length > previousCount) break
-                }
-            } finally {
-                if (revision === this.resultsRevision) this.isExploringPages = false
-            }
-        },
-
-        async fillInitialViewport() {
-            if (this.stableCatalog) return this.ensureCatalogWindow()
-            if (this.isExploringPages || this.isLoadingPage || this.isSearching || this.initializationFailed || this.errorMessage || !this.ratingFilter.length) return
-            this.isExploringPages = true
-            const revision = this.resultsRevision
-            try {
-                // A large viewport or selective rating filter may leave no scroll
-                // gesture available. Bound automatic work; the button can continue.
-                for (let page = 0; page < 3 && this.hasMorePages; page += 1) {
-                    await nextTick()
-                    if (revision !== this.resultsRevision || this.errorMessage) break
-                    const area = document.getElementById('scroll-target')
-                    const fitsViewport = area?.clientHeight > 0 && area.scrollHeight <= area.clientHeight + 1
-                    if (this.resultBuffer.length && !fitsViewport) break
-                    await this.loadNextImagePage()
-                }
-            } finally {
-                if (revision === this.resultsRevision) this.isExploringPages = false
-            }
-        },
-
-        loadNextImagePage() {
-            if (this.stableCatalog) return this.loadCatalogPage(this.nextPage)
-            if (!this.isPagedBrowseMode || !this.hasMorePages || this.isLoadingPage || this.isSearching || this.initializationFailed) return Promise.resolve()
-            const requestedPage = this.nextPage
             this.isLoadingPage = true
-            const revision = this.resultsRevision
-            const requestId = ++this.pageRequestId
-            return repository.getImageItemsByPage(requestedPage, this.pageSize, this.model_name, this.pretrained, this.catalogTotal === null, this.ratingFilter)
-                .then(async objs => {
-                    if (revision !== this.resultsRevision || requestId !== this.pageRequestId) return
-                    const results = objs.map(obj => ({ item: obj, score: 0 }))
-                    if (Number.isInteger(objs.matchingCount) && objs.matchingCount >= 0) {
-                        this.catalogTotal = objs.totalCount
-                        this.catalogMatchingCount = objs.matchingCount
-                        this.serverCatalogAvailable = true
-                        this.catalogPages = { [requestedPage]: markRaw(results) }
-                        this.currentPage = requestedPage
-                        this.nextPage = requestedPage + 1
-                        this.hasMorePages = false
-                        this.rebuildCatalogBuffer()
-                        const area = document.getElementById('scroll-target')
-                        if (area?.clientHeight) this.catalogViewportHeight = area.clientHeight
-                        this.refreshVisibleItems()
-                        return
+            return repository.getImageItemsByPage(0, this.pageSize, this.model_name, this.pretrained, true, [...this.ratingFilter])
+                .then(items => {
+                    if (revision !== this.resultsRevision) return
+                    if (!Number.isInteger(items.matchingCount) || items.matchingCount < 0) {
+                        throw new Error('The catalog response did not include its totals')
                     }
-                    await this.ensureRatingMapForResults(results)
-                    if (revision !== this.resultsRevision || requestId !== this.pageRequestId) return
-                    if (Number.isInteger(objs.totalCount) && objs.totalCount >= 0) this.catalogTotal = objs.totalCount
-                    this.hasMorePages = this.catalogTotal === null ? objs.length === this.pageSize
-                        : (requestedPage + 1) * this.pageSize < this.catalogTotal
-                    this.currentPage = requestedPage
-                    this.nextPage = requestedPage + 1
-                    // Only newly fetched results extend the scrollbar. Moving the
-                    // virtual window keeps the total loaded-row height unchanged.
-                    this.rawResultBuffer = markRaw(this.rawResultBuffer.concat(results))
-                    this.applyRatingFilterToBuffer()
+                    this.catalogTotal = items.totalCount
+                    this.catalogMatchingCount = items.matchingCount
+                    this.catalogPages = { 0: markRaw(items.map(item => ({ item, score: 0 }))) }
+                    this.rebuildCatalogBuffer()
+                    const area = document.getElementById('scroll-target')
+                    if (area?.clientHeight) this.catalogViewportHeight = area.clientHeight
                     this.refreshVisibleItems()
+                    return this.ensureCatalogWindow()
                 })
                 .catch(error => {
-                    if (revision === this.resultsRevision && requestId === this.pageRequestId) this.showError(error)
+                    if (revision === this.resultsRevision) this.showError(error)
                 })
                 .finally(() => {
-                    if (requestId === this.pageRequestId) this.isLoadingPage = false
+                    if (revision === this.resultsRevision) this.isLoadingPage = this._catalogPending.size > 0
                 })
         },
 
-        getRatingMapKey() {
+        // 画像のメタデータを保持するキー。モデルごとに評価やタグが異なる。
+        modelKey() {
             return `${this.model_name}-${this.pretrained}`
         },
 
@@ -564,12 +480,12 @@ const app = Vue.createApp({
 
         trimCatalogPages() {
             const pages = Object.keys(this.catalogPages).map(Number)
-            if (pages.length <= 64 || this.isSelecting) return
+            if (pages.length <= MAX_CACHED_PAGES || this.isSelecting) return
             const current = Math.floor(this.showedItemIndex / this.pageSize)
             // Selection IDs and its logical anchor survive page-cache eviction.
             const removable = pages.sort((a, b) => Math.abs(b - current) - Math.abs(a - current))
             const next = { ...this.catalogPages }
-            while (Object.keys(next).length > 64 && removable.length) delete next[removable.shift()]
+            while (Object.keys(next).length > MAX_CACHED_PAGES && removable.length) delete next[removable.shift()]
             this.catalogPages = next
         },
 
@@ -606,6 +522,13 @@ const app = Vue.createApp({
                 finally { if (this._catalogWindowRevision === revision) this._catalogWindowRevision = null }
             })())
             return this._catalogWindowPromise
+        },
+
+        // 取得に失敗した表示位置を、スクロール位置を変えずに取得し直す。
+        retryCatalogPage() {
+            this.catalogPageError = ''
+            this.catalogErrorPage = null
+            return this.ensureCatalogWindow()
         },
 
         catalogGridOffset(area) {
@@ -713,51 +636,9 @@ const app = Vue.createApp({
             }
         },
 
-        ensureRatingMapForResults(results) {
-            return this.ensureRatingMapForItemIds(results.map(result => result.item.id))
-        },
-
-        ensureRatingMapForItemIds(itemIds) {
-            const ratingKey = this.getRatingMapKey()
-            const ratingMap = this.ratingMaps[ratingKey] || {}
-            const uniqueItemIds = [...new Set(itemIds)]
-            const missingItemIds = uniqueItemIds.filter(itemId => ratingMap[itemId] === undefined)
-
-            if(missingItemIds.length === 0) {
-                this.ratingMaps[ratingKey] = ratingMap
-                return Promise.resolve()
-            }
-
-            return repository.getImageRatings(this.model_name, this.pretrained, missingItemIds)
-            .then((ratings) => {
-                const merged = { ...this.ratingMaps[ratingKey], ...ratings }
-                // Discard unrelated old-query metadata when the cache grows.
-                // Preserve the visible query even when an older request finishes.
-                const retainIds = new Set(uniqueItemIds)
-                if (ratingKey === this.getRatingMapKey()) {
-                    this.rawResultBuffer.forEach(result => retainIds.add(result.item.id))
-                }
-                this.ratingMaps[ratingKey] = Object.keys(merged).length > 16384
-                    ? Object.fromEntries([...retainIds].filter(id => merged[id] !== undefined).map(id => [id, merged[id]]))
-                    : merged
-            })
-        },
-
-        getCurrentRatingMap() {
-            const ratingKey = this.getRatingMapKey()
-            return this.ratingMaps[ratingKey] || {}
-        },
-
         applyRatingFilter(resultList) {
-            const allowedRatings = new Set(this.ratingFilter)
-            const ratingMap = this.getCurrentRatingMap()
-            const knownRatings = new Set(['general', 'questionable', 'sensitive', 'explicit'])
-
-            return resultList.filter(result => {
-                const rating = ratingMap[result.item.id]
-                const category = knownRatings.has(rating) ? rating : 'unclassified'
-                return allowedRatings.has(category)
-            })
+            const allowed = new Set(this.ratingFilter)
+            return resultList.filter(result => allowed.has(ratingCategory(result.item.rating)))
         },
 
         applyRatingFilterToBuffer() {
@@ -808,39 +689,45 @@ const app = Vue.createApp({
             const lastRow = Math.max(0, Math.ceil(this.resultBuffer.length / columns) - this.numRows)
             this.showedItemIndex = Math.min(row, lastRow) * columns
             this.refreshVisibleItems()
-            this.loadNextImagePageIfNeeded(e.target)
         },
 
-        loadNextImagePageIfNeeded(area = document.getElementById('scroll-target')) {
-            if (!this.isPagedBrowseMode || this.isExploringPages || this.isLoadingPage || this.isSearching || this.isInitializing || this.initializationFailed || this.errorMessage || !this.resultBuffer.length) return
-            if (area?.clientHeight > 0 && area.scrollTop + area.clientHeight >= area.scrollHeight - this.item_height * 2) {
-                this.loadMoreImages()
+        /**
+         * @param {repository.ResultItem} result
+         * @param {number} [position] 一覧の先頭からの位置
+         * @return {DisplayItem}
+         */
+        toDisplayItem(result, position) {
+            return {
+                id: result.item.id,
+                score: result.score,
+                img_name: result.item.name,
+                img_small: repository.getImageSmallUrl(result.item.id),
+                img_original: repository.getImageOriginalUrl(result.item.id),
+                position,
             }
         },
 
+        // 表示位置の周辺だけを描画する。一覧の未取得の位置はプレースホルダーにする。
         refreshVisibleItems(){
-            if (this.stableCatalog) {
-                const end = Math.min(this.showedItemIndex + this.numRows * this.visibleCols, this.catalogMatchingCount)
-                const visible = Array.from({ length: end - this.showedItemIndex }, (_, offset) => {
-                    const position = this.showedItemIndex + offset
-                    const result = this.catalogResultAt(position)
-                    return result ? {
-                        id: result.item.id, score: result.score, tags: result.item.tags,
-                        img_name: result.item.name, img_small: repository.getImageSmallUrl(result.item.id),
-                        img_original: repository.getImageOriginalUrl(result.item.id), position,
-                    } : { id: `pending-${position}`, position, placeholder: true }
-                })
-                const focusedCard = document.activeElement?.closest?.('#itemArea .itemBlock')
-                if (focusedCard && !visible.some(item => item.id === focusedCard.dataset.imageId)) {
-                    document.getElementById('scroll-target')?.focus?.({ preventScroll: true })
-                }
-                this.displayItems = visible
+            const start = this.showedItemIndex
+            const capacity = this.numRows * this.getColumnCount()
+            if (!this.stableCatalog) {
+                this.displayItems = this.resultBuffer.slice(start, start + capacity)
+                    .map(result => this.toDisplayItem(result))
                 this.updatePadding()
                 return
             }
-            const end = Math.min(this.showedItemIndex + this.numRows * this.getColumnCount(), this.resultBuffer.length)
-            this.displayItems = []
-            this.sliceShowImg(this.showedItemIndex, end)
+            const end = Math.min(start + capacity, this.catalogMatchingCount)
+            const visible = Array.from({ length: end - start }, (_, offset) => {
+                const position = start + offset
+                const result = this.catalogResultAt(position)
+                return result ? this.toDisplayItem(result, position) : { id: `pending-${position}`, position, placeholder: true }
+            })
+            const focusedCard = document.activeElement?.closest?.('#itemArea .itemBlock')
+            if (focusedCard && !visible.some(item => item.id === focusedCard.dataset.imageId)) {
+                document.getElementById('scroll-target')?.focus?.({ preventScroll: true })
+            }
+            this.displayItems = visible
             this.updatePadding()
         },
 
@@ -861,24 +748,33 @@ const app = Vue.createApp({
             this.padding_bottom = Math.max(0, totalRows * this.item_height - this.padding_top - visibleRows * this.item_height)
         },
 
-        sliceShowImg(start, end){
-            const slice = this.resultBuffer.slice(start, end).map(result => ({
-                id: result.item.id,
-                score: result.score,
-                tags: result.item.tags,
-                img_name: result.item.name,
-                img_small: repository.getImageSmallUrl(result.item.id),
-                img_original: repository.getImageOriginalUrl(result.item.id),
-                selected: false
-            }))
-            this.displayItems = this.displayItems.concat(slice) // 一度の代入
+        // 検索結果の件数上限。入力が不正な場合は既定値を使う。
+        resultLimit() {
+            const limit = Number.parseInt(this.resultSize, 10)
+            return Number.isFinite(limit) && limit > 0 ? limit : DEFAULT_RESULT_SIZE
         },
 
+        /**
+         * すべての検索に共通する設定に、検索方法ごとのパラメータを加える
+         * @param {Object} extra
+         * @return {repository.SearchSettings & Object}
+         */
+        searchParams(extra = {}) {
+            return {
+                model_name: this.model_name,
+                pretrained: this.pretrained,
+                aesthetic_quality_beta: this.aesthetic_quality_beta,
+                aesthetic_quality_range: [...this.aesthetic_quality_range],
+                aesthetic_model_name: this.aesthetic_model_name,
+                result_size: this.resultLimit(),
+                ...extra,
+            }
+        },
 
         /**
-         * 検索結果の反映後に表示を更新して状態を戻す
-         * @param {() => Promise<repository.ResultItem[]>} request
-         * @param {(() => void) | null} afterBuffer
+         * 検索を実行し、結果を反映して表示を更新する。実行中に始まった別の検索や一覧表示が優先される。
+         * @param {() => Promise<repository.SearchResults>} request
+         * @param {(() => void) | null} afterBuffer 結果を反映した直後に呼ぶ処理
          * @return {Promise<void>}
          */
         runSearch(request, afterBuffer = null) {
@@ -886,12 +782,13 @@ const app = Vue.createApp({
             this.isSearching = true
             this.isShowSetting = false
             const searchStart = performance.now()
-            const parsedLimit = Number.parseInt(this.resultSize, 10)
-            const requestedLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 2048
+            const requestedLimit = this.resultLimit()
             const revision = ++this.resultsRevision
-            this.pageRequestId += 1
+            // 進行中の一覧の読み込みと範囲選択は打ち切る。選択済みの画像は、検索が成功するまで保つ。
+            this._catalogPending = markRaw(new Map())
             this.isLoadingPage = false
-            this.isExploringPages = false
+            this.selectionRevision += 1
+            this.isSelecting = false
             this.errorMessage = ""
             this.searchDurationMs = null
             this.clientDurationMs = null
@@ -901,47 +798,45 @@ const app = Vue.createApp({
                 // ── 計測開始：fetch は完了している
                 const clientStart = performance.now()
 
+                this.search_query = result.search_query
+                this.lastSearchLimit = requestedLimit
                 // サーバ側でスコア降順・名前昇順に整列済み
-                const array = result.list
+                this.rawResultBuffer = markRaw(result.list)
+                this.isPagedBrowseMode = false
+                this.applyRatingFilterToBuffer()
 
-                return this.ensureRatingMapForResults(array)
-                .then(() => {
-                    if (revision !== this.resultsRevision) return
-                    this.search_query = result.search_query
-                    this.lastSearchLimit = requestedLimit
-                    this.rawResultBuffer = markRaw(array)
-                    this.isPagedBrowseMode = false
-                    this.applyRatingFilterToBuffer()
+                if (afterBuffer) afterBuffer()
 
-                    if (afterBuffer) afterBuffer()
+                // displayItems を更新（ここで Vue が patch を予約する）
+                this.initImage()
 
-                    // displayItems を更新（ここで Vue が patch を予約する）
-                    this.initImage()
-
-                    // ── Vue の DOM patch 完了を待つ
-                    return nextTick()
-                    // ── さらにブラウザのレイアウト・ペイント完了まで待つ
+                // ── Vue の DOM patch 完了を待ち、さらにブラウザのレイアウト・ペイント完了まで待つ
+                return nextTick()
                     .then(() => new Promise(resolve => {
                         requestAnimationFrame(() => requestAnimationFrame(resolve))
                     }))
                     .then(() => {
                         if (revision === this.resultsRevision) this.clientDurationMs = performance.now() - clientStart
                     })
-                })
             })
             .catch(error => {
                 if (revision === this.resultsRevision) this.showError(error)
             })
             .finally(() => {
-                if (revision === this.resultsRevision) this.isSearching = false
+                if (revision !== this.resultsRevision) return
+                this.isSearching = false
+                if (this.stableCatalog) {
+                    // 検索に失敗して一覧の表示が続く。開始時に打ち切った読み込みをやり直す。
+                    this.trimCatalogPages()
+                    this.rebuildCatalogBuffer()
+                    this.ensureCatalogWindow()
+                }
             })
         },
 
-
-
         textSearchButton() {
             if (!this.text?.trim()) return
-            return this.runSearch(() => repository.searchText(this.model_name, this.pretrained, this.text, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize))
+            return this.runSearch(() => repository.search('text', this.searchParams({ text: this.text })))
         },
 
         imageSearchAction() {
@@ -985,11 +880,11 @@ const app = Vue.createApp({
         imagesSearchButton() {
             const ids = Object.keys(this.selectedItemId)
             if (!ids.length) return
-            if (ids.length > 64) {
+            if (ids.length > MAX_IMAGE_SEARCH_SELECTION) {
                 this.showError(Object.assign(new Error(), { code: 'imageSearchLimit' }))
                 return
             }
-            return this.runSearch(() => repository.searchImage(this.model_name, this.pretrained, ids, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize))
+            return this.runSearch(() => repository.search('image', this.searchParams({ id: ids })))
         },
 
         uploadImageSearchButton() {
@@ -999,41 +894,40 @@ const app = Vue.createApp({
                 this.showError(Object.assign(new Error(), { code: 'uploadTooLarge' }))
                 return
             }
-            return this.runSearch(() => repository.searchUploadImage(this.model_name, this.pretrained, file, this.resultSize), () => { this.uploadFile = null })
+            return this.runSearch(() => repository.searchUploadImage(file, this.searchParams()), () => { this.uploadFile = null })
         },
 
-        nameSearchButton() {
+        // 名前・タグ・スタイルのいずれかを、入力欄の文字列または正規表現で検索する。
+        metadataSearch(kind) {
             if (!this.text?.trim()) return
-            return this.runSearch(() => repository.searchName(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize))
+            return this.runSearch(() => repository.search(kind, this.searchParams({ text: this.text, is_regexp: this.isRegexp })))
         },
+
+        nameSearchButton() { return this.metadataSearch('name') },
+        tagSearchButton() { return this.metadataSearch('tags') },
+        styleClusterSearchButton() { return this.metadataSearch('style_cluster') },
 
         randomSearchButton() {
-            return this.runSearch(() => repository.searchRandom(this.model_name, this.pretrained, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize))
+            return this.runSearch(() => repository.search('random', this.searchParams()))
         },
 
         querySearchButton() {
             if (!this.search_query?.trim()) return
-            return this.runSearch(() => repository.searchQuery(this.model_name, this.pretrained, this.search_query, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize))
+            return this.runSearch(() => repository.search('query', this.searchParams({ search_query: this.search_query })))
         },
 
         addTextFeaturesButton() {
             if (!this.text?.trim() || !this.search_query?.trim()) return
-            return this.runSearch(() => repository.addTextFeatures(this.model_name, this.pretrained, this.text, this.search_query, this.features_strength, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize))
-        },
-
-        tagSearchButton() {
-            if (!this.text?.trim()) return
-            return this.runSearch(() => repository.searchTags(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize))
-        },
-
-        styleClusterSearchButton() {
-            if (!this.text?.trim()) return
-            return this.runSearch(() => repository.searchStyleCluster(this.model_name, this.pretrained, this.text, this.isRegexp, this.aesthetic_quality_beta, this.aesthetic_quality_range, this.aesthetic_model_name, this.resultSize))
+            return this.runSearch(() => repository.search('queryaddtext', this.searchParams({
+                text: this.text,
+                search_query: this.search_query,
+                features_strength: this.features_strength,
+            })))
         },
 
         getDownloadIds() {
             const selected = Object.keys(this.selectedItemId)
-            return selected.length ? selected : this.resultBuffer.slice(0, 1024).map(result => result.item.id)
+            return selected.length ? selected : this.resultBuffer.slice(0, MAX_SELECTION).map(result => result.item.id)
         },
 
         allDownloadImagesButton(event = {}) {
@@ -1042,7 +936,7 @@ const app = Vue.createApp({
             const selected = this.selectedCount > 0
             const fromCatalog = this.isPagedBrowseMode && !selected
             if (!ids.length && !fromCatalog) return
-            if (ids.length > 1024) {
+            if (ids.length > MAX_SELECTION) {
                 this.showError(Object.assign(new Error(), { code: 'selectionLimit' }))
                 return
             }
@@ -1056,7 +950,7 @@ const app = Vue.createApp({
                 count: fromCatalog ? this.downloadCount : ids.length,
                 selected,
                 params: fromCatalog ? {
-                    first: 1024,
+                    first: MAX_SELECTION,
                     model_name: this.model_name,
                     pretrained: this.pretrained,
                     ratings: [...this.ratingFilter],
@@ -1166,7 +1060,7 @@ const app = Vue.createApp({
         },
 
         fetchImageMetadata(item) {
-            const key = `${this.getRatingMapKey()}:${item.id}`
+            const key = `${this.modelKey()}:${item.id}`
             const revision = this.resultsRevision
             if (this.imageMeta[key]) {
                 return
@@ -1182,7 +1076,7 @@ const app = Vue.createApp({
         },
 
         getImageMetadata(itemId) {
-            return this.imageMeta[`${this.getRatingMapKey()}:${itemId}`] || { tags: "", style_cluster: "", rating: "", aesthetic_quality: 0 }
+            return this.imageMeta[`${this.modelKey()}:${itemId}`] || { tags: "", style_cluster: "", rating: "", aesthetic_quality: null }
         },
 
         onSelectItem(event) {
@@ -1201,7 +1095,7 @@ const app = Vue.createApp({
                 if (event.shiftKey && this.selectionAnchorPosition !== null) {
                     const start = Math.min(position, this.selectionAnchorPosition)
                     const end = Math.max(position, this.selectionAnchorPosition) + 1
-                    if (end - start > 1024) { this.announceSelection('selection.limit'); return }
+                    if (end - start > MAX_SELECTION) { this.announceSelection('selection.limit'); return }
                     const revision = this.resultsRevision
                     const selectionRevision = ++this.selectionRevision
                     const selected = !this.selectedItemId[id]
@@ -1216,7 +1110,7 @@ const app = Vue.createApp({
                             if (selected) next[itemId] = true
                             else delete next[itemId]
                         }
-                        if (Object.keys(next).length > 1024) this.announceSelection('selection.limit')
+                        if (Object.keys(next).length > MAX_SELECTION) this.announceSelection('selection.limit')
                         else {
                             this.selectedItemId = next
                             this.announceSelection('selection.count', { count: Object.keys(next).length })
@@ -1238,7 +1132,7 @@ const app = Vue.createApp({
                 if (targetSelected) next[affectedId] = true
                 else delete next[affectedId]
             }
-            if (Object.keys(next).length > 1024) {
+            if (Object.keys(next).length > MAX_SELECTION) {
                 this.announceSelection('selection.limit')
                 return
             }
@@ -1253,7 +1147,7 @@ const app = Vue.createApp({
             if (this.stableCatalog) {
                 const revision = this.resultsRevision
                 const selectionRevision = ++this.selectionRevision
-                const count = Math.min(1024, this.catalogMatchingCount)
+                const count = Math.min(MAX_SELECTION, this.catalogMatchingCount)
                 this.isSelecting = true
                 try {
                     await this.ensureCatalogRange(0, count)
@@ -1268,12 +1162,12 @@ const app = Vue.createApp({
                 finally { if (revision === this.resultsRevision && selectionRevision === this.selectionRevision) { this.isSelecting = false; this.trimCatalogPages(); this.rebuildCatalogBuffer() } }
                 return
             }
-            // This action explicitly replaces the selection with the current
-            // page, or with the labelled first 1024 search results.
-            const ids = this.resultBuffer.slice(0, 1024).map(result => result.item.id)
+            // This action explicitly replaces the selection with the labelled
+            // first search results, up to the selection limit.
+            const ids = this.resultBuffer.slice(0, MAX_SELECTION).map(result => result.item.id)
             this.selectedItemId = Object.fromEntries(ids.map(id => [id, true]))
             this.selectionAnchorId = ids[0] || null
-            this.announceSelection(this.resultBuffer.length > 1024 ? 'selection.firstSelected' : 'selection.count', { count: ids.length })
+            this.announceSelection(this.resultBuffer.length > MAX_SELECTION ? 'selection.firstSelected' : 'selection.count', { count: ids.length })
         },
 
         clearSelection(announce = true) {
