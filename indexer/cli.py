@@ -129,7 +129,11 @@ def parse_arguments(argv=None) -> argparse.Namespace:
         "--disable-clip-metadata", action="store_true",
         help="審美性評価とスタイルクラスタを求めず、未設定のまま保存する",
     )
-    metadata.add_argument("--aesthetic-model-path", default="./model/aesthetic_rankingv2.pth")
+    metadata.add_argument(
+        "--aesthetic-model-path", default="./model/aesthetic_rankingv3.pth",
+        help="審美性評価(original)の重み。検索モデルが open_clip ViT-L-14 / openai のindexは、"
+             "入れ替えた後に --recalc-aesthetic で保存済みの評価を計算し直せる",
+    )
     metadata.add_argument("--aesthetic-checkpoint", default=AESTHETIC_REPO, help="ファイルまたはHugging FaceのリポジトリID")
     metadata.add_argument("--style-checkpoint-centers", default=STYLE_REPO, help="ファイルまたはHugging FaceのリポジトリID")
     metadata.add_argument(

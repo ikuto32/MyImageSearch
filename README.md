@@ -39,7 +39,7 @@ uv run python create_index.py --image-dir ./images --meta-dir ./clip_meta --sear
 
 既存タグを使う場合は、画像の隣に `photo.jpg.tags.json` のように配置します。形式は `{"rating":"general","tags":["mountain","sky"]}` です。
 
-`--nlist 1 --bits-per-code 4` は少数画像の確認用設定です。大規模データの作成ではこの2引数を外し、必要なメモリと検索精度を確認して調整してください。追加のメタデータ推論を有効にする場合は、`--aesthetic-model-path` で指定する重みなどを別途用意します。引数一覧は `uv run python create_index.py --help` で確認できます。
+`--nlist 1 --bits-per-code 4` は少数画像の確認用設定です。大規模データの作成ではこの2引数を外し、必要なメモリと検索精度を確認して調整してください。追加のメタデータ推論を有効にする場合は、`--aesthetic-model-path` で指定する重み（既定は `./model/aesthetic_rankingv3.pth`）などを別途用意します。重みを入れ替えた場合、検索モデルが `open_clip` の `ViT-L-14` / `openai` のインデックスは `--recalc-aesthetic` で保存済みの評価を計算し直せます。引数一覧は `uv run python create_index.py --help` で確認できます。
 
 同じコマンドを再実行すると、追加された画像だけを処理してインデックスを作り直します。埋め込みの次元は保存済みのデータ（なければ最初の埋め込み）から決まります。次元の異なる埋め込みが保存されている場合は、`--search-model-out-dim` でどの次元に揃えるかを指定します。
 
