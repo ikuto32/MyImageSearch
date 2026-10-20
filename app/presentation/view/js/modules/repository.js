@@ -73,9 +73,9 @@ export function getImageItemsByPage(page, pageSize, modelName, pretrained, inclu
 }
 
 /**
- * 画像のタグ・評価などのメタデータを取得する
+ * 画像のタグ・評価・ファイルのblake3ハッシュなどのメタデータを取得する。記録のない項目はnull
  *
- * @return {Promise<{tags:string, style_cluster:string, rating:string, aesthetic_quality:number|null}>}
+ * @return {Promise<{tags:string, style_cluster:string, rating:string, aesthetic_quality:number|null, blake3:string|null}>}
  */
 export function getImageMetadata(modelName, pretrained, itemId) {
     return axios.get(`/image_meta/${itemId}`, {

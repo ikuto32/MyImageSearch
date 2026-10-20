@@ -49,6 +49,8 @@ class ImageItem:
     rating: str = ""
     style_cluster: str = ""
     aesthetic_quality: float | None = None
+    # 画像ファイルの内容のblake3ハッシュ(16進)。記録されていなければ空。
+    blake3: str = ""
 
 
 # =====================================================

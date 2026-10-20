@@ -2,19 +2,21 @@ from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 from pathlib import Path
+import random
 import sqlite3
 import tempfile
 import types
 import unittest
 from unittest import mock
 
+from blake3 import blake3
 import numpy as np
 from PIL import Image
 import torch
 
-from indexer import features
+from indexer import dataset, features
 from indexer.database import init_db
-from indexer.dataset import DirImageIterable, safe_collate
+from indexer.dataset import DirImageIterable, open_rgb, open_rgb_with_hash, safe_collate
 from indexer.features import FeatureExtractor, MetadataModels, recalc_aesthetic_scores
 from indexer.scoring import PonyAestheticScorer, StyleCluster
 from helpers import save_image
@@ -136,6 +138,11 @@ class FeatureExtractorTests(unittest.TestCase):
         np.testing.assert_allclose(stored["id-3"], [np.sqrt(0.5), np.sqrt(0.5)], rtol=1e-6)
         details = self.rows("aesthetic_quality, pony_aesthetic_quality, style_cluster, search_embedding_model, metadata_embedding_model")
         self.assertEqual(set(details), {(None, None, "", "fake:model", None)})
+        # The hash of each file's bytes is stored next to its embedding.
+        self.assertEqual(self.rows("image_path, image_blake3"), [
+            (path, blake3((self.images / path).read_bytes()).hexdigest())
+            for path in ("green.png", "red.png", "sub/yellow.png")
+        ])
         self.assertFalse(self.connection.in_transaction)
 
     def test_embeddings_of_another_dimension_are_not_stored(self):
@@ -237,13 +244,55 @@ class DatasetTests(unittest.TestCase):
     def test_untransformed_images_are_rgb_and_unused_inputs_are_none(self):
         samples = self.samples()
         self.assertEqual([sample[2] for sample in samples], [0, 2])
-        for image, metadata_input, _index, wd_input, z3d_input in samples:
+        for image, metadata_input, _index, wd_input, z3d_input, _file_hash in samples:
             self.assertEqual(image.mode, "RGB")
             self.assertEqual((metadata_input, wd_input, z3d_input), (None, None, None))
         self.assertEqual(samples[1][0].getpixel((0, 0)), (10, 20, 30))
-        search, metadata, indexes, wd, z3d = safe_collate(samples)
+        search, metadata, indexes, wd, z3d, hashes = safe_collate(samples)
         self.assertEqual((search, metadata, wd, z3d), ([samples[0][0], samples[1][0]], None, None, None))
         self.assertEqual(indexes.tolist(), [0, 2])
+        self.assertEqual(hashes, [blake3((self.images / name).read_bytes()).hexdigest() for name in ("a.png", "transparent.png")])
+
+    def test_hash_covers_the_whole_file_and_decoding_is_unchanged(self):
+        Image.new("P", (3, 2), 7).save(self.images / "palette.gif")
+        # Larger than one hashing chunk, so hashing only the start of a file is noticed.
+        Image.frombytes("RGB", (1024, 1024), random.Random(0).randbytes(1024 * 1024 * 3)).save(self.images / "noise.png")
+        self.assertGreater((self.images / "noise.png").stat().st_size, 2 * dataset._HASH_CHUNK_BYTES)
+        for name in ("a.png", "transparent.png", "palette.gif", "noise.png"):
+            with self.subTest(name=name):
+                image, file_hash = open_rgb_with_hash(str(self.images / name))
+                self.assertEqual(image.tobytes(), open_rgb(str(self.images / name)).tobytes())
+                self.assertEqual(file_hash, blake3((self.images / name).read_bytes()).hexdigest())
+
+    def test_files_that_cannot_be_decoded_fail_as_before_without_being_hashed(self):
+        # A partly written uncompressed image is rejected when decoded from its path, as before hashes were recorded.
+        encoded = io.BytesIO()
+        Image.new("L", (40, 40), 128).save(encoded, format="PPM")
+        (self.images / "partial.pgm").write_bytes(encoded.getvalue()[:-160])
+        # A file with a registered extension that is not an image is rejected after its first bytes.
+        (self.images / "clip.mpg").write_bytes(b"\x00\x00\x01\xba" + bytes(4 * 1024 * 1024))
+        for name in ("partial.pgm", "clip.mpg", "broken.png"):
+            with self.subTest(name=name):
+                with self.assertRaises(Exception) as by_path:
+                    open_rgb(str(self.images / name))
+                with mock.patch.object(dataset, "blake3") as hasher:
+                    with self.assertRaises(type(by_path.exception)):
+                        open_rgb_with_hash(str(self.images / name))
+                hasher.assert_not_called()
+
+    def test_an_image_rewritten_while_it_is_read_is_not_returned_with_a_mismatched_hash(self):
+        decode = dataset.open_rgb
+
+        def decode_then_rewrite(path):
+            image = decode(path)
+            save_image(Path(path), size=(9, 9), color=(0, 0, 255))
+            return image
+
+        with mock.patch.object(dataset, "open_rgb", side_effect=decode_then_rewrite):
+            with self.assertRaisesRegex(OSError, "changed while it was being read"):
+                open_rgb_with_hash(str(self.images / "a.png"))
+            # The dataset skips it; the image stays unprocessed and is read again next time.
+            self.assertEqual([sample[2] for sample in self.samples()], [])
 
     def test_tagger_inputs_are_shared_when_both_taggers_use_the_same_size(self):
         same = self.samples(tag_sizes=(16, 16))[0]
@@ -254,7 +303,7 @@ class DatasetTests(unittest.TestCase):
 
     def test_transforms_are_applied_per_model_and_tensors_are_stacked(self):
         samples = self.samples(transform=lambda image: torch.zeros(3, 2, 2), metadata_transform=lambda image: torch.ones(1))
-        search, metadata, _indexes, _wd, _z3d = safe_collate(samples)
+        search, metadata, _indexes, _wd, _z3d, _hashes = safe_collate(samples)
         self.assertEqual((tuple(search.shape), metadata.tolist()), ((2, 3, 2, 2), [[1.0], [1.0]]))
         self.assertIsNone(safe_collate([]))
         self.assertIsNone(safe_collate([None]))

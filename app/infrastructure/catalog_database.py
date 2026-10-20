@@ -19,7 +19,9 @@ _RATING_CATEGORY_SQL = (
 )
 # 一覧には表示と絞り込みに使う列だけを読む。タグなどの詳細は画像ごとに読む。
 _PAGE_COLUMNS = ("image_id", "image_path", "rating")
-_DETAIL_COLUMNS = ("image_id", "image_path", "image_tags", "rating", "style_cluster", "aesthetic_quality")
+_DETAIL_COLUMNS = (
+    "image_id", "image_path", "image_tags", "rating", "style_cluster", "aesthetic_quality", "image_blake3",
+)
 
 
 def _listed_item(row) -> ImageItem:
@@ -28,7 +30,7 @@ def _listed_item(row) -> ImageItem:
 
 
 def _detailed_item(row) -> ImageItem:
-    identifier, path, tags, rating, style_cluster, quality = row
+    identifier, path, tags, rating, style_cluster, quality, file_hash = row
     return ImageItem(
         id=ImageId(str(identifier)),
         name=str(path),
@@ -36,6 +38,7 @@ def _detailed_item(row) -> ImageItem:
         rating=rating or "",
         style_cluster=style_cluster or "",
         aesthetic_quality=None if quality is None else float(quality),
+        blake3=file_hash or "",
     )
 
 

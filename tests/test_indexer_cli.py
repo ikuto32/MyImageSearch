@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from blake3 import blake3
 import faiss
 import numpy as np
 from PIL import Image
@@ -181,6 +182,8 @@ class IndexingWorkflowTests(unittest.TestCase):
         self.assertEqual((thumbnail.status_code, thumbnail.content_type), (200, "image/png"))
         with Image.open(io.BytesIO(thumbnail.data)) as image:
             self.assertEqual(image.getpixel((0, 0)), (255, 0, 0))
+        metadata = client.get(f"/image_meta/{image_id}", query_string={"model_name": "Fake", "pretrained": "test"})
+        self.assertEqual(metadata.get_json()["blake3"], blake3((self.images / "red.png").read_bytes()).hexdigest())
 
         # A second run finds nothing to do: no model is loaded and the same index is produced.
         index_hash = file_sha256(self.files.index)
@@ -289,6 +292,33 @@ class IndexingWorkflowTests(unittest.TestCase):
         save_image(self.images / "yellow.png", color=(255, 255, 0))
         self.run_indexer()
         self.assertEqual(self.load_backend.call_args.args[2], 3)
+
+    def test_only_images_processed_from_now_on_get_a_file_hash(self):
+        self.run_indexer()
+        index_hash = file_sha256(self.files.index)
+        # A database written before file hashes were recorded.
+        with closing(sqlite3.connect(self.files.database)) as connection:
+            connection.execute("ALTER TABLE image_meta DROP COLUMN image_blake3")
+            connection.commit()
+        client = self.client()
+        red = hashlib.sha256(b"red.png").hexdigest()
+        query = {"model_name": "Fake", "pretrained": "test"}
+        self.assertIsNone(client.get(f"/image_meta/{red}", query_string=query).get_json()["blake3"])
+
+        self.run_indexer()
+        # Existing records are neither processed again nor hashed; IDs and the index stay the same.
+        self.load_backend.assert_called_once()
+        self.assertEqual(file_sha256(self.files.index), index_hash)
+        save_image(self.images / "yellow.png", color=(255, 255, 0))
+        self.run_indexer()
+        with closing(sqlite3.connect(self.files.database)) as connection:
+            hashes = dict(connection.execute("SELECT image_path, image_blake3 FROM image_meta"))
+        yellow = blake3((self.images / "yellow.png").read_bytes()).hexdigest()
+        self.assertEqual(hashes, {**{name: None for name in COLORS}, "yellow.png": yellow})
+        client = self.client()
+        self.assertIsNone(client.get(f"/image_meta/{red}", query_string=query).get_json()["blake3"])
+        yellow_id = hashlib.sha256(b"yellow.png").hexdigest()
+        self.assertEqual(client.get(f"/image_meta/{yellow_id}", query_string=query).get_json()["blake3"], yellow)
 
     def test_orphans_are_kept_when_the_run_fails_before_processing_images(self):
         self.run_indexer()

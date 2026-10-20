@@ -82,6 +82,7 @@
   "image.rating": "画像の区分",
   "image.aesthetic": "美的評価",
   "image.tags": "タグ",
+  "image.blake3": "ハッシュ (BLAKE3)",
   "rating.general": "一般向け",
   "rating.sensitive": "刺激の強い内容",
   "rating.questionable": "成人向けの可能性",

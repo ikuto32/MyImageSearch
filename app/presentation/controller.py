@@ -149,7 +149,7 @@ def create_app(usecase: Usecase, download_store: DownloadStore | None = None) ->
 
     @app.get("/image_meta/<image_id>")
     def get_image_metadata(image_id: str):
-        """画像のメタデータ（タグやratingなど）を返す"""
+        """画像のメタデータ（タグやrating、ファイルのblake3ハッシュなど）を返す。記録のない項目はnull。"""
         item = usecase.get_image_metadata(model_id_parameter(request.args), ImageId(image_id))
         if item is None:
             raise ImageUnavailableError(f"画像IDが見つかりません: {image_id}")
@@ -158,6 +158,7 @@ def create_app(usecase: Usecase, download_store: DownloadStore | None = None) ->
             "style_cluster": item.style_cluster,
             "rating": item.rating,
             "aesthetic_quality": item.aesthetic_quality,
+            "blake3": item.blake3 or None,
         })
 
     @app.get("/image/<image_id>/small")

@@ -88,12 +88,14 @@ class ControllerCatalogTests(unittest.TestCase):
         response = self.client.get("/image_meta/image-001", query_string=query)
         self.assertEqual(response.get_json(), {
             "tags": "qwen tag", "style_cluster": "cluster-a", "rating": "general", "aesthetic_quality": 7.5,
+            "blake3": None,
         })
         self.usecase.get_image_metadata.assert_called_once_with(
             ModelId("Qwen/Qwen3-VL-Embedding-2B", ""), ImageId("image-001"),
         )
-        self.usecase.get_image_metadata.return_value = ImageItem(ImageId("b"), "b.png")
-        self.assertIsNone(self.client.get("/image_meta/b", query_string=query).get_json()["aesthetic_quality"])
+        self.usecase.get_image_metadata.return_value = ImageItem(ImageId("b"), "b.png", blake3="ab" * 32)
+        metadata = self.client.get("/image_meta/b", query_string=query).get_json()
+        self.assertEqual((metadata["aesthetic_quality"], metadata["blake3"]), (None, "ab" * 32))
         self.usecase.get_image_metadata.return_value = None
         self.assertEqual(self.client.get("/image_meta/missing", query_string=query).status_code, 404)
         self.assertEqual(self.client.get("/image_meta/b").status_code, 400)

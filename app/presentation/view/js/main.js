@@ -111,7 +111,7 @@ const app = Vue.createApp({
             selectedItemId:{},
 
             /**
-             * @type {{[modelAndItemId: string]: {tags: string, style_cluster: string, rating: string, aesthetic_quality: number|null}}}
+             * @type {{[modelAndItemId: string]: {tags: string, style_cluster: string, rating: string, aesthetic_quality: number|null, blake3: string|null}}}
              */
             imageMeta:{},
 
@@ -1076,7 +1076,7 @@ const app = Vue.createApp({
         },
 
         getImageMetadata(itemId) {
-            return this.imageMeta[`${this.modelKey()}:${itemId}`] || { tags: "", style_cluster: "", rating: "", aesthetic_quality: null }
+            return this.imageMeta[`${this.modelKey()}:${itemId}`] || { tags: "", style_cluster: "", rating: "", aesthetic_quality: null, blake3: null }
         },
 
         onSelectItem(event) {

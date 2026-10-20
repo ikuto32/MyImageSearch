@@ -127,7 +127,7 @@ class FeatureExtractor:
                     seen[indexes] = True
                     try:
                         rows = self._rows(
-                            search_input, metadata_input, batch[3], batch[4], indexes, image_paths, image_ids,
+                            search_input, metadata_input, batch[3], batch[4], batch[5], indexes, image_paths, image_ids,
                         )
                         if not rows:
                             continue
@@ -145,7 +145,7 @@ class FeatureExtractor:
             self.connection.commit()
 
     def _rows(
-        self, search_input, metadata_input, wd_input, z3d_input,
+        self, search_input, metadata_input, wd_input, z3d_input, file_hashes: list[str],
         indexes: list[int], image_paths: list[str], image_ids: list[str],
     ) -> list[tuple]:
         internal, search_features = self.search_model.encode_image_with_internal(search_input)
@@ -165,8 +165,8 @@ class FeatureExtractor:
 
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         rows = []
-        for embedding, index, aesthetic, pony, cluster_id, tag in zip(
-            embeddings, indexes, aesthetic_scores, pony_scores, cluster_ids, tags
+        for embedding, index, aesthetic, pony, cluster_id, tag, file_hash in zip(
+            embeddings, indexes, aesthetic_scores, pony_scores, cluster_ids, tags, file_hashes
         ):
             if self.dimension is None:
                 self.dimension = int(embedding.shape[0])
@@ -186,6 +186,7 @@ class FeatureExtractor:
                 timestamp,
                 self.search_model_label,
                 self.metadata_model_label,
+                file_hash,
             ))
         return rows
 
